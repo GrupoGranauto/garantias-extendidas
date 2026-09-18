@@ -30,6 +30,13 @@ Variables de entorno del servicio:
 | `BIGQUERY_PROJECT_ID` | `base-maestra-gn` |
 | `GOOGLE_CREDENTIALS_JSON` | el JSON de la cuenta de servicio, completo, en una línea |
 | `CORS_ORIGIN` | `https://autoinsights.mx` |
+| `NPM_CONFIG_INCLUDE` | `dev` |
+| `NPM_CONFIG_PRODUCTION` | `false` |
+
+Las dos últimas no son decorativas. Con `NODE_ENV=production`, npm omite las
+devDependencies, y ahí viven `tsc` y `vite`: sin ellas el build muere con
+`sh: 1: tsc: not found` (código 127). Es el error clásico de compilar
+TypeScript en un servidor con esa variable puesta.
 
 `PORT` lo inyecta Railway; el código ya lo respeta.
 
