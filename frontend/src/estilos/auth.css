@@ -1,0 +1,425 @@
+/* ============================================================
+   Pantallas de autenticacion
+   Calca del diseno de referencia (Tailwind v4) en CSS plano.
+   Interlineados, duraciones y curva salen del CSS compilado.
+   ============================================================ */
+
+.auth {
+  position: relative;
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: #fff;
+  color: var(--gris-900);
+}
+
+/* Halos difuminados del fondo */
+.auth-halo {
+  position: absolute;
+  width: 40%;
+  height: 40%;
+  border-radius: 9999px;
+  filter: blur(120px);
+  pointer-events: none;
+}
+.auth-halo-marca {
+  top: -10%;
+  left: -10%;
+  background: var(--marca);
+  opacity: 0.4;
+}
+.auth-halo-frio {
+  right: -10%;
+  bottom: -10%;
+  background: rgba(239, 246, 255, 0.6);   /* blue-50/60 */
+}
+
+/* ---------- Lado izquierdo: marca ---------- */
+
+.auth-marca {
+  display: none;              /* aparece a partir de lg (1024px) */
+  position: relative;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  padding: 48px;              /* p-12 */
+  background: var(--noche);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.auth-marca-foto {
+  position: absolute;
+  inset: 0;
+  background-image: url("/fondo-login.jpg");
+  background-size: cover;
+  background-position: center;
+  opacity: 0.4;
+  filter: contrast(1.1) brightness(0.8);
+  transition: opacity 1s var(--curva);
+}
+
+.auth-marca-velo {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    var(--noche) 0%,
+    rgba(11, 15, 25, 0.4) 50%,
+    transparent 100%
+  );
+}
+
+.auth-marca-rejilla {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  -webkit-mask-image: radial-gradient(60% 60%, #000 10%, transparent 100%);
+  mask-image: radial-gradient(60% 60%, #000 10%, transparent 100%);
+}
+
+.auth-marca-top,
+.auth-marca-pie { position: relative; z-index: 10; }
+
+.auth-marca-top { display: flex; flex-direction: column; align-items: flex-start; }
+
+.auth-kicker {
+  position: relative;
+  z-index: 20;
+  margin: 0 0 -4px 4px;
+  font-size: 10px;
+  line-height: 1.5;
+  font-weight: 900;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Caja fija del logo: el resplandor vive detrás y aparece al pasar el cursor */
+.auth-marca-caja-logo {
+  position: relative;
+  width: 320px;
+  height: 96px;
+}
+.auth-marca-resplandor {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.2);
+  filter: blur(40px);                      /* blur-2xl */
+  opacity: 0;
+  transition: opacity 0.7s var(--curva);
+}
+.auth-marca-caja-logo:hover .auth-marca-resplandor { opacity: 1; }
+
+.auth-marca-logo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: left center;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.4));
+  transition: transform 0.5s var(--curva);
+}
+.auth-marca-caja-logo:hover .auth-marca-logo { transform: scale(1.05); }
+
+.auth-marca-pie { max-width: 32rem; margin-bottom: 32px; }
+
+.auth-marca-pie h2 {
+  margin: 0 0 24px;
+  font-size: var(--texto-5xl);
+  line-height: var(--apretado);
+  font-weight: 900;
+  letter-spacing: -0.025em;
+  color: #fff;
+}
+.auth-marca-pie .acento { color: var(--marca); }
+
+.auth-marca-pie p {
+  margin: 0;
+  font-size: var(--texto-lg);
+  line-height: var(--holgado);
+  font-weight: 500;
+  color: var(--gris-300);
+  opacity: 0.8;
+}
+
+/* ---------- Lado derecho: formulario ---------- */
+
+.auth-panel {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0 32px;            /* px-8 */
+  overflow: hidden;
+  background: #fff;
+}
+
+.auth-panel-solo { width: 100%; }
+
+.auth-caja {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  animation: auth-entrada 0.7s ease-out;
+}
+
+@keyframes auth-entrada {
+  from { opacity: 0; transform: translateX(16px); }   /* slide-in-from-right-4 */
+  to { opacity: 1; transform: none; }
+}
+
+.auth-encabezado { margin-bottom: 40px; text-align: center; }
+
+.auth-logo { display: flex; justify-content: center; margin-bottom: 40px; }
+.auth-logo img {
+  width: 100%;
+  max-width: 400px;
+  height: 128px;              /* h-32 */
+  object-fit: contain;
+}
+
+.auth-titulo {
+  margin: 0;
+  font-size: var(--texto-3xl);
+  line-height: var(--interlineado-3xl);
+  font-weight: 900;
+  letter-spacing: -0.025em;
+  color: var(--gris-900);
+}
+.auth-titulo .acento { color: var(--marca); }
+
+.auth-subtitulo {
+  margin: 8px 0 0;
+  font-size: var(--texto-sm);
+  line-height: var(--interlineado-sm);
+  font-weight: 500;
+  color: var(--gris-500);
+}
+
+/* Hueco fijo para el aviso: el formulario no salta al aparecer un error */
+.auth-aviso { min-height: 44px; margin-bottom: 16px; }
+
+/* ---------- Campos ---------- */
+
+.auth form { display: flex; flex-direction: column; gap: 16px; }
+
+.campo { display: flex; flex-direction: column; gap: 4px; }
+
+.campo-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-left: 4px;
+}
+.campo-cabecera label {
+  font-size: var(--texto-xs);
+  line-height: var(--interlineado-xs);
+  font-weight: 600;
+  color: var(--gris-700);
+}
+
+.campo-caja { position: relative; display: flex; align-items: center; }
+
+.campo-icono {
+  position: absolute;
+  left: 12px;
+  top: 11px;
+  display: flex;
+  color: var(--gris-400);
+  pointer-events: none;
+  transition: color var(--duracion) var(--curva);
+}
+.campo-caja:focus-within .campo-icono { color: var(--marca); }
+.campo-icono svg { width: 16px; height: 16px; }
+
+.campo-caja input {
+  width: 100%;
+  padding: 10px 12px 10px 36px;            /* py-2.5 pr-3 pl-9 */
+  font-size: var(--texto-sm);
+  line-height: var(--interlineado-sm);
+  font-weight: 500;
+  color: var(--gris-900);
+  background: var(--gris-50);
+  border: 1px solid var(--gris-200);
+  border-radius: 8px;
+  transition: all var(--duracion) var(--curva);
+}
+.campo-caja input::placeholder { color: var(--gris-400); font-weight: 400; }
+.campo-caja input:focus {
+  outline: none;
+  background: #fff;
+  box-shadow: 0 0 0 2px var(--marca-anillo);
+}
+.campo-caja.con-ojo input { padding-right: 36px; }
+
+.campo-ojo {
+  position: absolute;
+  right: 12px;
+  top: 11px;
+  display: flex;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--gris-400);
+  cursor: pointer;
+  transition: color var(--duracion) var(--curva);
+}
+.campo-ojo:hover { color: var(--gris-600); }
+.campo-ojo svg { width: 16px; height: 16px; }
+
+.ayuda {
+  margin-left: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gris-500);
+}
+
+/* ---------- Botones y enlaces ---------- */
+
+.enlace-sutil {
+  padding: 0;
+  font-weight: 400;          /* el diseno usa <button>, sin el 500 de los enlaces */
+  font-size: var(--texto-xs);
+  line-height: var(--interlineado-xs);
+  color: var(--gris-500);
+  background: none;
+  border: 0;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color var(--duracion) var(--curva);
+}
+.enlace-sutil:hover { color: var(--marca); }
+
+.auth a { color: var(--marca); text-decoration: none; font-weight: 500; }
+.auth a:hover { text-decoration: underline; }
+
+.boton-principal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 16px;                      /* py-2.5 px-4 */
+  font-size: var(--texto-sm);
+  line-height: var(--interlineado-sm);
+  font-weight: 600;
+  color: #fff;
+  background: var(--marca);
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: all var(--duracion) var(--curva);
+}
+.boton-principal:hover:not(:disabled) { background: var(--marca-fuerte); }
+.boton-principal:disabled { opacity: 0.7; cursor: default; }
+.boton-principal svg {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--duracion) var(--curva);
+}
+.boton-principal:hover:not(:disabled) svg { transform: translateX(4px); }
+
+.auth-nota {
+  margin: 20px 0 0;
+  text-align: center;
+  font-size: var(--texto-xs);
+  line-height: var(--interlineado-xs);
+  font-weight: 500;
+  color: var(--gris-500);
+}
+
+.separador {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin-top: 32px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.separador::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--gris-100);
+}
+.separador span {
+  position: relative;
+  padding: 0 16px;
+  background: #fff;
+  color: var(--gris-400);
+}
+
+.boton-google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 24px;
+  padding: 12px 16px;                      /* py-3 px-4 */
+  font-size: var(--texto-sm);
+  line-height: var(--interlineado-sm);
+  font-weight: 700;
+  color: var(--gris-700);
+  background: #fff;
+  border: 1px solid var(--gris-200);
+  border-radius: 12px;                     /* rounded-xl */
+  cursor: pointer;
+  transition: all 0.3s var(--curva);
+}
+.boton-google:hover:not(:disabled) {
+  background: var(--gris-50);
+  border-color: var(--gris-300);
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+}
+.boton-google:disabled { opacity: 0.7; cursor: default; }
+.boton-google svg {
+  width: 20px;
+  height: 20px;
+  transition: transform var(--duracion) var(--curva);
+}
+.boton-google:hover:not(:disabled) svg { transform: scale(1.1); }
+
+/* ---------- Alertas ---------- */
+
+.alerta {
+  margin: 0;
+  padding: 11px 13px;
+  font-size: var(--texto-xs);
+  line-height: var(--interlineado-xs);
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.alerta-error { background: #fef2f2cc; border-color: #fecaca; color: #b91c1c; }
+.alerta-ok { background: #ecfdf5cc; border-color: #a7f3d0; color: #047857; }
+.alerta-info { background: #eef2ff; border-color: #c7d2fe; color: #4338ca; }
+
+/* ---------- Puntos de quiebre (lg 1024 / xl 1280) ---------- */
+
+@media (min-width: 1024px) {
+  .auth-marca { display: flex; width: 60%; }
+  .auth-panel { width: 40%; }
+}
+
+@media (min-width: 1280px) {
+  .auth-marca { width: 66.6667%; }
+  .auth-panel { width: 33.3333%; }
+}

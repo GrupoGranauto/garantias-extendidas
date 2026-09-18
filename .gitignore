@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Variables de entorno (NUNCA subir)
+.env
+.env.*
+!.env.example
+
+# Credenciales
+secrets/*
+!secrets/.gitkeep
+!secrets/LEEME.md
+secrets/bigquery-service-account.json
+*.json.key
+*-service-account*.json
+
+# Datos crudos
+data/*.csv
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.log

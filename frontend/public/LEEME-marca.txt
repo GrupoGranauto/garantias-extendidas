@@ -1,0 +1,20 @@
+Archivos de marca en public/marca/, tomados del Drive:
+  BDC Business Intelligence > Auto Insights > Logos e Imagen >
+  1.0 Logotipos y variantes de color
+
+  logo-oscuro.png    logotipo con nombre, negro   (fondos claros)
+  logo-blanco.png    logotipo con nombre, blanco  (fondos oscuros)
+  logo-morado.png    logotipo con nombre, morado de marca
+  icono-*.png        solo el emblema a cuadros, mismas variantes
+
+IMPORTANTE: los logotipos van SIN recortar, conservando el margen
+transparente del archivo original (lienzo 3778x1500, la marca ocupa
+94% x 42% de el). Ese margen es parte del encuadre que espera el diseno:
+las cajas de CSS (320x96 a la izquierda, 400x128 a la derecha) usan
+object-fit: contain, asi que recortar el PNG agranda la marca ~30%.
+Solo estan redimensionados a 1400px de ancho.
+
+Morado de marca: #493F91
+
+Opcional: foto de fondo del panel izquierdo en public/fondo-login.jpg
+Si el archivo no existe, se muestra solo el degradado.
