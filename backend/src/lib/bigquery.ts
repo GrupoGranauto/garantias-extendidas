@@ -19,17 +19,43 @@ function resolveKeyFile(): string {
   return resolved;
 }
 
+type CredencialesGoogle = { client_email: string; private_key: string; project_id?: string };
+
+/** El JSON de la cuenta de servicio, cuando viene en una variable. */
+function credencialesEnVariable(): CredencialesGoogle | null {
+  const crudo = env.GOOGLE_CREDENTIALS_JSON;
+  if (!crudo) return null;
+
+  try {
+    const json = JSON.parse(crudo) as CredencialesGoogle;
+
+    if (!json.client_email || !json.private_key) {
+      throw new Error("faltan client_email o private_key");
+    }
+
+    // Al pegar el JSON en un panel, los saltos de linea suelen quedar escapados
+    json.private_key = json.private_key.replace(/\\n/g, "\n");
+    return json;
+  } catch (err) {
+    const detalle = err instanceof Error ? err.message : String(err);
+    throw new Error(`GOOGLE_CREDENTIALS_JSON no es un JSON de cuenta de servicio válido: ${detalle}`);
+  }
+}
+
 export function getBigQuery(): BigQuery {
   if (!flags.bigquery) {
     throw new Error(
-      "BigQuery no configurado. Define BIGQUERY_PROJECT_ID y GOOGLE_APPLICATION_CREDENTIALS en backend/.env",
+      "BigQuery no configurado. Define BIGQUERY_PROJECT_ID y, o bien GOOGLE_CREDENTIALS_JSON, o bien GOOGLE_APPLICATION_CREDENTIALS.",
     );
   }
   if (!client) {
+    const credentials = credencialesEnVariable();
+
     client = new BigQuery({
       projectId: env.BIGQUERY_PROJECT_ID,
-      keyFilename: resolveKeyFile(),
       location: env.BIGQUERY_LOCATION,
+      // La variable gana: es la unica opcion en servidores sin disco
+      ...(credentials ? { credentials } : { keyFilename: resolveKeyFile() }),
     });
   }
   return client;

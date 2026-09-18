@@ -28,14 +28,15 @@ Variables de entorno del servicio:
 | `SUPABASE_SERVICE_ROLE_KEY` | la del dashboard (secreta) |
 | `SUPABASE_DB_URL` | opcional, para consultas directas |
 | `BIGQUERY_PROJECT_ID` | `base-maestra-gn` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | ver nota abajo |
+| `GOOGLE_CREDENTIALS_JSON` | el JSON de la cuenta de servicio, completo, en una línea |
 | `CORS_ORIGIN` | `https://autoinsights.mx` |
 
 `PORT` lo inyecta Railway; el código ya lo respeta.
 
-**BigQuery en Railway**: no hay sistema de archivos donde dejar el JSON. Dos
-salidas: subir el archivo como *secret file* si el plan lo permite, o guardar
-el contenido en una variable y escribirlo a disco al arrancar. Está pendiente.
+**BigQuery**: en local se lee el archivo apuntado por
+`GOOGLE_APPLICATION_CREDENTIALS`; en Railway no hay disco donde dejarlo, así que
+se pasa el JSON completo en `GOOGLE_CREDENTIALS_JSON`. Si están las dos, gana la
+variable.
 
 `railway.json` ya define build (`npm run build`), arranque (`npm start`) y
 health check en `/api/health`.
