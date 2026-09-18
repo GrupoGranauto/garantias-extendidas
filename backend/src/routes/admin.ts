@@ -173,7 +173,7 @@ adminRouter.get("/sucursales", async (_req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("sucursales")
-      .select("id, subdominio, nombre, color, activa, login_google, creado_en")
+      .select("id, subdominio, nombre, color, logo_url, activa, login_google, creado_en")
       .order("nombre");
 
     if (error) throw new Error(error.message);
@@ -283,6 +283,25 @@ adminRouter.get("/sucursales/:subdominio/diagnostico", async (req, res, next) =>
       https: { responde, detalle: detalleHttp || undefined },
       listo: Boolean(data) && dnsResuelve && responde,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Activar o desactivar una sucursal. No borra nada, solo bloquea el acceso. */
+adminRouter.patch("/sucursales/:id/activa", async (req, res, next) => {
+  try {
+    const activa = z.boolean().parse(req.body?.activa);
+
+    const { data, error } = await getSupabase()
+      .from("sucursales")
+      .update({ activa })
+      .eq("id", req.params.id)
+      .select("id, subdominio, activa")
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
   } catch (err) {
     next(err);
   }

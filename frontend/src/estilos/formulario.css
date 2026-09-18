@@ -376,3 +376,92 @@
   .barra-acciones { flex-direction: column; align-items: stretch; }
   .barra-acciones .pagina-acciones > * { flex: 1; text-align: center; }
 }
+
+/* ============================================================
+   Tabla de listado (sucursales, usuarios)
+   ============================================================ */
+
+.tabla-envoltura {
+  overflow-x: auto;
+  background: #fff;
+  border: 1px solid var(--gris-200);
+  border-radius: 10px;
+}
+
+.tabla { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+.tabla th {
+  padding: 11px 16px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--gris-500);
+  text-align: left;
+  background: var(--gris-50);
+  border-bottom: 1px solid var(--gris-200);
+  white-space: nowrap;
+}
+
+.tabla td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--gris-100);
+  color: var(--gris-900);
+  vertical-align: middle;
+}
+.tabla tbody tr:last-child td { border-bottom: 0; }
+.tabla tbody tr:hover { background: var(--gris-50); }
+
+.fila-inactiva { opacity: 0.55; }
+
+.celda-sucursal { display: flex; align-items: center; gap: 10px; }
+
+.miniatura-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  overflow: hidden;
+  background: var(--gris-50);
+  border: 1px solid var(--gris-200);
+  border-radius: 6px;
+}
+.miniatura-logo img { width: 100%; height: 100%; object-fit: contain; }
+.miniatura-logo-hueco { width: 100%; height: 100%; }
+
+.enlace-portal {
+  color: var(--gris-700);
+  font-size: 12.5px;
+  text-decoration: none;
+}
+.enlace-portal:hover { color: var(--marca); text-decoration: underline; }
+
+.color-punto {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.color-codigo {
+  font-size: 11.5px;
+  color: var(--gris-500);
+  vertical-align: middle;
+}
+
+.celda-estado .interruptor label { font-size: 12px; color: var(--gris-600); }
+
+.pastilla {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pastilla-bien { background: #e8f7f0; color: #067647; }
+.pastilla-mal { background: #fdeceb; color: #b42318; }

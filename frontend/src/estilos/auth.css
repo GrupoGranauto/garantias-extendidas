@@ -48,28 +48,6 @@
   border-right: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.auth-marca-foto {
-  position: absolute;
-  inset: 0;
-  background-image: url("/fondo-login.jpg");
-  background-size: cover;
-  background-position: center;
-  opacity: 0.4;
-  filter: contrast(1.1) brightness(0.8);
-  transition: opacity 1s var(--curva);
-}
-
-.auth-marca-velo {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    to top,
-    var(--noche) 0%,
-    rgba(11, 15, 25, 0.4) 50%,
-    transparent 100%
-  );
-}
-
 .auth-marca-rejilla {
   position: absolute;
   inset: 0;

@@ -199,10 +199,10 @@ export default function SucursalNueva() {
                   }
                   placeholder="hermosillo"
                 />
-                <span className="campo-sufijo">.autoinsights.mx</span>
+                <span className="campo-sufijo">.ge.autoinsights.mx</span>
               </div>
               <p className="campo-ayuda">
-                Quedará como <code>{subdominio || "sucursal"}.autoinsights.mx</code>
+                Quedará como <code>{subdominio || "sucursal"}.ge.autoinsights.mx</code>
               </p>
             </div>
           </div>

@@ -96,10 +96,21 @@ export default function Login() {
     );
   }
 
+  // Solo el dominio raíz (sin sucursal) es el panel de administración de
+  // plataforma; cada sucursal entra a su propio sistema de garantías.
+  const titulo = portal ? (
+    <>Bienvenido a <span className="acento">Garantías Extendidas</span></>
+  ) : (
+    <>Bienvenido al <span className="acento">Panel de administración</span></>
+  );
+  const subtitulo = portal
+    ? "Ingresa tus credenciales para gestionar las garantías de tu sucursal."
+    : "Ingresa tus credenciales maestras para gestionar el sistema.";
+
   return (
     <LayoutAuth
-      titulo={<>Bienvenido al <span className="acento">Panel de administración</span></>}
-      subtitulo="Ingresa tus credenciales maestras para gestionar el sistema."
+      titulo={titulo}
+      subtitulo={subtitulo}
       aviso={error && <Alerta tipo="error">{error}</Alerta>}
     >
       <form onSubmit={onSubmit} noValidate>

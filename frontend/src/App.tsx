@@ -13,11 +13,13 @@ import AuthCallback from "./paginas/AuthCallback";
 import Inicio from "./paginas/Inicio";
 import EnConstruccion from "./paginas/EnConstruccion";
 import SucursalNueva from "./paginas/SucursalNueva";
+import SucursalesListado from "./paginas/SucursalesListado";
 import PortalNoEncontrado from "./paginas/PortalNoEncontrado";
 
 /** Pantallas ya construidas. El resto del menú cae en el marcador. */
 const PANTALLAS: Record<string, ReactNode> = {
   "/sucursales/nueva": <SucursalNueva />,
+  "/sucursales": <SucursalesListado />,
 };
 
 /** Espera a saber de qué portal se trata antes de pintar nada. */

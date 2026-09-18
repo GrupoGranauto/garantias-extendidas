@@ -17,7 +17,6 @@ export default function LayoutAuth({ titulo, subtitulo, aviso, children }: Props
   // el lado del formulario lleva la marca de la sucursal.
   const logoSucursal = portal?.logo ?? "/marca/logo-oscuro.png";
   const titular = portal?.nombre ?? "Panel de Administración";
-  const fondo = portal?.imagenAcceso;
 
   return (
     <div className="auth">
@@ -25,12 +24,7 @@ export default function LayoutAuth({ titulo, subtitulo, aviso, children }: Props
       <div className="auth-halo auth-halo-frio" aria-hidden="true" />
 
       <aside className="auth-marca">
-        <div
-          className="auth-marca-foto"
-          style={fondo ? { backgroundImage: `url(${fondo})` } : undefined}
-          aria-hidden="true"
-        />
-        <div className="auth-marca-velo" aria-hidden="true" />
+        {/* Sin foto de fondo: solo el fondo sólido + la cuadrícula */}
         <div className="auth-marca-rejilla" aria-hidden="true" />
 
         <div className="auth-marca-top">
