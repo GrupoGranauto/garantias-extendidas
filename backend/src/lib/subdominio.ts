@@ -9,8 +9,8 @@ import { env } from "../config/env.js";
  *   localhost:5173               -> null  (en desarrollo se usa ?sucursal=)
  */
 // Etiqueta reservada para el panel genérico (sin marca de sucursal), ej.
-// autoinsights.ge.autoinsights.mx. Ninguna sucursal puede llamarse así.
-const ETIQUETA_PANEL_GENERICO = "autoinsights";
+// panel.ge.autoinsights.mx. Ninguna sucursal puede llamarse así.
+const ETIQUETA_PANEL_GENERICO = "panel";
 
 export function extraerSubdominio(host: string | undefined): string | null {
   if (!host) return null;
