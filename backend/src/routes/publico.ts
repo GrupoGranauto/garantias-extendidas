@@ -16,7 +16,9 @@ publicoRouter.get("/sucursal", async (req, res, next) => {
   const forzado = typeof req.query.sucursal === "string" ? req.query.sucursal : null;
   const subdominio = forzado ?? extraerSubdominio(req.headers.host);
 
-  if (!subdominio) {
+  // "autoinsights" es la etiqueta reservada del panel genérico: mismo caso
+  // que el dominio raíz, útil para probarlo en local con ?sucursal=autoinsights
+  if (!subdominio || subdominio === "autoinsights") {
     res.json({ portal: null }); // dominio raíz: pantalla genérica
     return;
   }

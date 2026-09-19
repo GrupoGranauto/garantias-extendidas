@@ -8,6 +8,10 @@ import { env } from "../config/env.js";
  *   www.autoinsights.mx          -> null
  *   localhost:5173               -> null  (en desarrollo se usa ?sucursal=)
  */
+// Etiqueta reservada para el panel genérico (sin marca de sucursal), ej.
+// autoinsights.ge.autoinsights.mx. Ninguna sucursal puede llamarse así.
+const ETIQUETA_PANEL_GENERICO = "autoinsights";
+
 export function extraerSubdominio(host: string | undefined): string | null {
   if (!host) return null;
 
@@ -21,11 +25,13 @@ export function extraerSubdominio(host: string | undefined): string | null {
 
   // Solo un nivel: "a.b.autoinsights.mx" no es una sucursal
   if (!etiqueta || etiqueta.includes(".")) return null;
+  if (etiqueta === ETIQUETA_PANEL_GENERICO) return null;
 
   return etiqueta;
 }
 
 /** Valida la forma del slug antes de tocar la base. */
 export function subdominioValido(valor: string): boolean {
+  if (valor === ETIQUETA_PANEL_GENERICO) return false;
   return /^[a-z0-9]([a-z0-9-]{1,30}[a-z0-9])$/.test(valor);
 }
