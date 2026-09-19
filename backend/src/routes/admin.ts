@@ -169,6 +169,10 @@ const sucursalSchema = z.object({
   imagen_acceso_url: z.string().url().nullable().default(null),
 });
 
+// Edicion: el subdominio no se toca (ya tiene DNS y certificado emitidos
+// para el), y "activa" tiene su propio endpoint dedicado abajo.
+const sucursalEdicionSchema = sucursalSchema.omit({ subdominio: true, activa: true }).partial();
+
 adminRouter.get("/sucursales", async (_req, res, next) => {
   try {
     const { data, error } = await getSupabase()
@@ -178,6 +182,27 @@ adminRouter.get("/sucursales", async (_req, res, next) => {
 
     if (error) throw new Error(error.message);
     res.json({ total: data?.length ?? 0, sucursales: data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.get("/sucursales/:id", async (req, res, next) => {
+  try {
+    const { data, error } = await getSupabase()
+      .from("sucursales")
+      .select(
+        "id, subdominio, nombre, color, logo_url, logo_panel_url, imagen_acceso_url, activa, login_google, mensaje_cerrado",
+      )
+      .eq("id", req.params.id)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    if (!data) {
+      res.status(404).json({ error: "Sucursal no encontrada." });
+      return;
+    }
+    res.json(data);
   } catch (err) {
     next(err);
   }
@@ -298,6 +323,31 @@ adminRouter.patch("/sucursales/:id/activa", async (req, res, next) => {
       .update({ activa })
       .eq("id", req.params.id)
       .select("id, subdominio, activa")
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.patch("/sucursales/:id", async (req, res, next) => {
+  const parsed = sucursalEdicionSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos.", detalle: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  try {
+    const { data, error } = await getSupabase()
+      .from("sucursales")
+      .update(parsed.data)
+      .eq("id", req.params.id)
+      .select(
+        "id, subdominio, nombre, color, logo_url, logo_panel_url, imagen_acceso_url, activa, login_google, mensaje_cerrado",
+      )
       .single();
 
     if (error) throw new Error(error.message);

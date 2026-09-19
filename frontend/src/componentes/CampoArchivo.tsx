@@ -20,23 +20,23 @@ export default function CampoArchivo({ etiqueta, imagen, recomendado }: Props) {
         {recomendado && <span className="campo-pista">{recomendado}</span>}
       </div>
 
-      <div className={archivo ? "campo-archivo con-archivo" : "campo-archivo"}>
+      <div className={vista ? "campo-archivo con-archivo" : "campo-archivo"}>
         <div className="campo-archivo-vista">
           {vista ? <img src={vista} alt="" /> : <span className="campo-archivo-hueco" aria-hidden="true" />}
         </div>
 
         <div className="campo-archivo-datos">
           <p className="campo-archivo-nombre">
-            {archivo ? archivo.name : "Ningún archivo seleccionado"}
+            {archivo ? archivo.name : vista ? "Imagen actual" : "Ningún archivo seleccionado"}
           </p>
           {archivo && <p className="campo-archivo-peso">{(archivo.size / 1024).toFixed(0)} KB</p>}
         </div>
 
         <div className="campo-archivo-acciones">
           <label htmlFor={id} className="boton-tenue">
-            {archivo ? "Cambiar" : "Seleccionar"}
+            {vista ? "Cambiar" : "Seleccionar"}
           </label>
-          {archivo && (
+          {vista && (
             <button type="button" className="boton-tenue" onClick={() => cambiar(null)}>
               Quitar
             </button>

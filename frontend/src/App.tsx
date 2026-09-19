@@ -14,6 +14,10 @@ import Inicio from "./paginas/Inicio";
 import EnConstruccion from "./paginas/EnConstruccion";
 import SucursalNueva from "./paginas/SucursalNueva";
 import SucursalesListado from "./paginas/SucursalesListado";
+import SucursalEditLayout from "./paginas/SucursalEditLayout";
+import SucursalGeneral from "./paginas/SucursalGeneral";
+import SucursalWhatsapp from "./paginas/SucursalWhatsapp";
+import SucursalBaseDatos from "./paginas/SucursalBaseDatos";
 import PortalNoEncontrado from "./paginas/PortalNoEncontrado";
 
 /** Pantallas ya construidas. El resto del menú cae en el marcador. */
@@ -47,6 +51,15 @@ function Contenido() {
           <Route element={<RutaProtegida />}>
             <Route element={<LayoutPanel />}>
               <Route path="/" element={<Inicio />} />
+
+              {/* Ruta dinámica: no vive en el menú, solo se llega por el botón Editar.
+                  El layout carga la sucursal una sola vez; cambiar de pestaña
+                  solo reemplaza el <Outlet>, no la cabecera. */}
+              <Route path="/sucursales/:id" element={<SucursalEditLayout />}>
+                <Route path="editar" element={<SucursalGeneral />} />
+                <Route path="whatsapp" element={<SucursalWhatsapp />} />
+                <Route path="base-datos" element={<SucursalBaseDatos />} />
+              </Route>
 
               {/* Las pantallas del menú existen para poder navegarlas */}
               {RUTAS_DEL_MENU.map(({ ruta, etiqueta }) => (

@@ -16,7 +16,8 @@ export default function LayoutAuth({ titulo, subtitulo, aviso, children }: Props
   // El panel oscuro siempre es de Auto Insights ("Desarrollado por");
   // el lado del formulario lleva la marca de la sucursal.
   const logoSucursal = portal?.logo ?? "/marca/logo-oscuro.png";
-  const titular = portal?.nombre ?? "Panel de Administración";
+  // Sin sucursal (dominio raíz) se usa la foto genérica de Auto Insights
+  const fondo = portal?.imagenAcceso ?? "/fondo-login.jpg";
 
   return (
     <div className="auth">
@@ -24,7 +25,14 @@ export default function LayoutAuth({ titulo, subtitulo, aviso, children }: Props
       <div className="auth-halo auth-halo-frio" aria-hidden="true" />
 
       <aside className="auth-marca">
-        {/* Sin foto de fondo: solo el fondo sólido + la cuadrícula */}
+        {/* Imagen sin oscurecer; la cuadrícula es transparente y va encima */}
+        {fondo && (
+          <div
+            className="auth-marca-foto"
+            style={{ backgroundImage: `url(${fondo})` }}
+            aria-hidden="true"
+          />
+        )}
         <div className="auth-marca-rejilla" aria-hidden="true" />
 
         <div className="auth-marca-top">
@@ -38,15 +46,6 @@ export default function LayoutAuth({ titulo, subtitulo, aviso, children }: Props
               draggable={false}
             />
           </div>
-        </div>
-
-        <div className="auth-marca-pie">
-          <h2>{titular}</h2>
-          <p>
-            Plataforma centralizada de gestión y control. Administra el
-            ecosistema de datos, usuarios y configuraciones de forma
-            profesional.
-          </p>
         </div>
       </aside>
 

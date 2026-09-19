@@ -122,6 +122,7 @@ export default function SucursalesListado() {
                 <th>Google</th>
                 <th>Estado</th>
                 <th>Verificar</th>
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -187,6 +188,11 @@ export default function SucursalesListado() {
                               : "HTTPS pendiente"}
                         </span>
                       )}
+                    </td>
+                    <td>
+                      <Link to={`/sucursales/${s.id}/editar`} className="boton-tenue">
+                        Editar
+                      </Link>
                     </td>
                   </tr>
                 );

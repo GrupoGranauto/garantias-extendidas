@@ -7,7 +7,11 @@ import { env, flags } from "./config/env.js";
 import { healthRouter } from "./routes/health.js";
 import { garantiasRouter } from "./routes/garantias.js";
 import { adminRouter } from "./routes/admin.js";
+import { adminWhatsappRouter } from "./routes/adminWhatsapp.js";
+import { adminEntidadesRouter } from "./routes/adminEntidades.js";
+import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
 import { publicoRouter } from "./routes/publico.js";
+import { webhookWhatsappRouter } from "./routes/webhookWhatsapp.js";
 
 const app = express();
 
@@ -45,12 +49,21 @@ app.use(
     credentials: true,
   }),
 );
+// El webhook de WhatsApp necesita el cuerpo crudo (Buffer) para validar la
+// firma HMAC contra el app_secret; por eso va antes de express.json() y con
+// su propio parser. El resto de la API sí usa JSON ya parseado.
+app.use("/api/webhooks/whatsapp", express.raw({ type: "application/json" }), webhookWhatsappRouter);
+
 app.use(express.json({ limit: "5mb" }));
 
 app.use("/api/health", healthRouter);
 app.use("/api/publico", publicoRouter);
 app.use("/api/garantias", garantiasRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/admin", adminWhatsappRouter);
+app.use("/api/admin", adminEntidadesRouter);
+// Ingesta externa: autenticada por API key propia de la sucursal, no por sesión.
+app.use("/api/entidades", entidadesIngestaRouter);
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Ruta no encontrada" });

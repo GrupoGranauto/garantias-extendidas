@@ -1,63 +1,47 @@
 import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
 import Interruptor from "../componentes/Interruptor";
 import CampoArchivo from "../componentes/CampoArchivo";
 import Alerta from "../componentes/Alerta";
 import { useImagen, type Imagen } from "../lib/useImagen";
 import { subirImagen } from "../lib/subirImagen";
 import { apiFetch } from "../lib/api";
+import { useSucursal } from "./SucursalEditLayout";
 
-type SucursalCreada = { id: string; nombre: string; subdominio: string; url: string };
-
-const FORMA_SUBDOMINIO = /^[a-z0-9]([a-z0-9-]{1,30}[a-z0-9])$/;
-
-/** Sube el archivo solo si hay uno nuevo. Al crear no hay nada que "quitar" todavía. */
-async function valorImagen(imagen: Imagen, subdominio: string, campo: string): Promise<string | null> {
+/** Sube el archivo solo si hay uno nuevo, o marca null si se quitó. undefined = no tocar. */
+async function valorImagen(
+  imagen: Imagen,
+  subdominio: string,
+  campo: string,
+): Promise<string | null | undefined> {
   if (imagen.archivo) return subirImagen(subdominio, campo, imagen.archivo);
-  return null;
+  if (imagen.quitada) return null;
+  return undefined;
 }
 
-export default function SucursalNueva() {
-  const [activa, setActiva] = useState(true);
-  const [loginGoogle, setLoginGoogle] = useState(true);
-  const [color, setColor] = useState("#493f91");
-  const [nombre, setNombre] = useState("");
-  const [subdominio, setSubdominio] = useState("");
-  const [mensajeCerrado, setMensajeCerrado] = useState("");
+export default function SucursalGeneral() {
+  const { sucursal, recargar } = useSucursal();
 
-  const logo = useImagen(null);
-  const logoPanel = useImagen(null);
-  const imagenAcceso = useImagen(null);
+  const [nombre, setNombre] = useState(sucursal.nombre);
+  const [color, setColor] = useState(sucursal.color);
+  const [loginGoogle, setLoginGoogle] = useState(sucursal.login_google);
+  const [mensajeCerrado, setMensajeCerrado] = useState(sucursal.mensaje_cerrado ?? "");
+
+  const logo = useImagen(sucursal.logo_url);
+  const logoPanel = useImagen(sucursal.logo_panel_url);
+  const imagenAcceso = useImagen(sucursal.imagen_acceso_url);
 
   const [enviando, setEnviando] = useState(false);
   const [paso, setPaso] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [creada, setCreada] = useState<SucursalCreada | null>(null);
-
-  function limpiar() {
-    setNombre("");
-    setSubdominio("");
-    setMensajeCerrado("");
-    setColor("#493f91");
-    setActiva(true);
-    setLoginGoogle(true);
-    logo.cambiar(null);
-    logoPanel.cambiar(null);
-    imagenAcceso.cambiar(null);
-    setCreada(null);
-    setError(null);
-  }
+  const [guardado, setGuardado] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setGuardado(false);
 
     if (nombre.trim().length < 2) {
       setError("Escribe el nombre de la sucursal.");
-      return;
-    }
-    if (!FORMA_SUBDOMINIO.test(subdominio)) {
-      setError("El subdominio necesita entre 3 y 32 caracteres, y no puede empezar ni terminar con guion.");
       return;
     }
 
@@ -67,29 +51,31 @@ export default function SucursalNueva() {
       setPaso("Subiendo imágenes…");
 
       const [logo_url, logo_panel_url, imagen_acceso_url] = await Promise.all([
-        valorImagen(logo, subdominio, "logo"),
-        valorImagen(logoPanel, subdominio, "logo-panel"),
-        valorImagen(imagenAcceso, subdominio, "imagen-acceso"),
+        valorImagen(logo, sucursal.subdominio, "logo"),
+        valorImagen(logoPanel, sucursal.subdominio, "logo-panel"),
+        valorImagen(imagenAcceso, sucursal.subdominio, "imagen-acceso"),
       ]);
 
-      setPaso("Creando el portal…");
+      setPaso("Guardando cambios…");
 
-      const respuesta = await apiFetch<SucursalCreada>("/api/admin/sucursales", {
-        method: "POST",
-        body: JSON.stringify({
-          nombre: nombre.trim(),
-          subdominio,
-          color,
-          activa,
-          login_google: loginGoogle,
-          mensaje_cerrado: mensajeCerrado.trim() || null,
-          logo_url,
-          logo_panel_url,
-          imagen_acceso_url,
-        }),
+      const cuerpo: Record<string, unknown> = {
+        nombre: nombre.trim(),
+        color,
+        login_google: loginGoogle,
+        mensaje_cerrado: mensajeCerrado.trim() || null,
+      };
+      // Solo se manda lo que el usuario tocó: el resto se queda como estaba
+      if (logo_url !== undefined) cuerpo.logo_url = logo_url;
+      if (logo_panel_url !== undefined) cuerpo.logo_panel_url = logo_panel_url;
+      if (imagen_acceso_url !== undefined) cuerpo.imagen_acceso_url = imagen_acceso_url;
+
+      await apiFetch(`/api/admin/sucursales/${sucursal.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(cuerpo),
       });
 
-      setCreada(respuesta);
+      recargar();
+      setGuardado(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo guardar la sucursal.");
     } finally {
@@ -98,70 +84,16 @@ export default function SucursalNueva() {
     }
   }
 
-  // ---------- Confirmación tras crear ----------
-  if (creada) {
-    return (
-      <div className="pagina-formulario">
-        <nav className="migas" aria-label="Ruta">
-          <Link to="/sucursales">Sucursales</Link>
-          <span aria-hidden="true">/</span>
-          <span>Nueva</span>
-        </nav>
-
-        <header className="pagina-cabecera">
-          <h1>Sucursal creada</h1>
-          <p>{creada.nombre} ya tiene su portal.</p>
-        </header>
-
-        <section className="seccion">
-          <div className="seccion-info">
-            <h2>Siguiente paso</h2>
-            <p>El portal responde en cuanto el subdominio apunte a la aplicación.</p>
-          </div>
-
-          <div className="seccion-campos">
-            <Alerta tipo="ok">
-              Portal disponible en{" "}
-              <a href={creada.url} target="_blank" rel="noreferrer">
-                {creada.url}
-              </a>
-            </Alerta>
-
-            <p className="campo-ayuda">
-              Falta dar de alta a sus usuarios: cada cuenta pertenece a una sola sucursal
-              y solo entra por su propio subdominio.
-            </p>
-
-            <div className="pagina-acciones">
-              <button type="button" className="boton-guardar" onClick={limpiar}>
-                Crear otra sucursal
-              </button>
-              <Link to="/sucursales" className="boton-secundario-claro">
-                Ver listado
-              </Link>
-            </div>
-          </div>
-        </section>
-      </div>
-    );
-  }
-
   return (
-    <form onSubmit={onSubmit} className="pagina-formulario">
-      <nav className="migas" aria-label="Ruta">
-        <Link to="/sucursales">Sucursales</Link>
-        <span aria-hidden="true">/</span>
-        <span>Nueva</span>
-      </nav>
-
-      <header className="pagina-cabecera">
-        <h1>Nueva sucursal</h1>
-        <p>Define cómo se identifica y qué ve su personal al entrar al panel.</p>
-      </header>
-
+    <form onSubmit={onSubmit}>
       {error && (
         <div className="aviso-formulario">
           <Alerta tipo="error">{error}</Alerta>
+        </div>
+      )}
+      {guardado && (
+        <div className="aviso-formulario">
+          <Alerta tipo="ok">Cambios guardados.</Alerta>
         </div>
       )}
 
@@ -188,23 +120,13 @@ export default function SucursalNueva() {
             </div>
 
             <div className="campo-formulario">
-              <label htmlFor="subdominio">
-                Subdominio <span className="obligatorio">*</span>
-              </label>
+              <label htmlFor="subdominio">Subdominio</label>
               <div className="campo-con-sufijo">
-                <input
-                  id="subdominio"
-                  type="text"
-                  value={subdominio}
-                  onChange={(e) =>
-                    setSubdominio(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
-                  }
-                  placeholder="hermosillo"
-                />
+                <input id="subdominio" type="text" value={sucursal.subdominio} disabled />
                 <span className="campo-sufijo">.ge.autoinsights.mx</span>
               </div>
               <p className="campo-ayuda">
-                Quedará como <code>{subdominio || "sucursal"}.ge.autoinsights.mx</code>
+                No se puede cambiar: ya tiene DNS y certificado emitidos para este nombre.
               </p>
             </div>
           </div>
@@ -221,11 +143,6 @@ export default function SucursalNueva() {
         <div className="seccion-campos">
           <div className="pareja-campos">
             <div className="opcion">
-              <Interruptor etiqueta="Sucursal activa" activo={activa} onChange={setActiva} />
-              <p className="campo-ayuda">Apagado, nadie de esta sucursal puede iniciar sesión.</p>
-            </div>
-
-            <div className="opcion">
               <Interruptor
                 etiqueta="Entrar con Google"
                 activo={loginGoogle}
@@ -234,6 +151,10 @@ export default function SucursalNueva() {
               <p className="campo-ayuda">Además del acceso con correo y contraseña.</p>
             </div>
           </div>
+
+          <p className="campo-ayuda">
+            El estado (activa/inactiva) se cambia desde el listado, con el interruptor de esa fila.
+          </p>
 
           <div className="campo-formulario">
             <div className="campo-cabecera-fila">
@@ -302,11 +223,8 @@ export default function SucursalNueva() {
           )}
         </p>
         <div className="pagina-acciones">
-          <Link to="/sucursales" className="boton-secundario-claro">
-            Cancelar
-          </Link>
           <button type="submit" className="boton-guardar" disabled={enviando}>
-            {enviando ? "Guardando…" : "Guardar sucursal"}
+            {enviando ? "Guardando…" : "Guardar cambios"}
           </button>
         </div>
       </footer>
