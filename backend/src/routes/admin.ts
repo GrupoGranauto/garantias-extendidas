@@ -31,7 +31,7 @@ adminRouter.get("/usuarios", async (_req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("usuarios")
-      .select("id, correo, nombre, puesto, rol, sucursal_id, activo, creado_en")
+      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, activo, creado_en")
       .order("creado_en");
 
     if (error) throw new Error(error.message);
@@ -186,6 +186,79 @@ adminRouter.patch("/usuarios/:id/activo", async (req, res, next) => {
 
     if (error) throw new Error(error.message);
     res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Detalle de un usuario, para editarlo. */
+adminRouter.get("/usuarios/:id", async (req, res, next) => {
+  try {
+    const { data, error } = await getSupabase()
+      .from("usuarios")
+      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, activo")
+      .eq("id", req.params.id)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    if (!data) {
+      res.status(404).json({ error: "Usuario no encontrado." });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const edicionSchema = z
+  .object({
+    nombre: z.string().trim().min(1).nullable().optional(),
+    puesto: z.string().trim().min(1).nullable().optional(),
+    foto_url: z.string().url().nullable().optional(),
+    rol: z.enum(["admin", "asesor"]).optional(),
+    sucursal_id: z.string().uuid().nullable().optional(),
+  })
+  // Igual que en el alta: sin sucursal el rol no se elige, siempre es admin.
+  .transform((datos) => (datos.sucursal_id === null ? { ...datos, rol: "admin" as const } : datos));
+
+/** Edita nombre, puesto, foto, rol o sucursal. El correo no se toca (es la identidad de la cuenta). */
+adminRouter.patch("/usuarios/:id", async (req, res, next) => {
+  const parsed = edicionSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos.", detalle: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  try {
+    const { data, error } = await getSupabase()
+      .from("usuarios")
+      .update(parsed.data)
+      .eq("id", req.params.id)
+      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, activo")
+      .single();
+
+    if (error) throw new Error(error.message);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Elimina la cuenta por completo (no es baja lógica: usa el interruptor de activo para eso). */
+adminRouter.delete("/usuarios/:id", async (req, res, next) => {
+  try {
+    if (req.params.id === req.usuario!.id) {
+      res.status(400).json({ error: "No puedes eliminar tu propia cuenta." });
+      return;
+    }
+
+    // Borra de auth.users; usuarios_id_fkey (ON DELETE CASCADE) se lleva la fila de public.usuarios.
+    const { error } = await getSupabase().auth.admin.deleteUser(req.params.id);
+    if (error) throw new Error(error.message);
+
+    res.json({ eliminado: true });
   } catch (err) {
     next(err);
   }

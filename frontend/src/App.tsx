@@ -21,6 +21,7 @@ import SucursalWhatsapp from "./paginas/SucursalWhatsapp";
 import SucursalBaseDatos from "./paginas/SucursalBaseDatos";
 import UsuariosNuevo from "./paginas/UsuariosNuevo";
 import UsuariosListado from "./paginas/UsuariosListado";
+import UsuarioEditar from "./paginas/UsuarioEditar";
 import PortalNoEncontrado from "./paginas/PortalNoEncontrado";
 
 /** Pantallas ya construidas. El resto del menú cae en el marcador. */
@@ -65,6 +66,9 @@ function Contenido() {
                 <Route path="whatsapp" element={<SucursalWhatsapp />} />
                 <Route path="base-datos" element={<SucursalBaseDatos />} />
               </Route>
+
+              {/* Igual que sucursales: no vive en el menú, solo se llega desde el listado */}
+              <Route path="/usuarios/:id/editar" element={<UsuarioEditar />} />
 
               {/* Las pantallas del menú existen para poder navegarlas */}
               {RUTAS_DEL_MENU.map(({ ruta, etiqueta }) => (

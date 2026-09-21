@@ -35,13 +35,18 @@ export default function BarraLateral({ colapsada, abierta, onNavegar }: Props) {
     return Boolean(seccion.hijos?.some((h) => pathname.startsWith(h.ruta)));
   }
 
-  // Editar una sucursal (/sucursales/:id/editar, /whatsapp, /base-datos) no
-  // vive en el menú: se llega ahí desde una fila del listado, así que cuenta
-  // como "Listado", no como "Nueva".
+  // Editar una sucursal o un usuario no vive en el menú: se llega ahí desde
+  // una fila del listado, así que cuenta como "Listado", no como "Nueva/Nuevo".
+  const LISTADOS_CON_EDICION: Record<string, string> = {
+    "/sucursales": "/sucursales/nueva",
+    "/usuarios": "/usuarios/nuevo",
+  };
+
   function hijoActivo(ruta: string) {
     if (pathname === ruta) return true;
-    if (ruta === "/sucursales") {
-      return pathname.startsWith("/sucursales/") && pathname !== "/sucursales/nueva";
+    const rutaNueva = LISTADOS_CON_EDICION[ruta];
+    if (rutaNueva) {
+      return pathname.startsWith(`${ruta}/`) && pathname !== rutaNueva;
     }
     return false;
   }

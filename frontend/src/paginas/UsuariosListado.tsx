@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import Interruptor from "../componentes/Interruptor";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
+import ModalConfirmar from "../componentes/ModalConfirmar";
 import { apiFetch } from "../lib/api";
 
 type Rol = "admin" | "asesor";
@@ -12,6 +13,7 @@ type Usuario = {
   correo: string;
   nombre: string | null;
   puesto: string | null;
+  foto_url: string | null;
   rol: Rol;
   sucursal_id: string | null;
   activo: boolean;
@@ -30,6 +32,8 @@ export default function UsuariosListado() {
   const [sucursales, setSucursales] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [cambiando, setCambiando] = useState<string | null>(null);
+  const [porEliminar, setPorEliminar] = useState<Usuario | null>(null);
+  const [eliminando, setEliminando] = useState(false);
 
   useEffect(() => {
     apiFetch<{ usuarios: Usuario[] }>("/api/admin/usuarios")
@@ -63,6 +67,22 @@ export default function UsuariosListado() {
       setError(err instanceof Error ? err.message : "No se pudo actualizar el usuario.");
     } finally {
       setCambiando(null);
+    }
+  }
+
+  async function eliminar() {
+    if (!porEliminar) return;
+
+    setEliminando(true);
+    try {
+      await apiFetch(`/api/admin/usuarios/${porEliminar.id}`, { method: "DELETE" });
+      setUsuarios((previos) => previos?.filter((u) => u.id !== porEliminar.id) ?? null);
+      setPorEliminar(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo eliminar el usuario.");
+      setPorEliminar(null);
+    } finally {
+      setEliminando(false);
     }
   }
 
@@ -106,19 +126,31 @@ export default function UsuariosListado() {
           <table className="tabla">
             <thead>
               <tr>
+                <th>Usuario</th>
                 <th>Correo</th>
-                <th>Nombre</th>
                 <th>Puesto</th>
                 <th>Rol</th>
                 <th>Sucursal</th>
                 <th>Estado</th>
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {usuarios.map((u) => (
                 <tr key={u.id} className={u.activo ? undefined : "fila-inactiva"}>
+                  <td>
+                    <div className="celda-sucursal">
+                      <span className="miniatura-logo redonda">
+                        {u.foto_url ? (
+                          <img src={u.foto_url} alt="" />
+                        ) : (
+                          <span className="miniatura-logo-hueco" style={{ background: "var(--gris-200)" }} />
+                        )}
+                      </span>
+                      <span>{u.nombre ?? "Sin nombre"}</span>
+                    </div>
+                  </td>
                   <td>{u.correo}</td>
-                  <td>{u.nombre ?? "—"}</td>
                   <td>{u.puesto ?? "—"}</td>
                   <td>{ETIQUETA_ROL[u.rol]}</td>
                   <td>{u.sucursal_id ? (sucursales[u.sucursal_id] ?? "—") : "Plataforma"}</td>
@@ -131,12 +163,37 @@ export default function UsuariosListado() {
                       />
                     </div>
                   </td>
+                  <td>
+                    <div className="celda-acciones">
+                      <Link to={`/usuarios/${u.id}/editar`} className="boton-tenue">
+                        Editar
+                      </Link>
+                      <button
+                        type="button"
+                        className="boton-tenue boton-peligro"
+                        onClick={() => setPorEliminar(u)}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+
+      <ModalConfirmar
+        abierto={porEliminar !== null}
+        titulo="Eliminar usuario"
+        mensaje={`¿Eliminar a «${porEliminar?.nombre ?? porEliminar?.correo}»? Se borra por completo, no se puede deshacer.`}
+        textoConfirmar="Eliminar"
+        peligro
+        enviando={eliminando}
+        onConfirmar={eliminar}
+        onCancelar={() => setPorEliminar(null)}
+      />
     </div>
   );
 }

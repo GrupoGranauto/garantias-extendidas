@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
+import ModalConfirmar from "../componentes/ModalConfirmar";
 import { apiFetch } from "../lib/api";
 import { useSucursal } from "./SucursalEditLayout";
 
@@ -137,6 +138,8 @@ export default function SucursalBaseDatos() {
   const [editando, setEditando] = useState(false);
   const [guardado, setGuardado] = useState(false);
   const [enviando, setEnviando] = useState(false);
+  const [confirmacion, setConfirmacion] = useState<"eliminar" | "regenerar" | null>(null);
+  const [enviandoConfirmacion, setEnviandoConfirmacion] = useState(false);
 
   const [nombreVisible, setNombreVisible] = useState("");
   const [nombreTecnico, setNombreTecnico] = useState("");
@@ -245,34 +248,33 @@ export default function SucursalBaseDatos() {
   }
 
   async function eliminarEntidad() {
-    if (!entidad?.nombre_visible) return;
-    const confirmado = window.confirm(
-      `¿Eliminar «${entidad.nombre_visible}» y su tabla «${entidad.nombre_tecnico}»? Se perderán todos sus datos y no se puede deshacer.`,
-    );
-    if (!confirmado) return;
-
+    setEnviandoConfirmacion(true);
     try {
       await apiFetch(`/api/admin/sucursales/${sucursal.id}/entidad`, { method: "DELETE" });
+      setConfirmacion(null);
       cargar();
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo eliminar la entidad.");
+      setConfirmacion(null);
+    } finally {
+      setEnviandoConfirmacion(false);
     }
   }
 
   async function regenerarApiKey() {
-    const confirmado = window.confirm(
-      "Se generará una nueva API key y la anterior dejará de funcionar de inmediato. Tendrás que actualizarla donde la uses. ¿Continuar?",
-    );
-    if (!confirmado) return;
-
+    setEnviandoConfirmacion(true);
     try {
       const { api_key } = await apiFetch<{ api_key: string }>(
         `/api/admin/sucursales/${sucursal.id}/entidad/api-key/regenerar`,
         { method: "POST" },
       );
       setEntidad((previa) => (previa ? { ...previa, api_key } : previa));
+      setConfirmacion(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo regenerar la API key.");
+      setConfirmacion(null);
+    } finally {
+      setEnviandoConfirmacion(false);
     }
   }
 
@@ -325,7 +327,7 @@ export default function SucursalBaseDatos() {
                 <button type="button" className="boton-tenue" onClick={iniciarEdicion}>
                   Editar
                 </button>
-                <button type="button" className="boton-tenue boton-peligro" onClick={eliminarEntidad}>
+                <button type="button" className="boton-tenue boton-peligro" onClick={() => setConfirmacion("eliminar")}>
                   Eliminar
                 </button>
               </div>
@@ -500,7 +502,7 @@ export default function SucursalBaseDatos() {
               <div className="campo-cabecera-fila">
                 <label>API Key (header X-Api-Key)</label>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button type="button" className="boton-tenue" onClick={regenerarApiKey}>
+                  <button type="button" className="boton-tenue" onClick={() => setConfirmacion("regenerar")}>
                     Regenerar
                   </button>
                   <BotonCopiar texto={entidad.api_key} />
@@ -545,6 +547,28 @@ export default function SucursalBaseDatos() {
           </div>
         </section>
       )}
+
+      <ModalConfirmar
+        abierto={confirmacion === "eliminar"}
+        titulo="Eliminar entidad"
+        mensaje={`¿Eliminar «${entidad?.nombre_visible}» y su tabla «${entidad?.nombre_tecnico}»? Se perderán todos sus datos y no se puede deshacer.`}
+        textoConfirmar="Eliminar"
+        peligro
+        enviando={enviandoConfirmacion}
+        onConfirmar={eliminarEntidad}
+        onCancelar={() => setConfirmacion(null)}
+      />
+
+      <ModalConfirmar
+        abierto={confirmacion === "regenerar"}
+        titulo="Regenerar API key"
+        mensaje="Se generará una nueva API key y la anterior dejará de funcionar de inmediato. Tendrás que actualizarla donde la uses."
+        textoConfirmar="Regenerar"
+        peligro
+        enviando={enviandoConfirmacion}
+        onConfirmar={regenerarApiKey}
+        onCancelar={() => setConfirmacion(null)}
+      />
     </>
   );
 }
