@@ -11,6 +11,7 @@ import { adminWhatsappRouter } from "./routes/adminWhatsapp.js";
 import { adminEntidadesRouter } from "./routes/adminEntidades.js";
 import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
 import { publicoRouter } from "./routes/publico.js";
+import { perfilRouter } from "./routes/perfil.js";
 import { webhookWhatsappRouter } from "./routes/webhookWhatsapp.js";
 import { origenPermitido } from "./lib/origenes.js";
 
@@ -35,6 +36,7 @@ app.use(express.json({ limit: "5mb" }));
 
 app.use("/api/health", healthRouter);
 app.use("/api/publico", publicoRouter);
+app.use("/api/perfil", perfilRouter);
 app.use("/api/garantias", garantiasRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);

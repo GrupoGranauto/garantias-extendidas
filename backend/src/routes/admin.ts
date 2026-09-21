@@ -96,6 +96,24 @@ adminRouter.post("/usuarios", async (req, res, next) => {
       ...(sucursal_id ? { sucursal_id } : {}),
     };
 
+    // Sin sucursal (administrador de plataforma) el único host que siempre
+    // existe es el panel genérico. Con sucursal, debe regresar a SU propio
+    // portal (con su marca), no al panel genérico. Nunca CORS_ORIGIN: es la
+    // lista de origenes para CORS, no un dominio real de la app.
+    let hostRedirect = `panel.${env.DOMINIO_BASE}`;
+    let sucursalNombre: string | null = null;
+    if (sucursal_id) {
+      const { data: sucursalDestino } = await supabase
+        .from("sucursales")
+        .select("subdominio, nombre")
+        .eq("id", sucursal_id)
+        .maybeSingle();
+      if (sucursalDestino) {
+        hostRedirect = `${sucursalDestino.subdominio}.${env.DOMINIO_BASE}`;
+        sucursalNombre = sucursalDestino.nombre;
+      }
+    }
+
     // 2. Con contraseña queda listo para entrar. Sin ella, se genera el link
     // de invitación pero NO se manda por la vía de Supabase (su plantilla es
     // básica y no es personalizable sin plan de pago): se manda con nuestro
@@ -111,10 +129,7 @@ adminRouter.post("/usuarios", async (req, res, next) => {
           type: "invite",
           email: correo,
           options: {
-            // Nunca CORS_ORIGIN: es la lista de origenes para CORS, no un
-            // dominio real de la app (y en Railway apunta al dominio de otro
-            // equipo). El panel genérico es el único host que siempre existe.
-            redirectTo: `https://panel.${env.DOMINIO_BASE}/restablecer`,
+            redirectTo: `https://${hostRedirect}/restablecer`,
             data: metadatos,
           },
         });
@@ -136,12 +151,6 @@ adminRouter.post("/usuarios", async (req, res, next) => {
         if (resultado.data.user) await supabase.auth.admin.deleteUser(resultado.data.user.id);
         res.status(400).json({ error: "El correo de invitaciones no está configurado (SMTP)." });
         return;
-      }
-
-      let sucursalNombre: string | null = null;
-      if (sucursal_id) {
-        const { data: sucursal } = await supabase.from("sucursales").select("nombre").eq("id", sucursal_id).maybeSingle();
-        sucursalNombre = sucursal?.nombre ?? null;
       }
 
       try {

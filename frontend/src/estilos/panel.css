@@ -324,6 +324,30 @@
 .marcador strong { font-size: 15px; color: var(--gris-700); }
 .marcador span { font-size: 13px; }
 
+/* ---------- Portal de sucursal (pendiente de construir) ---------- */
+
+.marcador-portal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 16px;
+  background: var(--gris-50);
+}
+.marcador-portal-tarjeta {
+  width: 100%;
+  max-width: 420px;
+  padding: 36px 32px;
+  text-align: center;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.marcador-portal-logo { max-width: 160px; max-height: 56px; margin: 0 auto 20px; display: block; }
+.marcador-portal-tarjeta h1 { margin: 0 0 10px; font-size: 20px; font-weight: 700; color: var(--gris-900); }
+.marcador-portal-tarjeta p { margin: 0 0 24px; font-size: 13.5px; line-height: 1.6; color: var(--gris-600); }
+.marcador-portal-tarjeta strong { color: var(--marca, var(--gris-900)); }
+
 /* ---------- Modal de confirmación ---------- */
 
 .modal-fondo {

@@ -4,6 +4,7 @@ import { AuthProvider } from "./auth/AuthProvider";
 import { PortalProvider, usePortal } from "./portal/PortalProvider";
 import RutaProtegida from "./auth/RutaProtegida";
 import RutaPublica from "./auth/RutaPublica";
+import GuardiaSucursal from "./auth/GuardiaSucursal";
 import LayoutPanel from "./componentes/LayoutPanel";
 import Cargador from "./componentes/Cargador";
 import { RUTAS_DEL_MENU } from "./navegacion";
@@ -53,31 +54,35 @@ function Contenido() {
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/restablecer" element={<RestablecerContrasena />} />
 
-          {/* Con sesión: todo vive dentro del panel */}
+          {/* Con sesión: el panel de plataforma y el portal de una sucursal
+              son cosas distintas y nunca deben cruzarse. GuardiaSucursal
+              decide cuál toca antes de que se monte nada del otro. */}
           <Route element={<RutaProtegida />}>
-            <Route element={<LayoutPanel />}>
-              <Route path="/" element={<Inicio />} />
+            <Route element={<GuardiaSucursal />}>
+              <Route element={<LayoutPanel />}>
+                <Route path="/" element={<Inicio />} />
 
-              {/* Ruta dinámica: no vive en el menú, solo se llega por el botón Editar.
-                  El layout carga la sucursal una sola vez; cambiar de pestaña
-                  solo reemplaza el <Outlet>, no la cabecera. */}
-              <Route path="/sucursales/:id" element={<SucursalEditLayout />}>
-                <Route path="editar" element={<SucursalGeneral />} />
-                <Route path="whatsapp" element={<SucursalWhatsapp />} />
-                <Route path="base-datos" element={<SucursalBaseDatos />} />
+                {/* Ruta dinámica: no vive en el menú, solo se llega por el botón Editar.
+                    El layout carga la sucursal una sola vez; cambiar de pestaña
+                    solo reemplaza el <Outlet>, no la cabecera. */}
+                <Route path="/sucursales/:id" element={<SucursalEditLayout />}>
+                  <Route path="editar" element={<SucursalGeneral />} />
+                  <Route path="whatsapp" element={<SucursalWhatsapp />} />
+                  <Route path="base-datos" element={<SucursalBaseDatos />} />
+                </Route>
+
+                {/* Igual que sucursales: no vive en el menú, solo se llega desde el listado */}
+                <Route path="/usuarios/:id/editar" element={<UsuarioEditar />} />
+
+                {/* Las pantallas del menú existen para poder navegarlas */}
+                {RUTAS_DEL_MENU.map(({ ruta, etiqueta }) => (
+                  <Route
+                    key={ruta}
+                    path={ruta}
+                    element={PANTALLAS[ruta] ?? <EnConstruccion titulo={etiqueta} />}
+                  />
+                ))}
               </Route>
-
-              {/* Igual que sucursales: no vive en el menú, solo se llega desde el listado */}
-              <Route path="/usuarios/:id/editar" element={<UsuarioEditar />} />
-
-              {/* Las pantallas del menú existen para poder navegarlas */}
-              {RUTAS_DEL_MENU.map(({ ruta, etiqueta }) => (
-                <Route
-                  key={ruta}
-                  path={ruta}
-                  element={PANTALLAS[ruta] ?? <EnConstruccion titulo={etiqueta} />}
-                />
-              ))}
             </Route>
           </Route>
 
