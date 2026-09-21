@@ -5,6 +5,7 @@ import { PortalProvider, usePortal } from "./portal/PortalProvider";
 import RutaProtegida from "./auth/RutaProtegida";
 import RutaPublica from "./auth/RutaPublica";
 import LayoutPanel from "./componentes/LayoutPanel";
+import Cargador from "./componentes/Cargador";
 import { RUTAS_DEL_MENU } from "./navegacion";
 import Login from "./paginas/Login";
 import OlvideContrasena from "./paginas/OlvideContrasena";
@@ -18,19 +19,23 @@ import SucursalEditLayout from "./paginas/SucursalEditLayout";
 import SucursalGeneral from "./paginas/SucursalGeneral";
 import SucursalWhatsapp from "./paginas/SucursalWhatsapp";
 import SucursalBaseDatos from "./paginas/SucursalBaseDatos";
+import UsuariosNuevo from "./paginas/UsuariosNuevo";
+import UsuariosListado from "./paginas/UsuariosListado";
 import PortalNoEncontrado from "./paginas/PortalNoEncontrado";
 
 /** Pantallas ya construidas. El resto del menú cae en el marcador. */
 const PANTALLAS: Record<string, ReactNode> = {
   "/sucursales/nueva": <SucursalNueva />,
   "/sucursales": <SucursalesListado />,
+  "/usuarios/nuevo": <UsuariosNuevo />,
+  "/usuarios": <UsuariosListado />,
 };
 
 /** Espera a saber de qué portal se trata antes de pintar nada. */
 function Contenido() {
   const { cargando, noEncontrado } = usePortal();
 
-  if (cargando) return <p className="centrado">Cargando…</p>;
+  if (cargando) return <Cargador pantalla />;
   if (noEncontrado) return <PortalNoEncontrado />;
 
   return (

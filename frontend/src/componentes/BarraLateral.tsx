@@ -35,6 +35,17 @@ export default function BarraLateral({ colapsada, abierta, onNavegar }: Props) {
     return Boolean(seccion.hijos?.some((h) => pathname.startsWith(h.ruta)));
   }
 
+  // Editar una sucursal (/sucursales/:id/editar, /whatsapp, /base-datos) no
+  // vive en el menú: se llega ahí desde una fila del listado, así que cuenta
+  // como "Listado", no como "Nueva".
+  function hijoActivo(ruta: string) {
+    if (pathname === ruta) return true;
+    if (ruta === "/sucursales") {
+      return pathname.startsWith("/sucursales/") && pathname !== "/sucursales/nueva";
+    }
+    return false;
+  }
+
   const clases = ["lateral", colapsada && "lateral-colapsada", abierta && "lateral-abierta"]
     .filter(Boolean)
     .join(" ");
@@ -100,12 +111,7 @@ export default function BarraLateral({ colapsada, abierta, onNavegar }: Props) {
                         <NavLink
                           key={hijo.ruta}
                           to={hijo.ruta}
-                          // `end`: sin esto /sucursales tambien se marca activo
-                          // estando en /sucursales/nueva, por coincidencia de prefijo
-                          end
-                          className={({ isActive }) =>
-                            isActive ? "lateral-subitem activo" : "lateral-subitem"
-                          }
+                          className={hijoActivo(hijo.ruta) ? "lateral-subitem activo" : "lateral-subitem"}
                           onClick={onNavegar}
                         >
                           {hijo.etiqueta}

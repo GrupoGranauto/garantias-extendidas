@@ -27,6 +27,14 @@ const schema = z.object({
   BIGQUERY_PROJECT_ID: z.string().optional(),
   BIGQUERY_DATASET: z.string().optional(),
   BIGQUERY_LOCATION: z.string().default("US"),
+
+  // SMTP propio: correos con diseño propio (invitaciones), en vez del
+  // plantilla básica de Supabase.
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().optional(),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM_NAME: z.string().default("Auto Insights"),
 });
 
 // Una variable vacia en .env (PORT=) cuenta como "no definida"
@@ -49,4 +57,5 @@ export const flags = {
     env.BIGQUERY_PROJECT_ID &&
       (env.GOOGLE_CREDENTIALS_JSON || env.GOOGLE_APPLICATION_CREDENTIALS),
   ),
+  smtp: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS),
 };

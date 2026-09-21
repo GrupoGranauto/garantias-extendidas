@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import Alerta from "../componentes/Alerta";
+import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 import { useSucursal } from "./SucursalEditLayout";
 
@@ -64,6 +65,34 @@ function aNombreTecnico(texto: string): string {
     else if (/[ \-_./]/.test(caracter)) slug += "_";
   }
   return slug.replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+/** Colorea un JSON como lo haría una consola: claves, cadenas y literales en tonos distintos. */
+function resaltarJson(json: string) {
+  const patron = /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(\.\d+)?([eE][+-]?\d+)?)/g;
+  const partes: ReactNode[] = [];
+  let ultimo = 0;
+  let indice = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = patron.exec(json))) {
+    if (m.index > ultimo) partes.push(json.slice(ultimo, m.index));
+
+    const texto = m[0];
+    let clase = "tok-numero";
+    if (texto.startsWith('"')) clase = /:\s*$/.test(texto) ? "tok-clave" : "tok-cadena";
+    else if (texto === "true" || texto === "false") clase = "tok-booleano";
+    else if (texto === "null") clase = "tok-nulo";
+
+    partes.push(
+      <span key={indice++} className={clase}>
+        {texto}
+      </span>,
+    );
+    ultimo = patron.lastIndex;
+  }
+  if (ultimo < json.length) partes.push(json.slice(ultimo));
+  return partes;
 }
 
 function nuevaFila(): FilaCampo {
@@ -248,7 +277,7 @@ export default function SucursalBaseDatos() {
   }
 
   if (cargando) {
-    return <p className="campo-ayuda" style={{ marginTop: 16 }}>Cargando…</p>;
+    return <Cargador />;
   }
 
   const mostrarFormulario = !entidad?.configurado || editando;
@@ -464,7 +493,7 @@ export default function SucursalBaseDatos() {
                 <label>URL (un registro)</label>
                 <BotonCopiar texto={`${origenApiUrl}/registros`} />
               </div>
-              <input type="text" readOnly value={`${origenApiUrl}/registros`} style={{ fontFamily: "monospace" }} />
+              <input type="text" readOnly value={`${origenApiUrl}/registros`} className="campo-codigo" />
             </div>
 
             <div className="campo-formulario">
@@ -477,7 +506,7 @@ export default function SucursalBaseDatos() {
                   <BotonCopiar texto={entidad.api_key} />
                 </div>
               </div>
-              <input type="text" readOnly value={entidad.api_key} style={{ fontFamily: "monospace" }} />
+              <input type="text" readOnly value={entidad.api_key} className="campo-codigo" />
               <p className="campo-ayuda">
                 Es la credencial de esta sucursal. No caduca hasta que la regeneres; no la compartas.
               </p>
@@ -495,10 +524,12 @@ export default function SucursalBaseDatos() {
                 />
               </div>
               <pre className="bloque-codigo">
-                {JSON.stringify(
-                  Object.fromEntries(camposApi.map((c) => [c.nombre_tecnico, EJEMPLO_POR_TIPO[c.tipo]])),
-                  null,
-                  2,
+                {resaltarJson(
+                  JSON.stringify(
+                    Object.fromEntries(camposApi.map((c) => [c.nombre_tecnico, EJEMPLO_POR_TIPO[c.tipo]])),
+                    null,
+                    2,
+                  ),
                 )}
               </pre>
             </div>
@@ -508,7 +539,7 @@ export default function SucursalBaseDatos() {
                 <label>URL (lote, hasta 5000)</label>
                 <BotonCopiar texto={`${origenApiUrl}/registros/lote`} />
               </div>
-              <input type="text" readOnly value={`${origenApiUrl}/registros/lote`} style={{ fontFamily: "monospace" }} />
+              <input type="text" readOnly value={`${origenApiUrl}/registros/lote`} className="campo-codigo" />
               <p className="campo-ayuda">Mismo método y key. El cuerpo es un arreglo JSON de registros: [ {"{…}"}, {"{…}"} ].</p>
             </div>
           </div>

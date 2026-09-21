@@ -3,7 +3,7 @@
    Dos columnas: contexto a la izquierda, campos a la derecha.
    ============================================================ */
 
-.pagina-formulario { max-width: 1060px; }
+.pagina-formulario { max-width: none; }
 
 .migas {
   display: flex;
@@ -185,6 +185,27 @@
   border-radius: 8px;
 }
 .opcion .campo-ayuda { margin-left: 49px; }
+
+.opcion-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--gris-50);
+  border: 1px solid var(--gris-200);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--curva), background 0.15s var(--curva);
+}
+.opcion-radio:hover { border-color: var(--gris-300); }
+.opcion-radio:has(input:checked) {
+  background: #fff;
+  border-color: var(--marca);
+  box-shadow: 0 0 0 3px var(--marca-anillo);
+}
+.opcion-radio input[type="radio"] { margin-top: 3px; accent-color: var(--marca); flex: none; }
+.opcion-radio > span { display: flex; flex-direction: column; gap: 3px; }
+.opcion-radio strong { font-size: 13px; font-weight: 600; color: var(--gris-900); }
 
 .interruptor { display: flex; align-items: center; gap: 11px; }
 .interruptor label {
@@ -378,12 +399,24 @@
   padding: 12px 14px;
   font-family: monospace;
   font-size: 12.5px;
-  color: var(--gris-900);
+  color: var(--gris-700);
   background: var(--gris-50);
   border: 1px solid var(--gris-200);
   border-radius: 8px;
   overflow-x: auto;
   white-space: pre;
+}
+
+/* Coloreado tipo consola, solo el texto (el fondo se queda como está) */
+.bloque-codigo .tok-clave { color: #0451a5; }
+.bloque-codigo .tok-cadena { color: #a31515; }
+.bloque-codigo .tok-numero { color: #098658; }
+.bloque-codigo .tok-booleano,
+.bloque-codigo .tok-nulo { color: #0000ff; }
+
+.campo-codigo {
+  font-family: monospace !important;
+  color: #a31515 !important;
 }
 
 @media (max-width: 720px) {

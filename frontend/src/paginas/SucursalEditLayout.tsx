@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Outlet, useOutletContext, useParams } from "react-router-dom";
 import PestanasSucursal from "../componentes/PestanasSucursal";
 import Alerta from "../componentes/Alerta";
+import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 
 export type SucursalDetalle = {
@@ -67,7 +68,7 @@ export default function SucursalEditLayout() {
       {sucursal ? (
         <Outlet context={{ sucursal, recargar: cargar } satisfies Contexto} />
       ) : (
-        !error && <p className="campo-ayuda" style={{ marginTop: 16 }}>Cargando…</p>
+        !error && <Cargador />
       )}
     </div>
   );

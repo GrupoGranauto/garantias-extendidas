@@ -3,30 +3,35 @@ import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
 import { requireAuth, requireAdmin } from "../middleware/auth.js";
-import { env } from "../config/env.js";
+import { env, flags } from "../config/env.js";
 import { subdominioValido } from "../lib/subdominio.js";
+import { enviarCorreoInvitacion } from "../lib/correo.js";
 
 export const adminRouter = Router();
 
 // Todo lo de aqui exige sesión con rol admin
 adminRouter.use(requireAuth, requireAdmin);
 
-const altaSchema = z.object({
-  correo: z.string().email().transform((v) => v.trim().toLowerCase()),
-  nombre: z.string().trim().min(1).optional(),
-  rol: z.enum(["admin", "gestor", "consulta"]).default("consulta"),
-  /** Sin contraseña se envía invitación por correo y el usuario la define. */
-  password: z.string().min(8).optional(),
-  /** Null = administrador de plataforma (entra por el dominio raíz). */
-  sucursal_id: z.string().uuid().nullable().default(null),
-});
+const altaSchema = z
+  .object({
+    correo: z.string().email().transform((v) => v.trim().toLowerCase()),
+    nombre: z.string().trim().min(1).optional(),
+    puesto: z.string().trim().min(1).optional(),
+    rol: z.enum(["admin", "asesor"]).default("asesor"),
+    /** Sin contraseña se envía invitación por correo y el usuario la define. */
+    password: z.string().min(8).optional(),
+    /** Null = administrador de plataforma (entra por el dominio raíz). */
+    sucursal_id: z.string().uuid().nullable().default(null),
+  })
+  // Sin sucursal es administrador de plataforma: el rol no se elige, siempre es admin.
+  .transform((datos) => (datos.sucursal_id === null ? { ...datos, rol: "admin" as const } : datos));
 
 /** Lista de usuarios con su rol. */
 adminRouter.get("/usuarios", async (_req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("usuarios")
-      .select("id, correo, nombre, rol, activo, creado_en")
+      .select("id, correo, nombre, puesto, rol, sucursal_id, activo, creado_en")
       .order("creado_en");
 
     if (error) throw new Error(error.message);
@@ -64,7 +69,7 @@ adminRouter.post("/usuarios", async (req, res, next) => {
     return;
   }
 
-  const { correo, nombre, rol, password, sucursal_id } = parsed.data;
+  const { correo, nombre, puesto, rol, password, sucursal_id } = parsed.data;
   const supabase = getSupabase();
 
   try {
@@ -74,6 +79,7 @@ adminRouter.post("/usuarios", async (req, res, next) => {
         correo,
         rol,
         nombre: nombre ?? null,
+        puesto: puesto ?? null,
         sucursal_id,
         invitado_por: req.usuario!.id,
         usada_en: null,
@@ -83,24 +89,33 @@ adminRouter.post("/usuarios", async (req, res, next) => {
 
     if (errorInvitacion) throw new Error(errorInvitacion.message);
 
-    // 2. Con contraseña queda listo para entrar; sin ella, recibe correo de invitación
+    const metadatos = {
+      rol,
+      ...(nombre ? { full_name: nombre } : {}),
+      ...(puesto ? { puesto } : {}),
+      ...(sucursal_id ? { sucursal_id } : {}),
+    };
+
+    // 2. Con contraseña queda listo para entrar. Sin ella, se genera el link
+    // de invitación pero NO se manda por la vía de Supabase (su plantilla es
+    // básica y no es personalizable sin plan de pago): se manda con nuestro
+    // propio correo, con nuestro diseño, más abajo.
     const resultado = password
       ? await supabase.auth.admin.createUser({
           email: correo,
           password,
           email_confirm: true,
-          user_metadata: {
-            rol,
-            ...(nombre ? { full_name: nombre } : {}),
-            ...(sucursal_id ? { sucursal_id } : {}),
-          },
+          user_metadata: metadatos,
         })
-      : await supabase.auth.admin.inviteUserByEmail(correo, {
-          redirectTo: `${env.CORS_ORIGIN.split(",")[0].trim()}/restablecer`,
-          data: {
-            rol,
-            ...(nombre ? { full_name: nombre } : {}),
-            ...(sucursal_id ? { sucursal_id } : {}),
+      : await supabase.auth.admin.generateLink({
+          type: "invite",
+          email: correo,
+          options: {
+            // Nunca CORS_ORIGIN: es la lista de origenes para CORS, no un
+            // dominio real de la app (y en Railway apunta al dominio de otro
+            // equipo). El panel genérico es el único host que siempre existe.
+            redirectTo: `https://panel.${env.DOMINIO_BASE}/restablecer`,
+            data: metadatos,
           },
         });
 
@@ -109,6 +124,36 @@ adminRouter.post("/usuarios", async (req, res, next) => {
       await supabase.from("invitaciones").delete().eq("correo", correo);
       res.status(400).json({ error: resultado.error.message });
       return;
+    }
+
+    // 3. Con el link ya generado, se manda el correo propio. Si esto falla no
+    // debe quedar una cuenta fantasma que nadie puede activar.
+    if (!password) {
+      const actionLink = (resultado.data as { properties?: { action_link?: string } }).properties?.action_link;
+
+      if (!flags.smtp || !actionLink) {
+        await supabase.from("invitaciones").delete().eq("correo", correo);
+        if (resultado.data.user) await supabase.auth.admin.deleteUser(resultado.data.user.id);
+        res.status(400).json({ error: "El correo de invitaciones no está configurado (SMTP)." });
+        return;
+      }
+
+      let sucursalNombre: string | null = null;
+      if (sucursal_id) {
+        const { data: sucursal } = await supabase.from("sucursales").select("nombre").eq("id", sucursal_id).maybeSingle();
+        sucursalNombre = sucursal?.nombre ?? null;
+      }
+
+      try {
+        await enviarCorreoInvitacion({ destino: correo, nombre: nombre ?? null, sucursalNombre, actionLink });
+      } catch (errorCorreo) {
+        await supabase.from("invitaciones").delete().eq("correo", correo);
+        if (resultado.data.user) await supabase.auth.admin.deleteUser(resultado.data.user.id);
+        res.status(400).json({
+          error: `No se pudo enviar el correo de invitación: ${errorCorreo instanceof Error ? errorCorreo.message : "error desconocido"}`,
+        });
+        return;
+      }
     }
 
     res.status(201).json({

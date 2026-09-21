@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import Interruptor from "../componentes/Interruptor";
 import Alerta from "../componentes/Alerta";
+import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 import { useSucursal } from "./SucursalEditLayout";
 
@@ -100,7 +101,7 @@ export default function SucursalWhatsapp() {
   }
 
   if (cargando) {
-    return <p className="campo-ayuda" style={{ marginTop: 16 }}>Cargando…</p>;
+    return <Cargador />;
   }
 
   const urlWebhook = `https://${sucursal.subdominio}.${DOMINIO}/api/webhooks/whatsapp`;

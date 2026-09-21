@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Interruptor from "../componentes/Interruptor";
 import Alerta from "../componentes/Alerta";
+import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 
 type Sucursal = {
@@ -102,7 +103,7 @@ export default function SucursalesListado() {
         </div>
       )}
 
-      {!sucursales && !error && <p className="campo-ayuda">Cargando…</p>}
+      {!sucursales && !error && <Cargador />}
 
       {sucursales && sucursales.length === 0 && (
         <div className="marcador">

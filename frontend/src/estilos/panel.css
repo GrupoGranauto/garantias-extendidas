@@ -324,6 +324,29 @@
 .marcador strong { font-size: 15px; color: var(--gris-700); }
 .marcador span { font-size: 13px; }
 
+/* ---------- Carga ---------- */
+
+.cargador {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+}
+.cargador-pantalla { min-height: 100vh; }
+
+.cargador-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid var(--gris-200);
+  border-top-color: var(--marca);
+  border-radius: 50%;
+  animation: girar-cargador 0.7s linear infinite;
+}
+
+@keyframes girar-cargador {
+  to { transform: rotate(360deg); }
+}
+
 /* ---------- Móvil: la lateral se vuelve panel flotante ---------- */
 
 .panel-velo {
