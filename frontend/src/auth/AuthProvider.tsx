@@ -77,10 +77,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const enviarCorreoRecuperacion = useCallback(async (correo: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(correo.trim(), {
-      redirectTo: `${window.location.origin}/restablecer`,
-    });
-    return { error: error ? traducirError(error.message) : null };
+    try {
+      // Propio, no supabase.auth.resetPasswordForEmail(): así el correo lleva
+      // nuestro diseño, no la plantilla básica (y en inglés) de Supabase.
+      const res = await fetch("/api/publico/recuperar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ correo: correo.trim(), origen: window.location.origin }),
+      });
+      if (!res.ok) return { error: "No se pudo enviar el correo. Intenta de nuevo." };
+      return { error: null };
+    } catch {
+      return { error: "No se pudo enviar el correo. Revisa tu conexión." };
+    }
   }, []);
 
   const cambiarPassword = useCallback(async (password: string) => {

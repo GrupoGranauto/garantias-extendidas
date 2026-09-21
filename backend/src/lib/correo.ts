@@ -18,21 +18,17 @@ function getTransportador(): Transporter {
   return transportador;
 }
 
-type DatosInvitacion = {
-  destino: string;
-  nombre?: string | null;
-  sucursalNombre?: string | null;
+const LOGO_URL = `https://panel.${env.DOMINIO_BASE}/marca/logo-morado.png`;
+
+type PlantillaBase = {
+  saludo: string;
+  parrafo: string;
+  textoBoton: string;
   actionLink: string;
 };
 
-const LOGO_URL = `https://panel.${env.DOMINIO_BASE}/marca/logo-morado.png`;
-
-function plantillaInvitacion({ nombre, sucursalNombre, actionLink }: DatosInvitacion): string {
-  const saludo = nombre ? `Hola, ${nombre}` : "Hola";
-  const contexto = sucursalNombre
-    ? `Te dieron de alta en el panel de <strong>${sucursalNombre}</strong>.`
-    : "Te dieron de alta como administrador de la plataforma.";
-
+/** Tarjeta blanca con logo, un párrafo y un botón: el esqueleto de todos los correos propios. */
+function plantillaBase({ saludo, parrafo, textoBoton, actionLink }: PlantillaBase): string {
   return `<!DOCTYPE html>
 <html lang="es">
   <body style="margin:0; padding:0; background:#f3f4f6; font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
@@ -52,7 +48,7 @@ function plantillaInvitacion({ nombre, sucursalNombre, actionLink }: DatosInvita
             </tr>
             <tr>
               <td style="padding:0 40px 24px; font-size:14px; line-height:1.6; color:#4b5563;">
-                ${contexto} Da clic en el botón para definir tu contraseña y entrar por primera vez.
+                ${parrafo}
               </td>
             </tr>
             <tr>
@@ -62,7 +58,7 @@ function plantillaInvitacion({ nombre, sucursalNombre, actionLink }: DatosInvita
                     <td style="border-radius:8px; background:#493f91;">
                       <a href="${actionLink}"
                          style="display:inline-block; padding:13px 28px; font-size:14px; font-weight:600; color:#ffffff; text-decoration:none; border-radius:8px; font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                        Aceptar invitación
+                        ${textoBoton}
                       </a>
                     </td>
                   </tr>
@@ -88,11 +84,47 @@ function plantillaInvitacion({ nombre, sucursalNombre, actionLink }: DatosInvita
 </html>`;
 }
 
-export async function enviarCorreoInvitacion(datos: DatosInvitacion): Promise<void> {
+type DatosInvitacion = {
+  destino: string;
+  nombre?: string | null;
+  sucursalNombre?: string | null;
+  actionLink: string;
+};
+
+export async function enviarCorreoInvitacion({ destino, nombre, sucursalNombre, actionLink }: DatosInvitacion): Promise<void> {
+  const contexto = sucursalNombre
+    ? `Te dieron de alta en el panel de <strong>${sucursalNombre}</strong>.`
+    : "Te dieron de alta como administrador de la plataforma.";
+
   await getTransportador().sendMail({
     from: `"${env.SMTP_FROM_NAME}" <${env.SMTP_USER}>`,
-    to: datos.destino,
+    to: destino,
     subject: "Te invitaron a Auto Insights",
-    html: plantillaInvitacion(datos),
+    html: plantillaBase({
+      saludo: nombre ? `Hola, ${nombre}` : "Hola",
+      parrafo: `${contexto} Da clic en el botón para definir tu contraseña y entrar por primera vez.`,
+      textoBoton: "Aceptar invitación",
+      actionLink,
+    }),
+  });
+}
+
+type DatosRecuperacion = {
+  destino: string;
+  nombre?: string | null;
+  actionLink: string;
+};
+
+export async function enviarCorreoRecuperacion({ destino, nombre, actionLink }: DatosRecuperacion): Promise<void> {
+  await getTransportador().sendMail({
+    from: `"${env.SMTP_FROM_NAME}" <${env.SMTP_USER}>`,
+    to: destino,
+    subject: "Recupera tu contraseña — Auto Insights",
+    html: plantillaBase({
+      saludo: nombre ? `Hola, ${nombre}` : "Hola",
+      parrafo: "Pediste restablecer tu contraseña. Da clic en el botón para elegir una nueva.",
+      textoBoton: "Restablecer contraseña",
+      actionLink,
+    }),
   });
 }

@@ -12,32 +12,9 @@ import { adminEntidadesRouter } from "./routes/adminEntidades.js";
 import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
 import { publicoRouter } from "./routes/publico.js";
 import { webhookWhatsappRouter } from "./routes/webhookWhatsapp.js";
+import { origenPermitido } from "./lib/origenes.js";
 
 const app = express();
-
-// Cada sucursal vive en su propio subdominio, asi que el origen es variable:
-// se permite la lista fija de desarrollo y cualquier <algo>.DOMINIO_BASE.
-const origenesFijos = env.CORS_ORIGIN.split(",").map((o) => o.trim());
-
-function origenPermitido(origen: string): boolean {
-  if (origenesFijos.includes(origen)) return true;
-
-  try {
-    const { protocol, hostname } = new URL(origen);
-    if (protocol !== "https:") return false;
-
-    const host = hostname.toLowerCase();
-    const base = env.DOMINIO_BASE.toLowerCase();
-
-    if (host === base) return true;
-    if (!host.endsWith(`.${base}`)) return false;
-
-    // Solo un nivel de subdominio: "a.b.autoinsights.mx" no pasa
-    return !host.slice(0, -(base.length + 1)).includes(".");
-  } catch {
-    return false;
-  }
-}
 
 app.use(
   cors({
