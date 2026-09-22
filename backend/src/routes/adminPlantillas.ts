@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
-import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { requireAuth, requireAccesoSucursal } from "../middleware/auth.js";
 import {
   crearPlantillaMeta,
   eliminarPlantillaMeta,
@@ -12,7 +12,10 @@ import {
 
 export const adminPlantillasRouter = Router();
 
-adminPlantillasRouter.use(requireAuth, requireAdmin);
+adminPlantillasRouter.use(requireAuth);
+// Todas las rutas de este router cuelgan de /sucursales/:id/plantillas...:
+// este patrón hace que Express ya tenga req.params.id disponible aquí.
+adminPlantillasRouter.use("/sucursales/:id/plantillas", requireAccesoSucursal);
 
 /* ============================================================
    Forma local de los componentes: más simple que el payload de

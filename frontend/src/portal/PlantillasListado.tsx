@@ -4,7 +4,7 @@ import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import ModalConfirmar from "../componentes/ModalConfirmar";
 import { apiFetch } from "../lib/api";
-import { useSucursal } from "./SucursalEditLayout";
+import { usePortal } from "./PortalProvider";
 
 type Estado = "borrador" | "pendiente" | "aprobada" | "rechazada" | "pausada" | "deshabilitada";
 
@@ -42,8 +42,10 @@ const PASTILLA_ESTADO: Record<Estado, string> = {
   deshabilitada: "neutral",
 };
 
-export default function SucursalPlantillas() {
-  const { sucursal } = useSucursal();
+/** Plantillas de WhatsApp de esta sucursal. Vive en el portal de la sucursal, no en el panel de plataforma. */
+export default function PlantillasListado() {
+  const { portal } = usePortal();
+  const sucursalId = portal!.id;
 
   const [plantillas, setPlantillas] = useState<Plantilla[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,18 +55,18 @@ export default function SucursalPlantillas() {
   const [eliminando, setEliminando] = useState(false);
 
   function cargar() {
-    apiFetch<Plantilla[]>(`/api/admin/sucursales/${sucursal.id}/plantillas`)
+    apiFetch<Plantilla[]>(`/api/admin/sucursales/${sucursalId}/plantillas`)
       .then(setPlantillas)
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudieron cargar las plantillas."));
   }
 
-  useEffect(cargar, [sucursal.id]);
+  useEffect(cargar, [sucursalId]);
 
   async function sincronizar() {
     setSincronizando(true);
     setError(null);
     try {
-      await apiFetch(`/api/admin/sucursales/${sucursal.id}/plantillas/sync`, { method: "POST" });
+      await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/sync`, { method: "POST" });
       cargar();
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo sincronizar con Meta.");
@@ -77,7 +79,7 @@ export default function SucursalPlantillas() {
     setEnviandoId(plantilla.id);
     setError(null);
     try {
-      await apiFetch(`/api/admin/sucursales/${sucursal.id}/plantillas/${plantilla.id}/enviar`, { method: "POST" });
+      await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/${plantilla.id}/enviar`, { method: "POST" });
       cargar();
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo enviar la plantilla a revisión.");
@@ -90,7 +92,7 @@ export default function SucursalPlantillas() {
     if (!porEliminar) return;
     setEliminando(true);
     try {
-      await apiFetch(`/api/admin/sucursales/${sucursal.id}/plantillas/${porEliminar.id}`, { method: "DELETE" });
+      await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/${porEliminar.id}`, { method: "DELETE" });
       setPlantillas((previas) => previas?.filter((p) => p.id !== porEliminar.id) ?? null);
       setPorEliminar(null);
     } catch (err) {
@@ -102,20 +104,21 @@ export default function SucursalPlantillas() {
   }
 
   return (
-    <div>
-      <div className="pestana-descripcion-barra">
-        <p className="pestana-descripcion">
-          Plantillas de mensaje de WhatsApp. Meta las revisa antes de poder usarlas para iniciar conversación.
-        </p>
+    <div className="pagina-formulario">
+      <header className="pagina-cabecera">
+        <div>
+          <h1>Plantillas</h1>
+          <p>Plantillas de mensaje de WhatsApp. Meta las revisa antes de poder usarlas para iniciar conversación.</p>
+        </div>
         <div className="pagina-acciones">
           <button type="button" className="boton-tenue" onClick={sincronizar} disabled={sincronizando}>
             {sincronizando ? "Sincronizando…" : "Sincronizar con Meta"}
           </button>
-          <Link to={`/sucursales/${sucursal.id}/plantillas/nueva`} className="boton-guardar">
+          <Link to="/plantillas/nueva" className="boton-guardar">
             Nueva plantilla
           </Link>
         </div>
-      </div>
+      </header>
 
       {error && (
         <div className="aviso-formulario">
@@ -160,7 +163,7 @@ export default function SucursalPlantillas() {
                     <div className="celda-acciones">
                       {(p.estado === "borrador" || p.estado === "rechazada") && (
                         <>
-                          <Link to={`/sucursales/${sucursal.id}/plantillas/${p.id}/editar`} className="boton-tenue">
+                          <Link to={`/plantillas/${p.id}/editar`} className="boton-tenue">
                             Editar
                           </Link>
                           <button

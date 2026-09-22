@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
+import { usePortal } from "./PortalProvider";
 
 type Categoria = "marketing" | "utility" | "authentication";
 
@@ -53,8 +54,11 @@ function botonPorDefecto(tipo: BotonForm["tipo"]): BotonForm {
   }
 }
 
+/** Alta/edición de una plantilla. Vive en el portal de la sucursal: la sucursal sale del subdominio, no de la URL. */
 export default function PlantillaFormulario() {
-  const { id, pid } = useParams<{ id: string; pid?: string }>();
+  const { pid } = useParams<{ pid?: string }>();
+  const { portal } = usePortal();
+  const sucursalId = portal!.id;
   const navigate = useNavigate();
   const editando = Boolean(pid);
   const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -89,8 +93,8 @@ export default function PlantillaFormulario() {
   }, [variables.length]);
 
   useEffect(() => {
-    if (!pid || !id) return;
-    apiFetch<PlantillaDetalle>(`/api/admin/sucursales/${id}/plantillas/${pid}`)
+    if (!pid) return;
+    apiFetch<PlantillaDetalle>(`/api/admin/sucursales/${sucursalId}/plantillas/${pid}`)
       .then((p) => {
         setNombreTecnico(p.nombre_tecnico);
         setIdioma(p.idioma);
@@ -105,7 +109,7 @@ export default function PlantillaFormulario() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la plantilla."))
       .finally(() => setCargando(false));
-  }, [id, pid]);
+  }, [sucursalId, pid]);
 
   function insertarVariable() {
     const siguiente = variables.length ? Math.max(...variables) + 1 : 1;
@@ -179,12 +183,12 @@ export default function PlantillaFormulario() {
       let plantillaId = pid;
 
       if (editando && pid) {
-        await apiFetch(`/api/admin/sucursales/${id}/plantillas/${pid}`, {
+        await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/${pid}`, {
           method: "PATCH",
           body: JSON.stringify({ idioma, categoria, componentes }),
         });
       } else {
-        const creada = await apiFetch<{ id: string }>(`/api/admin/sucursales/${id}/plantillas`, {
+        const creada = await apiFetch<{ id: string }>(`/api/admin/sucursales/${sucursalId}/plantillas`, {
           method: "POST",
           body: JSON.stringify({ nombre_tecnico: nombreTecnico.trim(), idioma, categoria, componentes }),
         });
@@ -192,10 +196,10 @@ export default function PlantillaFormulario() {
       }
 
       if (enviarDespues && plantillaId) {
-        await apiFetch(`/api/admin/sucursales/${id}/plantillas/${plantillaId}/enviar`, { method: "POST" });
+        await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/${plantillaId}/enviar`, { method: "POST" });
       }
 
-      navigate(`/sucursales/${id}/plantillas`);
+      navigate("/plantillas");
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo guardar la plantilla.");
     } finally {
@@ -224,9 +228,7 @@ export default function PlantillaFormulario() {
   return (
     <form onSubmit={onSubmit} className="pagina-formulario">
       <nav className="migas" aria-label="Ruta">
-        <Link to="/sucursales">Sucursales</Link>
-        <span aria-hidden="true">/</span>
-        <Link to={`/sucursales/${id}/plantillas`}>Plantillas</Link>
+        <Link to="/plantillas">Plantillas</Link>
         <span aria-hidden="true">/</span>
         <span>{editando ? "Editar" : "Nueva"}</span>
       </nav>
@@ -516,7 +518,7 @@ export default function PlantillaFormulario() {
           Los campos marcados con <span className="obligatorio">*</span> son obligatorios.
         </p>
         <div className="pagina-acciones">
-          <Link to={`/sucursales/${id}/plantillas`} className="boton-secundario-claro">
+          <Link to="/plantillas" className="boton-secundario-claro">
             Cancelar
           </Link>
           <button type="submit" className="boton-secundario-claro" disabled={enviando}>

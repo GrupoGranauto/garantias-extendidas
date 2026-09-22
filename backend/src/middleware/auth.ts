@@ -90,3 +90,48 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     next(err);
   }
 }
+
+/**
+ * Como requireAdmin, pero además exige que la cuenta pertenezca a la
+ * sucursal de `:id` en la URL (o sea administrador de plataforma).
+ *
+ * requireAdmin por sí solo NO alcanza para rutas con `:id` de sucursal: un
+ * admin de UNA sucursal tiene rol "admin" igual que el de plataforma, así
+ * que sin este chequeo podría leer/editar recursos de OTRA sucursal con su
+ * propio token válido, solo cambiando el id en la URL.
+ */
+export async function requireAccesoSucursal(req: Request, res: Response, next: NextFunction) {
+  if (!req.usuario) {
+    res.status(401).json({ error: "Sesión requerida." });
+    return;
+  }
+
+  try {
+    const { data, error } = await getSupabase()
+      .from("usuarios")
+      .select("rol, activo, sucursal_id")
+      .eq("id", req.usuario.id)
+      .single();
+
+    if (error || !data) {
+      res.status(403).json({ error: "Perfil no encontrado." });
+      return;
+    }
+    if (!data.activo) {
+      res.status(403).json({ error: "Cuenta desactivada." });
+      return;
+    }
+    if (data.rol !== "admin") {
+      res.status(403).json({ error: "Requiere rol de administrador." });
+      return;
+    }
+    // sucursal_id null = administrador de plataforma: entra a cualquier sucursal.
+    if (data.sucursal_id !== null && data.sucursal_id !== req.params.id) {
+      res.status(403).json({ error: "No tienes acceso a esta sucursal." });
+      return;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
