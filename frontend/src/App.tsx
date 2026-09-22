@@ -1,37 +1,15 @@
-import type { ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthProvider";
 import { PortalProvider, usePortal } from "./portal/PortalProvider";
 import RutaProtegida from "./auth/RutaProtegida";
 import RutaPublica from "./auth/RutaPublica";
 import GuardiaSucursal from "./auth/GuardiaSucursal";
-import LayoutPanel from "./componentes/LayoutPanel";
 import Cargador from "./componentes/Cargador";
-import { RUTAS_DEL_MENU } from "./navegacion";
 import Login from "./paginas/Login";
 import OlvideContrasena from "./paginas/OlvideContrasena";
 import RestablecerContrasena from "./paginas/RestablecerContrasena";
 import AuthCallback from "./paginas/AuthCallback";
-import Inicio from "./paginas/Inicio";
-import EnConstruccion from "./paginas/EnConstruccion";
-import SucursalNueva from "./paginas/SucursalNueva";
-import SucursalesListado from "./paginas/SucursalesListado";
-import SucursalEditLayout from "./paginas/SucursalEditLayout";
-import SucursalGeneral from "./paginas/SucursalGeneral";
-import SucursalWhatsapp from "./paginas/SucursalWhatsapp";
-import SucursalBaseDatos from "./paginas/SucursalBaseDatos";
-import UsuariosNuevo from "./paginas/UsuariosNuevo";
-import UsuariosListado from "./paginas/UsuariosListado";
-import UsuarioEditar from "./paginas/UsuarioEditar";
 import PortalNoEncontrado from "./paginas/PortalNoEncontrado";
-
-/** Pantallas ya construidas. El resto del menú cae en el marcador. */
-const PANTALLAS: Record<string, ReactNode> = {
-  "/sucursales/nueva": <SucursalNueva />,
-  "/sucursales": <SucursalesListado />,
-  "/usuarios/nuevo": <UsuariosNuevo />,
-  "/usuarios": <UsuariosListado />,
-};
 
 /** Espera a saber de qué portal se trata antes de pintar nada. */
 function Contenido() {
@@ -56,34 +34,12 @@ function Contenido() {
 
           {/* Con sesión: el panel de plataforma y el portal de una sucursal
               son cosas distintas y nunca deben cruzarse. GuardiaSucursal
-              decide cuál toca antes de que se monte nada del otro. */}
+              decide cuál toca y es dueña de TODO su árbol de rutas (propio
+              <Routes> interno) — por eso monta en un comodín "/*": así el
+              <Routes> de aquí afuera nunca intenta (y falla en) resolver
+              rutas que solo GuardiaSucursal conoce, como "/plantillas". */}
           <Route element={<RutaProtegida />}>
-            <Route element={<GuardiaSucursal />}>
-              <Route element={<LayoutPanel />}>
-                <Route path="/" element={<Inicio />} />
-
-                {/* Ruta dinámica: no vive en el menú, solo se llega por el botón Editar.
-                    El layout carga la sucursal una sola vez; cambiar de pestaña
-                    solo reemplaza el <Outlet>, no la cabecera. */}
-                <Route path="/sucursales/:id" element={<SucursalEditLayout />}>
-                  <Route path="editar" element={<SucursalGeneral />} />
-                  <Route path="whatsapp" element={<SucursalWhatsapp />} />
-                  <Route path="base-datos" element={<SucursalBaseDatos />} />
-                </Route>
-
-                {/* Igual que sucursales: no vive en el menú, solo se llega desde el listado */}
-                <Route path="/usuarios/:id/editar" element={<UsuarioEditar />} />
-
-                {/* Las pantallas del menú existen para poder navegarlas */}
-                {RUTAS_DEL_MENU.map(({ ruta, etiqueta }) => (
-                  <Route
-                    key={ruta}
-                    path={ruta}
-                    element={PANTALLAS[ruta] ?? <EnConstruccion titulo={etiqueta} />}
-                  />
-                ))}
-              </Route>
-            </Route>
+            <Route path="/*" element={<GuardiaSucursal />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />
