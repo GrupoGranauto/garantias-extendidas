@@ -28,12 +28,13 @@ const schema = z.object({
   BIGQUERY_DATASET: z.string().optional(),
   BIGQUERY_LOCATION: z.string().default("US"),
 
-  // SMTP propio: correos con diseño propio (invitaciones), en vez del
-  // plantilla básica de Supabase.
-  SMTP_HOST: z.string().optional(),
-  SMTP_PORT: z.coerce.number().optional(),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASS: z.string().optional(),
+  // Correo propio (invitaciones, recuperación), en vez de la plantilla
+  // básica de Supabase. Por la API de Gmail (HTTPS): Railway bloquea SMTP
+  // saliente, así que un transporte SMTP normal nunca conecta.
+  GMAIL_SENDER: z.string().email().optional(),
+  GMAIL_CLIENT_ID: z.string().optional(),
+  GMAIL_CLIENT_SECRET: z.string().optional(),
+  GMAIL_REFRESH_TOKEN: z.string().optional(),
   SMTP_FROM_NAME: z.string().default("Auto Insights"),
 });
 
@@ -57,5 +58,5 @@ export const flags = {
     env.BIGQUERY_PROJECT_ID &&
       (env.GOOGLE_CREDENTIALS_JSON || env.GOOGLE_APPLICATION_CREDENTIALS),
   ),
-  smtp: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS),
+  correo: Boolean(env.GMAIL_SENDER && env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET && env.GMAIL_REFRESH_TOKEN),
 };

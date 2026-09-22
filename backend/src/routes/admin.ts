@@ -146,10 +146,10 @@ adminRouter.post("/usuarios", async (req, res, next) => {
     if (!password) {
       const actionLink = (resultado.data as { properties?: { action_link?: string } }).properties?.action_link;
 
-      if (!flags.smtp || !actionLink) {
+      if (!flags.correo || !actionLink) {
         await supabase.from("invitaciones").delete().eq("correo", correo);
         if (resultado.data.user) await supabase.auth.admin.deleteUser(resultado.data.user.id);
-        res.status(400).json({ error: "El correo de invitaciones no está configurado (SMTP)." });
+        res.status(400).json({ error: "El correo de invitaciones no está configurado." });
         return;
       }
 

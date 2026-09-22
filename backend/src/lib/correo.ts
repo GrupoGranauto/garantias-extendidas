@@ -1,26 +1,79 @@
-import nodemailer, { type Transporter } from "nodemailer";
 import { env, flags } from "../config/env.js";
 
-let transportador: Transporter | null = null;
+// Railway bloquea SMTP saliente (puertos 587/465 nunca conectan), así que el
+// correo se manda por la API REST de Gmail (HTTPS puro, nunca bloqueado) con
+// una cuenta de servicio OAuth2 (notificaciones@autoinsights.mx). El access
+// token dura ~1h; se cachea y se renueva con el refresh token cuando toca.
+let accessTokenCache: { token: string; expiraEn: number } | null = null;
 
-function getTransportador(): Transporter {
-  if (!flags.smtp) {
-    throw new Error("SMTP no configurado (SMTP_HOST, SMTP_USER, SMTP_PASS).");
+async function obtenerAccessToken(): Promise<string> {
+  if (accessTokenCache && Date.now() < accessTokenCache.expiraEn) {
+    return accessTokenCache.token;
   }
-  if (!transportador) {
-    transportador = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT ?? 587,
-      secure: env.SMTP_PORT === 465,
-      auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
-      // Sin esto, una conexión que no responde (puerto bloqueado, firewall)
-      // cuelga minutos en vez de fallar rápido con un error identificable.
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
-      socketTimeout: 15000,
-    });
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.GMAIL_CLIENT_ID!,
+      client_secret: env.GMAIL_CLIENT_SECRET!,
+      refresh_token: env.GMAIL_REFRESH_TOKEN!,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`No se pudo renovar el token de Gmail: HTTP ${res.status} ${await res.text()}`);
   }
-  return transportador;
+
+  const datos = (await res.json()) as { access_token: string; expires_in: number };
+  // Un margen de 60s para no usar un token a punto de vencer a mitad de la llamada
+  accessTokenCache = { token: datos.access_token, expiraEn: Date.now() + (datos.expires_in - 60) * 1000 };
+  return datos.access_token;
+}
+
+/** Codifica en base64url (Gmail exige esta variante, no el base64 normal). */
+function base64Url(texto: string): string {
+  return Buffer.from(texto, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+function construirMime(destino: string, asunto: string, html: string): string {
+  const asuntoCodificado = `=?UTF-8?B?${Buffer.from(asunto, "utf8").toString("base64")}?=`;
+  const mensaje = [
+    `From: "${env.SMTP_FROM_NAME}" <${env.GMAIL_SENDER}>`,
+    `To: ${destino}`,
+    `Subject: ${asuntoCodificado}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=UTF-8",
+    "",
+    html,
+  ].join("\r\n");
+  return base64Url(mensaje);
+}
+
+async function enviarPorGmail(destino: string, asunto: string, html: string): Promise<void> {
+  if (!flags.correo) {
+    throw new Error("Gmail no configurado (GMAIL_SENDER, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN).");
+  }
+
+  const accessToken = await obtenerAccessToken();
+
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ raw: construirMime(destino, asunto, html) }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Gmail respondió HTTP ${res.status}: ${await res.text()}`);
+  }
 }
 
 const LOGO_URL = `https://panel.${env.DOMINIO_BASE}/marca/logo-morado.png`;
@@ -101,17 +154,16 @@ export async function enviarCorreoInvitacion({ destino, nombre, sucursalNombre, 
     ? `Te dieron de alta en el panel de <strong>${sucursalNombre}</strong>.`
     : "Te dieron de alta como administrador de la plataforma.";
 
-  await getTransportador().sendMail({
-    from: `"${env.SMTP_FROM_NAME}" <${env.SMTP_USER}>`,
-    to: destino,
-    subject: "Te invitaron a Auto Insights",
-    html: plantillaBase({
+  await enviarPorGmail(
+    destino,
+    "Te invitaron a Auto Insights",
+    plantillaBase({
       saludo: nombre ? `Hola, ${nombre}` : "Hola",
       parrafo: `${contexto} Da clic en el botón para definir tu contraseña y entrar por primera vez.`,
       textoBoton: "Aceptar invitación",
       actionLink,
     }),
-  });
+  );
 }
 
 type DatosRecuperacion = {
@@ -121,15 +173,14 @@ type DatosRecuperacion = {
 };
 
 export async function enviarCorreoRecuperacion({ destino, nombre, actionLink }: DatosRecuperacion): Promise<void> {
-  await getTransportador().sendMail({
-    from: `"${env.SMTP_FROM_NAME}" <${env.SMTP_USER}>`,
-    to: destino,
-    subject: "Recupera tu contraseña — Auto Insights",
-    html: plantillaBase({
+  await enviarPorGmail(
+    destino,
+    "Recupera tu contraseña — Auto Insights",
+    plantillaBase({
       saludo: nombre ? `Hola, ${nombre}` : "Hola",
       parrafo: "Pediste restablecer tu contraseña. Da clic en el botón para elegir una nueva.",
       textoBoton: "Restablecer contraseña",
       actionLink,
     }),
-  });
+  );
 }
