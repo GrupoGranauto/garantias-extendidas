@@ -8,6 +8,7 @@ import { healthRouter } from "./routes/health.js";
 import { garantiasRouter } from "./routes/garantias.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminWhatsappRouter } from "./routes/adminWhatsapp.js";
+import { adminPlantillasRouter } from "./routes/adminPlantillas.js";
 import { adminEntidadesRouter } from "./routes/adminEntidades.js";
 import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
 import { publicoRouter } from "./routes/publico.js";
@@ -40,6 +41,7 @@ app.use("/api/perfil", perfilRouter);
 app.use("/api/garantias", garantiasRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);
+app.use("/api/admin", adminPlantillasRouter);
 app.use("/api/admin", adminEntidadesRouter);
 // Ingesta externa: autenticada por API key propia de la sucursal, no por sesión.
 app.use("/api/entidades", entidadesIngestaRouter);

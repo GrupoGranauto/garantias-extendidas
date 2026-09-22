@@ -140,3 +140,120 @@ export async function enviarMensaje(
 
   return { id: cuerpoRespuesta.messages[0].id };
 }
+
+/* ============================================================
+   Plantillas (message_templates): se registran contra la WABA,
+   Meta las revisa y las aprueba/rechaza de forma asíncrona.
+   ============================================================ */
+
+export type ComponenteHeader =
+  | { type: "HEADER"; format: "TEXT"; text: string }
+  | { type: "HEADER"; format: "IMAGE" | "VIDEO" | "DOCUMENT"; example: { header_handle: string[] } };
+
+export type ComponenteBody = {
+  type: "BODY";
+  text: string;
+  example?: { body_text: string[][] };
+};
+
+export type ComponenteFooter = { type: "FOOTER"; text: string };
+
+export type BotonPlantilla =
+  | { type: "QUICK_REPLY"; text: string }
+  | { type: "URL"; text: string; url: string }
+  | { type: "PHONE_NUMBER"; text: string; phone_number: string }
+  | { type: "COPY_CODE"; example: string };
+
+export type ComponenteButtons = { type: "BUTTONS"; buttons: BotonPlantilla[] };
+
+export type ComponentePlantilla = ComponenteHeader | ComponenteBody | ComponenteFooter | ComponenteButtons;
+
+type RespuestaErrorMeta = { error?: { message: string; error_user_msg?: string } };
+
+function mensajeErrorMeta(cuerpo: RespuestaErrorMeta, status: number): string {
+  return cuerpo.error?.error_user_msg ?? cuerpo.error?.message ?? `HTTP ${status}`;
+}
+
+/** Da de alta la plantilla en Meta. Devuelve el id que asigna Meta y el estado inicial. */
+export async function crearPlantillaMeta(
+  wabaId: string,
+  accessToken: string,
+  plantilla: { name: string; language: string; category: string; components: ComponentePlantilla[] },
+): Promise<{ id: string; status: string }> {
+  const res = await fetch(`${GRAPH_API}/${wabaId}/message_templates`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(plantilla),
+  });
+
+  const cuerpo = (await res.json()) as RespuestaErrorMeta & { id?: string; status?: string };
+
+  if (!res.ok || !cuerpo.id) {
+    throw new Error(mensajeErrorMeta(cuerpo, res.status));
+  }
+
+  return { id: cuerpo.id, status: cuerpo.status ?? "PENDING" };
+}
+
+/** Consulta el estado real de todas las plantillas de la WABA (para sincronizar). */
+export async function listarPlantillasMeta(
+  wabaId: string,
+  accessToken: string,
+): Promise<{ id: string; name: string; language: string; status: string; category: string }[]> {
+  const resultados: { id: string; name: string; language: string; status: string; category: string }[] = [];
+  let url: string | null =
+    `${GRAPH_API}/${wabaId}/message_templates?fields=id,name,language,status,category&limit=200`;
+
+  while (url) {
+    const res: Response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const cuerpo = (await res.json()) as RespuestaErrorMeta & {
+      data?: { id: string; name: string; language: string; status: string; category: string }[];
+      paging?: { next?: string };
+    };
+
+    if (!res.ok) throw new Error(mensajeErrorMeta(cuerpo, res.status));
+
+    resultados.push(...(cuerpo.data ?? []));
+    url = cuerpo.paging?.next ?? null;
+  }
+
+  return resultados;
+}
+
+/** Mapea el status de Meta al estado local. Lo no reconocido se deja como "pendiente" para revisar a mano. */
+export function estadoDesdeMeta(status: string): string {
+  switch (status.toUpperCase()) {
+    case "APPROVED":
+      return "aprobada";
+    case "REJECTED":
+      return "rechazada";
+    case "PAUSED":
+      return "pausada";
+    case "DISABLED":
+      return "deshabilitada";
+    case "PENDING":
+    case "PENDING_DELETION":
+    case "IN_APPEAL":
+      return "pendiente";
+    default:
+      return "pendiente";
+  }
+}
+
+/** Elimina la plantilla en Meta por nombre (borra todos los idiomas de ese nombre). */
+export async function eliminarPlantillaMeta(wabaId: string, accessToken: string, nombre: string): Promise<void> {
+  const res = await fetch(
+    `${GRAPH_API}/${wabaId}/message_templates?name=${encodeURIComponent(nombre)}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+
+  const cuerpo = (await res.json()) as RespuestaErrorMeta & { success?: boolean };
+
+  // "no encontrada" no debe tumbar el borrado local: ya no existe en Meta, que es lo que se quería.
+  if (!res.ok && !/does not exist/i.test(cuerpo.error?.message ?? "")) {
+    throw new Error(mensajeErrorMeta(cuerpo, res.status));
+  }
+}

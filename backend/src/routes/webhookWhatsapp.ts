@@ -1,6 +1,12 @@
 import { Router } from "express";
 import { getSupabase } from "../lib/supabase.js";
-import { configPorPhoneNumberId, descargarMedia, firmaValida, type ConfigSucursal } from "../lib/whatsapp.js";
+import {
+  configPorPhoneNumberId,
+  descargarMedia,
+  estadoDesdeMeta,
+  firmaValida,
+  type ConfigSucursal,
+} from "../lib/whatsapp.js";
 
 export const webhookWhatsappRouter = Router();
 
@@ -74,6 +80,50 @@ type ValorWebhook = {
   messages?: MensajeEntrante[];
   statuses?: EstadoMensaje[];
 };
+
+type ValorPlantilla = {
+  event: string;
+  message_template_id: number;
+  message_template_name: string;
+  message_template_language: string;
+  reason?: string | null;
+};
+
+/**
+ * A diferencia de "messages", este evento llega a nivel de WABA (no trae
+ * phone_number_id), así que la sucursal se identifica por el id de plantilla
+ * de Meta, que ya quedó guardado al mandarla a revisión.
+ */
+async function procesarActualizacionPlantilla(valor: ValorPlantilla, cuerpoCrudo: Buffer, firmaHeader: string | undefined) {
+  const supabase = getSupabase();
+  const { data: plantilla } = await supabase
+    .from("whatsapp_plantillas")
+    .select("id, sucursal_id")
+    .eq("meta_template_id", String(valor.message_template_id))
+    .maybeSingle();
+
+  if (!plantilla) return;
+
+  const { data: config } = await supabase
+    .from("whatsapp_config")
+    .select("app_secret")
+    .eq("sucursal_id", plantilla.sucursal_id)
+    .maybeSingle();
+
+  if (config?.app_secret && !firmaValida(cuerpoCrudo, firmaHeader, config.app_secret)) {
+    console.warn(`Firma inválida en webhook de plantilla (sucursal ${plantilla.sucursal_id})`);
+    return;
+  }
+
+  await supabase
+    .from("whatsapp_plantillas")
+    .update({
+      estado: estadoDesdeMeta(valor.event),
+      motivo_rechazo: valor.reason ?? null,
+      actualizado_en: new Date().toISOString(),
+    })
+    .eq("id", plantilla.id);
+}
 
 const MAPA_ESTADO: Record<EstadoMensaje["status"], string> = {
   sent: "enviado",
@@ -216,8 +266,9 @@ async function procesarActualizacionEstado(estado: EstadoMensaje) {
    ============================================================ */
 webhookWhatsappRouter.post("/", async (req, res) => {
   const cuerpoCrudo = req.body as Buffer;
+  const firmaHeader = req.header("x-hub-signature-256");
 
-  let payload: { entry?: { changes?: { value?: ValorWebhook }[] }[] };
+  let payload: { entry?: { changes?: { field?: string; value?: ValorWebhook | ValorPlantilla }[] }[] };
   try {
     payload = JSON.parse(cuerpoCrudo.toString("utf-8"));
   } catch {
@@ -225,41 +276,43 @@ webhookWhatsappRouter.post("/", async (req, res) => {
     return;
   }
 
-  const value = payload.entry?.[0]?.changes?.[0]?.value;
-  const phoneNumberId = value?.metadata?.phone_number_id;
-
-  // Sin phone_number_id no hay a qué sucursal enrutar; se confirma igual
-  // para que Meta no reintente un evento que nunca vamos a poder procesar.
-  if (!value || !phoneNumberId) {
-    res.sendStatus(200);
-    return;
-  }
+  const cambios = (payload.entry ?? []).flatMap((entry) => entry.changes ?? []);
 
   try {
-    const config = await configPorPhoneNumberId(phoneNumberId);
+    for (const cambio of cambios) {
+      if (cambio.field === "message_template_status_update") {
+        await procesarActualizacionPlantilla(cambio.value as ValorPlantilla, cuerpoCrudo, firmaHeader);
+        continue;
+      }
 
-    if (!config) {
-      console.warn(`Webhook de WhatsApp para un phone_number_id no configurado: ${phoneNumberId}`);
-      res.sendStatus(200);
-      return;
-    }
+      // Evento de mensajes (o campo ausente, forma legacy): sí requiere
+      // phone_number_id para saber a qué sucursal pertenece.
+      const value = cambio.value as ValorWebhook | undefined;
+      const phoneNumberId = value?.metadata?.phone_number_id;
+      if (!value || !phoneNumberId) continue;
 
-    if (config.app_secret && !firmaValida(cuerpoCrudo, req.header("x-hub-signature-256"), config.app_secret)) {
-      console.warn(`Firma inválida en webhook de WhatsApp (sucursal ${config.sucursal_id})`);
-      res.sendStatus(401);
-      return;
-    }
+      const config = await configPorPhoneNumberId(phoneNumberId);
+      if (!config) {
+        console.warn(`Webhook de WhatsApp para un phone_number_id no configurado: ${phoneNumberId}`);
+        continue;
+      }
 
-    const nombresPorWaId = new Map(
-      (value.contacts ?? []).map((c) => [c.wa_id, c.profile?.name] as const),
-    );
+      if (config.app_secret && !firmaValida(cuerpoCrudo, firmaHeader, config.app_secret)) {
+        console.warn(`Firma inválida en webhook de WhatsApp (sucursal ${config.sucursal_id})`);
+        continue;
+      }
 
-    for (const msg of value.messages ?? []) {
-      await procesarMensajeEntrante(msg, config, nombresPorWaId.get(msg.from));
-    }
+      const nombresPorWaId = new Map(
+        (value.contacts ?? []).map((c) => [c.wa_id, c.profile?.name] as const),
+      );
 
-    for (const estado of value.statuses ?? []) {
-      await procesarActualizacionEstado(estado);
+      for (const msg of value.messages ?? []) {
+        await procesarMensajeEntrante(msg, config, nombresPorWaId.get(msg.from));
+      }
+
+      for (const estado of value.statuses ?? []) {
+        await procesarActualizacionEstado(estado);
+      }
     }
 
     res.sendStatus(200);
