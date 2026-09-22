@@ -30,8 +30,6 @@ export default function Login() {
    * RLS, que solo devuelven las filas de la sucursal del usuario.
    */
   async function perteneceAlPortal(): Promise<boolean> {
-    if (!portal) return true; // dominio raíz: administradores de plataforma
-
     const { data } = await supabase.auth.getUser();
     if (!data.user) return false;
 
@@ -41,7 +39,14 @@ export default function Login() {
       .eq("id", data.user.id)
       .maybeSingle();
 
-    return Boolean(perfil?.activo) && perfil?.sucursal_id === portal.id;
+    if (!perfil?.activo) return false;
+
+    // Dominio raíz (sin sucursal): solo entra el administrador de plataforma
+    // (sucursal_id null). Antes esto regresaba "true" sin comprobar nada,
+    // así que cualquier cuenta de cualquier sucursal también entraba aquí.
+    if (!portal) return perfil.sucursal_id === null;
+
+    return perfil.sucursal_id === portal.id;
   }
 
   async function onSubmit(e: FormEvent) {

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { esperarSesion } from "../lib/esperarSesion";
 import { traducirError } from "../auth/errores";
+import { usePortal } from "../portal/PortalProvider";
+import { supabase } from "../lib/supabase";
 import Alerta from "../componentes/Alerta";
 import LayoutAuth from "../componentes/LayoutAuth";
 
@@ -10,6 +12,7 @@ export default function AuthCallback() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const { portal } = usePortal();
 
   useEffect(() => {
     let vivo = true;
@@ -21,16 +24,38 @@ export default function AuthCallback() {
     }
 
     // El canje del ?code= lo hace supabase-js; aquí solo esperamos el resultado
-    esperarSesion().then((sesion) => {
+    esperarSesion().then(async (sesion) => {
+      if (!vivo || !sesion) {
+        if (vivo) setError("No se pudo completar el inicio de sesión. Intenta de nuevo.");
+        return;
+      }
+
+      // Mismo chequeo que el login con contraseña: cada portal es de sus
+      // propios usuarios, entrar por el subdominio equivocado no da acceso
+      // aunque Google sí haya autenticado a la persona.
+      const { data: perfil } = await supabase
+        .from("usuarios")
+        .select("sucursal_id, activo")
+        .eq("id", sesion.user.id)
+        .maybeSingle();
+
+      const pertenece = Boolean(perfil?.activo) && perfil?.sucursal_id === (portal?.id ?? null);
+
       if (!vivo) return;
-      if (sesion) navigate("/", { replace: true });
-      else setError("No se pudo completar el inicio de sesión. Intenta de nuevo.");
+
+      if (!pertenece) {
+        await supabase.auth.signOut();
+        setError("Esta cuenta no tiene acceso a este portal.");
+        return;
+      }
+
+      navigate("/", { replace: true });
     });
 
     return () => {
       vivo = false;
     };
-  }, [params, navigate]);
+  }, [params, navigate, portal]);
 
   if (error) {
     return (
