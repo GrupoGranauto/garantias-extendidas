@@ -13,6 +13,11 @@ function getTransportador(): Transporter {
       port: env.SMTP_PORT ?? 587,
       secure: env.SMTP_PORT === 465,
       auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
+      // Sin esto, una conexión que no responde (puerto bloqueado, firewall)
+      // cuelga minutos en vez de fallar rápido con un error identificable.
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
+      socketTimeout: 15000,
     });
   }
   return transportador;

@@ -156,6 +156,7 @@ adminRouter.post("/usuarios", async (req, res, next) => {
       try {
         await enviarCorreoInvitacion({ destino: correo, nombre: nombre ?? null, sucursalNombre, actionLink });
       } catch (errorCorreo) {
+        console.error("Error enviando correo de invitación:", errorCorreo);
         await supabase.from("invitaciones").delete().eq("correo", correo);
         if (resultado.data.user) await supabase.auth.admin.deleteUser(resultado.data.user.id);
         res.status(400).json({
