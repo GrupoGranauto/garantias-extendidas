@@ -5,6 +5,7 @@ type Props = { id: string };
 const PESTANAS = [
   { etiqueta: "General", sufijo: "editar" },
   { etiqueta: "WhatsApp", sufijo: "whatsapp" },
+  { etiqueta: "Plantillas", sufijo: "plantillas" },
   { etiqueta: "Base de datos", sufijo: "base-datos" },
 ];
 

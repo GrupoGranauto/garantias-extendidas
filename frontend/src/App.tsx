@@ -19,6 +19,8 @@ import SucursalesListado from "./paginas/SucursalesListado";
 import SucursalEditLayout from "./paginas/SucursalEditLayout";
 import SucursalGeneral from "./paginas/SucursalGeneral";
 import SucursalWhatsapp from "./paginas/SucursalWhatsapp";
+import SucursalPlantillas from "./paginas/SucursalPlantillas";
+import PlantillaFormulario from "./paginas/PlantillaFormulario";
 import SucursalBaseDatos from "./paginas/SucursalBaseDatos";
 import UsuariosNuevo from "./paginas/UsuariosNuevo";
 import UsuariosListado from "./paginas/UsuariosListado";
@@ -68,8 +70,13 @@ function Contenido() {
                 <Route path="/sucursales/:id" element={<SucursalEditLayout />}>
                   <Route path="editar" element={<SucursalGeneral />} />
                   <Route path="whatsapp" element={<SucursalWhatsapp />} />
+                  <Route path="plantillas" element={<SucursalPlantillas />} />
                   <Route path="base-datos" element={<SucursalBaseDatos />} />
                 </Route>
+
+                {/* Constructor de plantilla: pantalla completa, no cabe como pestaña */}
+                <Route path="/sucursales/:id/plantillas/nueva" element={<PlantillaFormulario />} />
+                <Route path="/sucursales/:id/plantillas/:pid/editar" element={<PlantillaFormulario />} />
 
                 {/* Igual que sucursales: no vive en el menú, solo se llega desde el listado */}
                 <Route path="/usuarios/:id/editar" element={<UsuarioEditar />} />
