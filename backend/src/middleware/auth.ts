@@ -37,12 +37,13 @@ function verificarTokenLocal(token: string): UsuarioSesion | null {
       email: typeof payload.email === "string" ? payload.email : undefined,
       app_metadata: (payload.app_metadata as Record<string, unknown> | undefined) ?? undefined,
     };
-  } catch {
+  } catch (err) {
+    console.warn(`JWT local verify falló (${err instanceof Error ? err.message : err}), cae a auth.getUser()`);
     return null;
   }
 }
 
-/** Sin JWT secret configurado (todavía): cae al round-trip contra Supabase Auth. */
+/** Round-trip contra Supabase Auth: sin JWT secret configurado, o el verify local falló. */
 async function verificarTokenRemoto(token: string): Promise<UsuarioSesion | null> {
   const { data, error } = await getSupabase().auth.getUser(token);
   if (error || !data.user) return null;
@@ -52,7 +53,6 @@ async function verificarTokenRemoto(token: string): Promise<UsuarioSesion | null
 async function resolverUsuario(token: string): Promise<UsuarioSesion | null> {
   const local = verificarTokenLocal(token);
   if (local) return local;
-  if (env.SUPABASE_JWT_SECRET) return null; // había secret y no validó: token inválido, no reintentar por red
   return verificarTokenRemoto(token);
 }
 
