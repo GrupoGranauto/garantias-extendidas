@@ -45,7 +45,7 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, re
     const { data, error } = await getSupabase()
       .from("whatsapp_conversaciones")
       .select(
-        "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, no_leidos, resuelto, creado_en",
+        "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, ultimo_mensaje_direccion, ultimo_mensaje_estado, no_leidos, resuelto, creado_en",
       )
       .eq("sucursal_id", req.params.id)
       .eq("resuelto", resueltas)
@@ -129,7 +129,7 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
         texto: parsed.data.texto,
         estado: "enviado",
       })
-      .select("id, direccion, tipo, texto, estado, creado_en")
+      .select("id, wa_message_id, direccion, tipo, texto, estado, creado_en")
       .single();
     if (errorInsert) throw new Error(errorInsert.message);
 
@@ -139,6 +139,9 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
         ultimo_mensaje_en: new Date().toISOString(),
         ultimo_mensaje_tipo: "texto",
         ultimo_mensaje_texto: parsed.data.texto,
+        ultimo_mensaje_direccion: "saliente",
+        ultimo_mensaje_wa_message_id: enviado.id,
+        ultimo_mensaje_estado: "enviado",
       })
       .eq("id", conversacion.id);
 
@@ -214,7 +217,9 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
         media_mime_type: parsed.data.tipo_mime,
         estado: "enviado",
       })
-      .select("id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, estado, creado_en")
+      .select(
+        "id, wa_message_id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, estado, creado_en",
+      )
       .single();
     if (errorInsert) throw new Error(errorInsert.message);
 
@@ -224,6 +229,9 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
         ultimo_mensaje_en: new Date().toISOString(),
         ultimo_mensaje_tipo: "imagen",
         ultimo_mensaje_texto: parsed.data.caption ?? null,
+        ultimo_mensaje_direccion: "saliente",
+        ultimo_mensaje_wa_message_id: enviado.id,
+        ultimo_mensaje_estado: "enviado",
       })
       .eq("id", conversacion.id);
 

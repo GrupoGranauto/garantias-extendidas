@@ -169,6 +169,7 @@ async function obtenerOCrearConversacion(
   sucursalId: string,
   waId: string,
   nombreContacto: string | undefined,
+  waMessageId: string,
   tipoPreview: string,
   textoPreview: string | null,
 ) {
@@ -187,6 +188,9 @@ async function obtenerOCrearConversacion(
       no_leidos: existente.no_leidos + 1,
       ultimo_mensaje_tipo: tipoPreview,
       ultimo_mensaje_texto: textoPreview,
+      ultimo_mensaje_direccion: "entrante",
+      ultimo_mensaje_wa_message_id: waMessageId,
+      ultimo_mensaje_estado: null,
     };
     if (nombreContacto) cambios.nombre_contacto = nombreContacto;
 
@@ -204,6 +208,8 @@ async function obtenerOCrearConversacion(
       no_leidos: 1,
       ultimo_mensaje_tipo: tipoPreview,
       ultimo_mensaje_texto: textoPreview,
+      ultimo_mensaje_direccion: "entrante",
+      ultimo_mensaje_wa_message_id: waMessageId,
     })
     .select("id")
     .single();
@@ -284,6 +290,7 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
     config.sucursal_id,
     msg.from,
     nombreContacto,
+    msg.id,
     fila.tipo as string,
     (fila.texto as string | null | undefined) ?? null,
   );
@@ -311,6 +318,14 @@ async function procesarActualizacionEstado(estado: EstadoMensaje) {
     .maybeSingle();
 
   if (data) {
+    // Solo si este mensaje sigue siendo el último de la conversación: si ya
+    // se mandó otro después, ese estado atrasado no debe pisar el preview.
+    await getSupabase()
+      .from("whatsapp_conversaciones")
+      .update({ ultimo_mensaje_estado: MAPA_ESTADO[estado.status] })
+      .eq("id", data.conversacion_id)
+      .eq("ultimo_mensaje_wa_message_id", estado.id);
+
     emitirEventoChat(data.sucursal_id, { tipo: "estado_actualizado", conversacionId: data.conversacion_id });
   }
 }

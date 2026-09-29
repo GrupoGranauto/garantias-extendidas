@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
-import { IconoCheck, IconoClip, IconoDobleCheck, IconoDocumento, IconoXMarca } from "../componentes/Iconos";
+import { IconoCheck, IconoClip, IconoDobleCheck, IconoDocumento, IconoReloj, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 import { useEventosChat } from "./useEventosChat";
@@ -13,6 +13,8 @@ type Conversacion = {
   ultimo_mensaje_en: string | null;
   ultimo_mensaje_tipo: string | null;
   ultimo_mensaje_texto: string | null;
+  ultimo_mensaje_direccion: "entrante" | "saliente" | null;
+  ultimo_mensaje_estado: string | null;
   no_leidos: number;
   resuelto: boolean;
   creado_en: string;
@@ -59,6 +61,45 @@ const ETIQUETAS_TIPO: Record<string, string> = {
   reaccion: "Reaccionó",
   sistema: "Mensaje",
 };
+
+function iconoEstadoEnvio(estado: string, errorDetalle?: string | null): ReactNode {
+  if (estado === "fallido") {
+    return (
+      <span className="chat-burbuja-error" title={errorDetalle ?? "Error al enviar"}>
+        ⚠
+      </span>
+    );
+  }
+  if (estado === "enviando") {
+    return (
+      <span className="chat-burbuja-estado" title="Enviando…">
+        <IconoReloj />
+      </span>
+    );
+  }
+  if (estado === "enviado") {
+    return (
+      <span className="chat-burbuja-estado" title="Enviado">
+        <IconoCheck />
+      </span>
+    );
+  }
+  if (estado === "entregado") {
+    return (
+      <span className="chat-burbuja-estado" title="Entregado">
+        <IconoDobleCheck />
+      </span>
+    );
+  }
+  if (estado === "leido") {
+    return (
+      <span className="chat-burbuja-estado chat-burbuja-estado-leido" title="Leído">
+        <IconoDobleCheck />
+      </span>
+    );
+  }
+  return null;
+}
 
 function textoPreview(m: Mensaje): string {
   return ETIQUETAS_TIPO[m.tipo] ?? m.texto ?? m.tipo;
@@ -149,7 +190,6 @@ export default function Chat() {
   const [errorHilo, setErrorHilo] = useState<string | null>(null);
 
   const [borrador, setBorrador] = useState("");
-  const [enviando, setEnviando] = useState(false);
   const [imagenAdjunta, setImagenAdjunta] = useState<File | null>(null);
   const [imagenVista, setImagenVista] = useState<string | null>(null);
 
@@ -253,20 +293,42 @@ export default function Chat() {
     e.preventDefault();
     if (!seleccionadaId) return;
     const texto = borrador.trim();
-    if (!texto && !imagenAdjunta) return;
+    const archivo = imagenAdjunta;
+    if (!texto && !archivo) return;
 
-    setEnviando(true);
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimista: Mensaje = {
+      id: tempId,
+      wa_message_id: null,
+      direccion: "saliente",
+      tipo: archivo ? "imagen" : "texto",
+      texto: texto || null,
+      media_url: archivo ? URL.createObjectURL(archivo) : null,
+      media_mime_type: archivo?.type ?? null,
+      media_nombre_archivo: null,
+      reaccion_emoji: null,
+      reaccion_a_wa_message_id: null,
+      estado: "enviando",
+      error_detalle: null,
+      creado_en: new Date().toISOString(),
+    };
+
+    setMensajes((prev) => [...(prev ?? []), optimista]);
+    setBorrador("");
+    setImagenAdjunta(null);
+    if (archivoInputRef.current) archivoInputRef.current.value = "";
+
     try {
       let mensaje: Mensaje;
-      if (imagenAdjunta) {
-        const contenido_base64 = await leerComoBase64(imagenAdjunta);
+      if (archivo) {
+        const contenido_base64 = await leerComoBase64(archivo);
         mensaje = await apiFetch<Mensaje>(
           `/api/admin/sucursales/${sucursalId}/whatsapp/conversaciones/${seleccionadaId}/media`,
           {
             method: "POST",
             body: JSON.stringify({
-              nombre_archivo: imagenAdjunta.name,
-              tipo_mime: imagenAdjunta.type,
+              nombre_archivo: archivo.name,
+              tipo_mime: archivo.type,
               contenido_base64,
               caption: texto || undefined,
             }),
@@ -278,15 +340,12 @@ export default function Chat() {
           { method: "POST", body: JSON.stringify({ texto }) },
         );
       }
-      setMensajes((prev) => [...(prev ?? []), mensaje]);
-      setBorrador("");
-      setImagenAdjunta(null);
-      if (archivoInputRef.current) archivoInputRef.current.value = "";
+      setMensajes((prev) => (prev ?? []).map((m) => (m.id === tempId ? mensaje : m)));
       cargarConversaciones();
     } catch (err) {
-      setErrorHilo(err instanceof Error ? err.message : "No se pudo enviar el mensaje.");
-    } finally {
-      setEnviando(false);
+      const detalle = err instanceof Error ? err.message : "No se pudo enviar el mensaje.";
+      setMensajes((prev) => (prev ?? []).map((m) => (m.id === tempId ? { ...m, estado: "fallido", error_detalle: detalle } : m)));
+      setErrorHilo(detalle);
     }
   }
 
@@ -345,7 +404,12 @@ export default function Chat() {
                   <span className="chat-item-hora">{formatearHora(c.ultimo_mensaje_en)}</span>
                 </span>
                 <span className="chat-item-fila">
-                  <span className="chat-item-telefono">{previewConversacion(c)}</span>
+                  <span className="chat-item-telefono">
+                    {c.ultimo_mensaje_direccion === "saliente" &&
+                      c.ultimo_mensaje_estado &&
+                      iconoEstadoEnvio(c.ultimo_mensaje_estado)}
+                    {previewConversacion(c)}
+                  </span>
                   {c.no_leidos > 0 && <span className="chat-item-badge">{c.no_leidos}</span>}
                 </span>
               </span>
@@ -394,26 +458,7 @@ export default function Chat() {
                           {emoji && <span className="chat-burbuja-reaccion">{emoji}</span>}
                           <div className="chat-burbuja-remate">
                             <span>{formatearHora(m.creado_en)}</span>
-                            {m.direccion === "saliente" && m.estado === "fallido" && (
-                              <span className="chat-burbuja-error" title={m.error_detalle ?? "Error al enviar"}>
-                                ⚠
-                              </span>
-                            )}
-                            {m.direccion === "saliente" && m.estado === "enviado" && (
-                              <span className="chat-burbuja-estado" title="Enviado">
-                                <IconoCheck />
-                              </span>
-                            )}
-                            {m.direccion === "saliente" && m.estado === "entregado" && (
-                              <span className="chat-burbuja-estado" title="Entregado">
-                                <IconoDobleCheck />
-                              </span>
-                            )}
-                            {m.direccion === "saliente" && m.estado === "leido" && (
-                              <span className="chat-burbuja-estado chat-burbuja-estado-leido" title="Leído">
-                                <IconoDobleCheck />
-                              </span>
-                            )}
+                            {m.direccion === "saliente" && iconoEstadoEnvio(m.estado, m.error_detalle)}
                           </div>
                         </div>
                       );
@@ -446,13 +491,11 @@ export default function Chat() {
                   accept="image/jpeg,image/png"
                   className="chat-adjunto-input"
                   onChange={(e) => setImagenAdjunta(e.target.files?.[0] ?? null)}
-                  disabled={enviando}
                 />
                 <button
                   type="button"
                   className="chat-adjunto-boton"
                   onClick={() => archivoInputRef.current?.click()}
-                  disabled={enviando}
                   title="Adjuntar imagen"
                 >
                   <IconoClip />
@@ -462,14 +505,9 @@ export default function Chat() {
                   value={borrador}
                   onChange={(e) => setBorrador(e.target.value)}
                   placeholder={imagenAdjunta ? "Escribe un pie de foto (opcional)…" : "Escribe un mensaje…"}
-                  disabled={enviando}
                 />
-                <button
-                  type="submit"
-                  className="boton-guardar"
-                  disabled={enviando || (!borrador.trim() && !imagenAdjunta)}
-                >
-                  {enviando ? "Enviando…" : "Enviar"}
+                <button type="submit" className="boton-guardar" disabled={!borrador.trim() && !imagenAdjunta}>
+                  Enviar
                 </button>
               </div>
             </form>
