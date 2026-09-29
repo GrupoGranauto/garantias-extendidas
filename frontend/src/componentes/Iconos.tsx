@@ -252,6 +252,24 @@ export function IconoBateria({ className }: IconoProps) {
   );
 }
 
+export function IconoDocumento({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+      <path d="M14 3v5h5" />
+      <path d="M9 13h6M9 17h6" />
+    </svg>
+  );
+}
+
+export function IconoXMarca({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
 export function IconoSalir({ className }: IconoProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>

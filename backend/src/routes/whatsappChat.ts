@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
@@ -37,13 +38,15 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/eventos", (req, res) => {
   });
 });
 
-/** Listado de conversaciones de la sucursal, más recientes primero. */
+/** Listado de conversaciones de la sucursal, más recientes primero. Por defecto solo las activas (no resueltas). */
 whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, res, next) => {
   try {
+    const resueltas = req.query.resueltas === "true";
     const { data, error } = await getSupabase()
       .from("whatsapp_conversaciones")
-      .select("id, wa_id, nombre_contacto, ultimo_mensaje_en, no_leidos, creado_en")
+      .select("id, wa_id, nombre_contacto, ultimo_mensaje_en, no_leidos, resuelto, creado_en")
       .eq("sucursal_id", req.params.id)
+      .eq("resuelto", resueltas)
       .order("ultimo_mensaje_en", { ascending: false, nullsFirst: false });
     if (error) throw new Error(error.message);
     res.json(data ?? []);
@@ -75,7 +78,7 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones/:conversacionId/
     const { data, error } = await getSupabase()
       .from("whatsapp_mensajes")
       .select(
-        "id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, reaccion_emoji, estado, error_detalle, creado_en",
+        "id, wa_message_id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, reaccion_emoji, reaccion_a_wa_message_id, estado, error_detalle, creado_en",
       )
       .eq("conversacion_id", req.params.conversacionId)
       .order("creado_en", { ascending: true });
@@ -141,6 +144,112 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
       res.status(400).json({ error: err.message });
       return;
     }
+    next(err);
+  }
+});
+
+const enviarMediaSchema = z.object({
+  nombre_archivo: z.string().trim().min(1).max(200),
+  tipo_mime: z.enum(["image/jpeg", "image/png"]),
+  contenido_base64: z.string().trim().min(1),
+  caption: z.string().trim().max(1024).optional(),
+});
+
+/** Manda una imagen por WhatsApp (sube a Storage propio, la referencia como link) y la guarda como saliente. */
+whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId/media", async (req, res, next) => {
+  const parsed = enviarMediaSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Archivo inválido. Usa JPG o PNG." });
+    return;
+  }
+
+  try {
+    const conversacion = await obtenerConversacion(req.params.id, req.params.conversacionId);
+    if (!conversacion) {
+      res.status(404).json({ error: "Conversación no encontrada." });
+      return;
+    }
+
+    const config = await configPorSucursalId(req.params.id);
+    if (!config) {
+      res.status(400).json({ error: "Esta sucursal no tiene WhatsApp configurado." });
+      return;
+    }
+
+    const base64Puro = parsed.data.contenido_base64.replace(/^data:[^;]+;base64,/, "");
+    const archivo = Buffer.from(base64Puro, "base64");
+
+    const supabase = getSupabase();
+    const extension = parsed.data.tipo_mime.split("/")[1] ?? "bin";
+    const ruta = `salientes/${req.params.id}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
+    const { error: errorSubida } = await supabase.storage
+      .from("whatsapp-media")
+      .upload(ruta, archivo, { contentType: parsed.data.tipo_mime, upsert: false });
+    if (errorSubida) throw new Error(errorSubida.message);
+
+    const { data: publica } = supabase.storage.from("whatsapp-media").getPublicUrl(ruta);
+
+    const enviado = await enviarMensaje(config, conversacion.wa_id, {
+      tipo: "imagen",
+      url: publica.publicUrl,
+      caption: parsed.data.caption,
+    });
+
+    const { data: mensaje, error: errorInsert } = await supabase
+      .from("whatsapp_mensajes")
+      .insert({
+        conversacion_id: conversacion.id,
+        sucursal_id: req.params.id,
+        wa_message_id: enviado.id,
+        direccion: "saliente",
+        tipo: "imagen",
+        texto: parsed.data.caption ?? null,
+        media_url: publica.publicUrl,
+        media_mime_type: parsed.data.tipo_mime,
+        estado: "enviado",
+      })
+      .select("id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, estado, creado_en")
+      .single();
+    if (errorInsert) throw new Error(errorInsert.message);
+
+    await supabase
+      .from("whatsapp_conversaciones")
+      .update({ ultimo_mensaje_en: new Date().toISOString() })
+      .eq("id", conversacion.id);
+
+    emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
+
+    res.status(201).json(mensaje);
+  } catch (err) {
+    if (err instanceof Error) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+const resolverSchema = z.object({ resuelto: z.boolean() });
+
+/** Resuelve o reabre la conversación (la saca o la mete de vuelta a la lista activa). */
+whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId/resolver", async (req, res, next) => {
+  const parsed = resolverSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos." });
+    return;
+  }
+
+  try {
+    const { error } = await getSupabase()
+      .from("whatsapp_conversaciones")
+      .update({ resuelto: parsed.data.resuelto })
+      .eq("id", req.params.conversacionId)
+      .eq("sucursal_id", req.params.id);
+    if (error) throw new Error(error.message);
+
+    emitirEventoChat(req.params.id, { tipo: "estado_actualizado", conversacionId: req.params.conversacionId });
+    res.json({ ok: true });
+  } catch (err) {
     next(err);
   }
 });

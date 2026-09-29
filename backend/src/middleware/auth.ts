@@ -1,12 +1,15 @@
 import type { NextFunction, Request, Response } from "express";
-import type { User } from "@supabase/supabase-js";
+import jwt from "jsonwebtoken";
 import { getSupabase } from "../lib/supabase.js";
+import { env } from "../config/env.js";
+
+type UsuarioSesion = { id: string; email?: string; app_metadata?: Record<string, unknown> };
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
-      usuario?: User;
+      usuario?: UsuarioSesion;
     }
   }
 }
@@ -19,9 +22,41 @@ function extraerToken(req: Request): string | null {
 }
 
 /**
- * Exige un JWT de Supabase válido.
- * El token lo firma Supabase; aquí solo se valida contra el servidor de auth.
+ * Valida el JWT de Supabase localmente (firma HS256 con el JWT secret del
+ * proyecto) en vez de pedirle a auth.getUser() que lo verifique por red:
+ * ese round-trip extra, sumado al de requireAccesoSucursal, era la mayor
+ * parte de la latencia en cada request autenticada.
  */
+function verificarTokenLocal(token: string): UsuarioSesion | null {
+  if (!env.SUPABASE_JWT_SECRET) return null;
+  try {
+    const payload = jwt.verify(token, env.SUPABASE_JWT_SECRET) as jwt.JwtPayload;
+    if (!payload.sub) return null;
+    return {
+      id: payload.sub,
+      email: typeof payload.email === "string" ? payload.email : undefined,
+      app_metadata: (payload.app_metadata as Record<string, unknown> | undefined) ?? undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Sin JWT secret configurado (todavía): cae al round-trip contra Supabase Auth. */
+async function verificarTokenRemoto(token: string): Promise<UsuarioSesion | null> {
+  const { data, error } = await getSupabase().auth.getUser(token);
+  if (error || !data.user) return null;
+  return { id: data.user.id, email: data.user.email, app_metadata: data.user.app_metadata };
+}
+
+async function resolverUsuario(token: string): Promise<UsuarioSesion | null> {
+  const local = verificarTokenLocal(token);
+  if (local) return local;
+  if (env.SUPABASE_JWT_SECRET) return null; // había secret y no validó: token inválido, no reintentar por red
+  return verificarTokenRemoto(token);
+}
+
+/** Exige un JWT de Supabase válido. */
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = extraerToken(req);
 
@@ -31,14 +66,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 
   try {
-    const { data, error } = await getSupabase().auth.getUser(token);
-
-    if (error || !data.user) {
+    const usuario = await resolverUsuario(token);
+    if (!usuario) {
       res.status(401).json({ error: "Sesión inválida o expirada." });
       return;
     }
 
-    req.usuario = data.user;
+    req.usuario = usuario;
     next();
   } catch (err) {
     next(err);
@@ -51,8 +85,8 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
   if (!token) return next();
 
   try {
-    const { data } = await getSupabase().auth.getUser(token);
-    if (data.user) req.usuario = data.user;
+    const usuario = await resolverUsuario(token);
+    if (usuario) req.usuario = usuario;
   } catch {
     // token basura: sigue como anónimo
   }

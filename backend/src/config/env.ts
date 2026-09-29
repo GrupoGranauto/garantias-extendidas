@@ -19,6 +19,8 @@ const schema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
   SUPABASE_DB_URL: z.string().optional(),
+  /** Verifica JWTs de sesión localmente (sin red) en vez de un round-trip a auth.getUser(). */
+  SUPABASE_JWT_SECRET: z.string().min(1).optional(),
 
   // BigQuery: en local se apunta a un archivo; en Railway no hay disco donde
   // dejarlo, asi que se acepta el JSON completo en una variable.
