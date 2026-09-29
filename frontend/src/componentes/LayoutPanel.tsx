@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import BarraLateral from "./BarraLateral";
-import { IconoMenu, IconoChevron, IconoSalir } from "./Iconos";
+import type { Grupo } from "../navegacion";
+import BarraLateral, { type PerfilLateral } from "./BarraLateral";
+import { IconoMenu } from "./Iconos";
 
 const CLAVE_COLAPSADA = "panel.lateral.colapsada";
 
@@ -14,13 +15,18 @@ function leerColapsada(): boolean {
   }
 }
 
-export default function LayoutPanel() {
-  const { usuario, salir } = useAuth();
+type Props = { grupos?: Grupo[]; logo?: string | null; logoAlt?: string; perfil?: PerfilLateral | null };
+
+/**
+ * Mismo layout para el panel de plataforma y el portal de sucursal: cambia
+ * el menú (`grupos`) y, si se pasa, la marca (`logo`) — el portal usa el
+ * logo que la sucursal configuró para su panel, no el de Auto Insights.
+ */
+export default function LayoutPanel({ grupos, logo, logoAlt, perfil }: Props) {
+  const { salir } = useAuth();
 
   const [colapsada, setColapsada] = useState(leerColapsada);
   const [abiertaMovil, setAbiertaMovil] = useState(false);
-  const [menuAbierto, setMenuAbierto] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     try {
@@ -30,34 +36,16 @@ export default function LayoutPanel() {
     }
   }, [colapsada]);
 
-  // Cerrar el menú de usuario al hacer clic fuera o con Escape
-  useEffect(() => {
-    if (!menuAbierto) return;
-
-    function alClic(e: MouseEvent) {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuAbierto(false);
-    }
-    function alTeclear(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuAbierto(false);
-    }
-
-    document.addEventListener("mousedown", alClic);
-    document.addEventListener("keydown", alTeclear);
-    return () => {
-      document.removeEventListener("mousedown", alClic);
-      document.removeEventListener("keydown", alTeclear);
-    };
-  }, [menuAbierto]);
-
-  const nombre = usuario?.user_metadata?.full_name ?? usuario?.email?.split("@")[0] ?? "Usuario";
-  const inicial = nombre.charAt(0).toUpperCase();
-
   return (
     <div className={colapsada ? "panel panel-colapsado" : "panel"}>
       <BarraLateral
         colapsada={colapsada}
         abierta={abiertaMovil}
         onNavegar={() => setAbiertaMovil(false)}
+        grupos={grupos}
+        perfil={perfil}
+        onSalir={salir}
+        {...(logo ? { logoExpandido: logo, logoAlt } : {})}
       />
 
       {abiertaMovil && (
@@ -83,32 +71,6 @@ export default function LayoutPanel() {
           >
             <IconoMenu />
           </button>
-
-          <div className="panel-usuario" ref={menuRef}>
-            <button
-              type="button"
-              className="panel-usuario-boton"
-              onClick={() => setMenuAbierto((v) => !v)}
-              aria-expanded={menuAbierto}
-            >
-              <span className="panel-avatar">{inicial}</span>
-              <span className="panel-nombre">{nombre}</span>
-              <IconoChevron className="panel-usuario-flecha" />
-            </button>
-
-            {menuAbierto && (
-              <div className="panel-menu" role="menu">
-                <div className="panel-menu-cabecera">
-                  <strong>{nombre}</strong>
-                  <span>{usuario?.email}</span>
-                </div>
-                <button type="button" className="panel-menu-item" onClick={salir} role="menuitem">
-                  <IconoSalir />
-                  Cerrar sesión
-                </button>
-              </div>
-            )}
-          </div>
         </header>
 
         <main className="panel-contenido">

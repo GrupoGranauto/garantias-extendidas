@@ -92,13 +92,14 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 }
 
 /**
- * Como requireAdmin, pero además exige que la cuenta pertenezca a la
- * sucursal de `:id` en la URL (o sea administrador de plataforma).
+ * Exige que la cuenta pertenezca a la sucursal de `:id` en la URL (o sea
+ * administrador de plataforma). No exige rol admin: dentro de su propia
+ * sucursal, un asesor también necesita esto (ej. mandar plantillas de
+ * WhatsApp a clientes es trabajo del día a día, no una tarea de admin).
  *
- * requireAdmin por sí solo NO alcanza para rutas con `:id` de sucursal: un
- * admin de UNA sucursal tiene rol "admin" igual que el de plataforma, así
- * que sin este chequeo podría leer/editar recursos de OTRA sucursal con su
- * propio token válido, solo cambiando el id en la URL.
+ * Sí importa para el aislamiento entre sucursales: sin este chequeo, la
+ * cuenta de UNA sucursal podría leer/editar recursos de OTRA sucursal con
+ * su propio token válido, solo cambiando el id en la URL.
  */
 export async function requireAccesoSucursal(req: Request, res: Response, next: NextFunction) {
   if (!req.usuario) {
@@ -109,7 +110,7 @@ export async function requireAccesoSucursal(req: Request, res: Response, next: N
   try {
     const { data, error } = await getSupabase()
       .from("usuarios")
-      .select("rol, activo, sucursal_id")
+      .select("activo, sucursal_id")
       .eq("id", req.usuario.id)
       .single();
 
@@ -119,10 +120,6 @@ export async function requireAccesoSucursal(req: Request, res: Response, next: N
     }
     if (!data.activo) {
       res.status(403).json({ error: "Cuenta desactivada." });
-      return;
-    }
-    if (data.rol !== "admin") {
-      res.status(403).json({ error: "Requiere rol de administrador." });
       return;
     }
     // sucursal_id null = administrador de plataforma: entra a cualquier sucursal.

@@ -170,6 +170,33 @@ export async function eliminarTabla(subdominio: string, tabla: string): Promise<
   await getPool().query(`DROP TABLE IF EXISTS "${esquema}"."${nombreTabla}";`);
 }
 
+/** Lee registros de la tabla de la entidad, paginado. Para el portal de la sucursal (solo lectura). */
+export async function listarRegistros(
+  subdominio: string,
+  tabla: string,
+  campos: CampoEntidad[],
+  limite: number,
+  desplazamiento: number,
+): Promise<{ filas: Record<string, unknown>[]; total: number }> {
+  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
+  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  // Sin "creado_en": esto lo ve el portal de la sucursal, solo le corresponden
+  // las columnas de su propio esquema, no las de auditoría interna.
+  const columnas = ["id", ...campos.map((c) => exigirIdentificador(c.nombre_tecnico, "Nombre técnico del campo"))];
+
+  const pool = getPool();
+  const { rows: filas } = await pool.query(
+    `SELECT ${columnas.map((c) => `"${c}"`).join(", ")} FROM "${esquema}"."${nombreTabla}" ` +
+      `WHERE "borrado_en" IS NULL ORDER BY "creado_en" DESC LIMIT $1 OFFSET $2;`,
+    [limite, desplazamiento],
+  );
+  const { rows: conteo } = await pool.query(
+    `SELECT count(*)::int AS total FROM "${esquema}"."${nombreTabla}" WHERE "borrado_en" IS NULL;`,
+  );
+
+  return { filas, total: conteo[0]?.total ?? 0 };
+}
+
 type ResultadoValores = { valores: Record<string, unknown> } | { error: string };
 
 /** Valida el cuerpo recibido contra la definición y convierte cada valor a su tipo. */

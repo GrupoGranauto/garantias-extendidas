@@ -10,6 +10,7 @@ type Estado = "borrador" | "pendiente" | "aprobada" | "rechazada" | "pausada" | 
 
 type Plantilla = {
   id: string;
+  nombre: string;
   nombre_tecnico: string;
   idioma: string;
   categoria: "marketing" | "utility" | "authentication";
@@ -150,7 +151,12 @@ export default function PlantillasListado() {
             <tbody>
               {plantillas.map((p) => (
                 <tr key={p.id}>
-                  <td>{p.nombre_tecnico}</td>
+                  <td>
+                    {p.nombre}
+                    <div className="campo-ayuda">
+                      <code>{p.nombre_tecnico}</code>
+                    </div>
+                  </td>
                   <td>{p.idioma}</td>
                   <td>{ETIQUETA_CATEGORIA[p.categoria]}</td>
                   <td>
@@ -195,7 +201,7 @@ export default function PlantillasListado() {
       <ModalConfirmar
         abierto={porEliminar !== null}
         titulo="Eliminar plantilla"
-        mensaje={`¿Eliminar «${porEliminar?.nombre_tecnico}»? Si ya se envió a Meta, también se borra allá.`}
+        mensaje={`¿Eliminar «${porEliminar?.nombre}»? Si ya se envió a Meta, también se borra allá.`}
         textoConfirmar="Eliminar"
         peligro
         enviando={eliminando}

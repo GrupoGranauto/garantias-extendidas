@@ -7,6 +7,7 @@ import { useSucursal } from "./SucursalEditLayout";
 
 type ConfigWhatsapp = {
   configurado: boolean;
+  app_id?: string | null;
   waba_id?: string | null;
   phone_number_id?: string | null;
   numero_telefono?: string | null;
@@ -23,6 +24,7 @@ export default function SucursalWhatsapp() {
 
   const [cargando, setCargando] = useState(true);
 
+  const [appId, setAppId] = useState("");
   const [wabaId, setWabaId] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [numeroTelefono, setNumeroTelefono] = useState("");
@@ -42,6 +44,7 @@ export default function SucursalWhatsapp() {
     apiFetch<ConfigWhatsapp>(`/api/admin/sucursales/${sucursal.id}/whatsapp`)
       .then((c) => {
         if (c.configurado) {
+          setAppId(c.app_id ?? "");
           setWabaId(c.waba_id ?? "");
           setPhoneNumberId(c.phone_number_id ?? "");
           setNumeroTelefono(c.numero_telefono ?? "");
@@ -69,6 +72,7 @@ export default function SucursalWhatsapp() {
 
     try {
       const cuerpo: Record<string, unknown> = {
+        app_id: appId.trim() || null,
         waba_id: wabaId.trim() || null,
         phone_number_id: phoneNumberId.trim(),
         numero_telefono: numeroTelefono.trim() || null,
@@ -157,7 +161,19 @@ export default function SucursalWhatsapp() {
         </div>
 
         <div className="seccion-campos">
-          <div className="pareja-campos">
+          <div className="trio-campos">
+            <div className="campo-formulario">
+              <label htmlFor="app-id">App ID</label>
+              <input
+                id="app-id"
+                type="text"
+                value={appId}
+                onChange={(e) => setAppId(e.target.value)}
+                placeholder="ID de la app de Meta for Developers"
+                spellCheck={false}
+              />
+            </div>
+
             <div className="campo-formulario">
               <label htmlFor="waba-id">WABA ID</label>
               <input
@@ -184,6 +200,7 @@ export default function SucursalWhatsapp() {
               />
             </div>
           </div>
+          <p className="campo-ayuda">El App ID hace falta para subir imágenes, videos o documentos de muestra en las plantillas.</p>
 
           <div className="campo-formulario">
             <label htmlFor="numero">Número de teléfono</label>

@@ -4,6 +4,9 @@ import {
   IconoGrupos,
   IconoUsuarios,
   IconoAdministradores,
+  IconoMensaje,
+  IconoBaseDatos,
+  IconoChat,
 } from "./componentes/Iconos";
 
 export type Enlace = { etiqueta: string; ruta: string };
@@ -52,6 +55,18 @@ export const NAVEGACION: Grupo[] = [
           { etiqueta: "Conexiones", ruta: "/admin/conexiones" },
         ],
       },
+    ],
+  },
+];
+
+/** Menú del portal de una sucursal: nada que ver con NAVEGACION (esa es del panel de plataforma). */
+export const NAVEGACION_PORTAL: Grupo[] = [
+  {
+    secciones: [
+      { etiqueta: "Inicio", icono: <IconoInicio />, ruta: "/" },
+      { etiqueta: "Chat", icono: <IconoChat />, ruta: "/chat" },
+      { etiqueta: "Base de Datos", icono: <IconoBaseDatos />, ruta: "/base-datos" },
+      { etiqueta: "Plantillas", icono: <IconoMensaje />, ruta: "/plantillas" },
     ],
   },
 ];

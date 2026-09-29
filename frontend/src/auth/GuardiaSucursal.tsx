@@ -4,11 +4,12 @@ import { apiFetch } from "../lib/api";
 import { usePortal } from "../portal/PortalProvider";
 import Cargador from "../componentes/Cargador";
 import PortalSucursalMarcador from "../paginas/PortalSucursalMarcador";
-import LayoutPortalSucursal from "../portal/LayoutPortalSucursal";
 import PlantillasListado from "../portal/PlantillasListado";
 import PlantillaFormulario from "../portal/PlantillaFormulario";
+import BaseDatos from "../portal/BaseDatos";
+import Chat from "../portal/Chat";
 import LayoutPanel from "../componentes/LayoutPanel";
-import { RUTAS_DEL_MENU } from "../navegacion";
+import { NAVEGACION_PORTAL, RUTAS_DEL_MENU } from "../navegacion";
 import Inicio from "../paginas/Inicio";
 import EnConstruccion from "../paginas/EnConstruccion";
 import SucursalNueva from "../paginas/SucursalNueva";
@@ -33,6 +34,8 @@ type Perfil = {
   id: string;
   correo: string;
   nombre: string | null;
+  puesto: string | null;
+  foto_url: string | null;
   rol: "admin" | "asesor";
   sucursal_id: string | null;
   activo: boolean;
@@ -84,12 +87,23 @@ export default function GuardiaSucursal() {
 
     return (
       <Routes>
-        <Route element={<LayoutPortalSucursal />}>
-          <Route path="/" element={<Navigate to="/plantillas" replace />} />
+        <Route
+          element={
+            <LayoutPanel
+              grupos={NAVEGACION_PORTAL}
+              logo={portal.logoPanel ?? portal.logo}
+              logoAlt={portal.nombre}
+              perfil={perfil}
+            />
+          }
+        >
+          <Route path="/" element={<EnConstruccion titulo="Inicio" />} />
+          <Route path="/chat" element={<Chat />} />
+          <Route path="/base-datos" element={<BaseDatos />} />
           <Route path="/plantillas" element={<PlantillasListado />} />
           <Route path="/plantillas/nueva" element={<PlantillaFormulario />} />
           <Route path="/plantillas/:pid/editar" element={<PlantillaFormulario />} />
-          <Route path="*" element={<Navigate to="/plantillas" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     );
@@ -105,7 +119,7 @@ export default function GuardiaSucursal() {
   // Panel de plataforma: su propio árbol de rutas.
   return (
     <Routes>
-      <Route element={<LayoutPanel />}>
+      <Route element={<LayoutPanel perfil={perfil} />}>
         <Route path="/" element={<Inicio />} />
 
         {/* Ruta dinámica: no vive en el menú, solo se llega por el botón Editar.

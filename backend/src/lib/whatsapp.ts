@@ -30,6 +30,18 @@ export async function configPorPhoneNumberId(phoneNumberId: string): Promise<Con
   return data;
 }
 
+/** Busca la configuración de WhatsApp por sucursal — para mandar mensajes desde su propio chat. */
+export async function configPorSucursalId(sucursalId: string): Promise<ConfigSucursal | null> {
+  const { data, error } = await getSupabase()
+    .from("whatsapp_config")
+    .select("sucursal_id, waba_id, phone_number_id, access_token, app_secret, webhook_verify_token, activo")
+    .eq("sucursal_id", sucursalId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 /**
  * Valida que el POST realmente venga de Meta: recalcula el HMAC-SHA256 del
  * cuerpo crudo con el app_secret y lo compara contra el header de la firma.
@@ -167,6 +179,46 @@ export type BotonPlantilla =
 export type ComponenteButtons = { type: "BUTTONS"; buttons: BotonPlantilla[] };
 
 export type ComponentePlantilla = ComponenteHeader | ComponenteBody | ComponenteFooter | ComponenteButtons;
+
+/**
+ * Sube un archivo de muestra (para el header de una plantilla: imagen, video
+ * o documento) y devuelve el "handle" que Meta exige en `example.header_handle`.
+ *
+ * Es un proceso de 2 pasos (Resumable Upload API), sin relación con el envío
+ * normal de mensajes:
+ *  1. Abrir una sesión de subida declarando tamaño y tipo del archivo.
+ *  2. Mandar los bytes crudos a esa sesión; regresa el handle.
+ */
+export async function subirMediaPlantilla(
+  appId: string,
+  accessToken: string,
+  archivo: Buffer,
+  mimeType: string,
+): Promise<string> {
+  const sesionRes = await fetch(
+    `${GRAPH_API}/${appId}/uploads?file_length=${archivo.length}&file_type=${encodeURIComponent(mimeType)}&access_token=${encodeURIComponent(accessToken)}`,
+    { method: "POST" },
+  );
+  const sesion = (await sesionRes.json()) as RespuestaErrorMeta & { id?: string };
+  if (!sesionRes.ok || !sesion.id) {
+    throw new Error(mensajeErrorMeta(sesion, sesionRes.status));
+  }
+
+  const subidaRes = await fetch(`${GRAPH_API}/${sesion.id}`, {
+    method: "POST",
+    headers: {
+      Authorization: `OAuth ${accessToken}`,
+      file_offset: "0",
+    },
+    body: archivo,
+  });
+  const subida = (await subidaRes.json()) as RespuestaErrorMeta & { h?: string };
+  if (!subidaRes.ok || !subida.h) {
+    throw new Error(mensajeErrorMeta(subida, subidaRes.status));
+  }
+
+  return subida.h;
+}
 
 type RespuestaErrorMeta = { error?: { message: string; error_user_msg?: string } };
 

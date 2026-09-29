@@ -38,6 +38,15 @@ export function IconoOjo({ abierto, className }: IconoProps & { abierto: boolean
   );
 }
 
+export function IconoChat({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M4 5h13v9H9l-4 3.5V14H4V5Z" />
+      <path d="M20 9v9l-3.5-3H10" />
+    </svg>
+  );
+}
+
 export function IconoFlecha({ className }: IconoProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
@@ -112,12 +121,32 @@ export function IconoPaneles({ className }: IconoProps) {
   );
 }
 
+export function IconoBaseDatos({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <ellipse cx="12" cy="5.5" rx="8" ry="3" />
+      <path d="M4 5.5v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+      <path d="M4 11.5v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
+    </svg>
+  );
+}
+
 export function IconoPuestos({ className }: IconoProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
       <rect x="3" y="7.5" width="18" height="12.5" rx="2" />
       <path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5" />
       <path d="M3 13h18" />
+    </svg>
+  );
+}
+
+export function IconoMensaje({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M4 5h16v11H8l-4 4V5Z" />
+      <path d="M8 9.5h8" />
+      <path d="M8 13h5" />
     </svg>
   );
 }
@@ -145,6 +174,80 @@ export function IconoMenu({ className }: IconoProps) {
       <path d="M4 6h16" />
       <path d="M4 12h16" />
       <path d="M4 18h16" />
+    </svg>
+  );
+}
+
+export function IconoVideollamada({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <rect x="2" y="6" width="14" height="12" rx="2.5" />
+      <path d="m16 10.5 5-3v9l-5-3Z" />
+    </svg>
+  );
+}
+
+export function IconoLlamada({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 5 5L14 13l5 2v3a2 2 0 0 1-2 2c-8 0-14-6-14-14a2 2 0 0 1 2-2Z" />
+    </svg>
+  );
+}
+
+export function IconoEmoji({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8.5 10.5h.01M15.5 10.5h.01" strokeWidth={2.6} />
+      <path d="M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8" />
+    </svg>
+  );
+}
+
+export function IconoClip({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M17 7.5 8.5 16a3 3 0 0 1-4.2-4.2L13 3a2.2 2.2 0 0 1 3.2 3.1L8.7 13.6a1.3 1.3 0 0 1-1.9-1.8L13.5 5" />
+    </svg>
+  );
+}
+
+export function IconoCamara({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M4 8.5h2.5L8 6h8l1.5 2.5H20a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z" />
+      <circle cx="12" cy="13.5" r="3.2" />
+    </svg>
+  );
+}
+
+export function IconoMicrofono({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3" />
+    </svg>
+  );
+}
+
+export function IconoSenal({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="currentColor" stroke="none">
+      <rect x="2" y="13" width="3.5" height="6" rx="0.8" />
+      <rect x="8" y="9" width="3.5" height="10" rx="0.8" />
+      <rect x="14" y="5" width="3.5" height="14" rx="0.8" />
+    </svg>
+  );
+}
+
+export function IconoBateria({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <rect x="1.5" y="7" width="19" height="10" rx="2.5" />
+      <rect x="4" y="9.5" width="14" height="5" rx="1" fill="currentColor" stroke="none" />
+      <path d="M22 10v4" strokeLinecap="round" />
     </svg>
   );
 }

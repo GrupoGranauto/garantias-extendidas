@@ -9,6 +9,7 @@ export const adminWhatsappRouter = Router();
 adminWhatsappRouter.use(requireAuth, requireAdmin);
 
 const configSchema = z.object({
+  app_id: z.string().trim().nullable().optional(),
   waba_id: z.string().trim().nullable().optional(),
   phone_number_id: z.string().trim().min(1).nullable().optional(),
   numero_telefono: z.string().trim().nullable().optional(),
@@ -29,7 +30,7 @@ adminWhatsappRouter.get("/sucursales/:id/whatsapp", async (req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("whatsapp_config")
-      .select("id, waba_id, phone_number_id, numero_telefono, webhook_verify_token, activo, access_token, app_secret")
+      .select("id, app_id, waba_id, phone_number_id, numero_telefono, webhook_verify_token, activo, access_token, app_secret")
       .eq("sucursal_id", req.params.id)
       .maybeSingle();
 

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
@@ -7,6 +8,7 @@ import {
   eliminarPlantillaMeta,
   estadoDesdeMeta,
   listarPlantillasMeta,
+  subirMediaPlantilla,
   type ComponentePlantilla,
 } from "../lib/whatsapp.js";
 
@@ -34,8 +36,31 @@ const botonSchema = z.discriminatedUnion("tipo", [
   z.object({ tipo: z.literal("copiar_codigo"), ejemplo: z.string().trim().min(1).max(15) }),
 ]);
 
+// media_handle puede venir vacío mientras la plantilla es borrador (aún no
+// se subió a Meta, o la sucursal todavía no tiene WhatsApp configurado);
+// se exige de verdad recién al mandar a revisión, no al guardar.
+const headerSchema = z.discriminatedUnion("tipo", [
+  z.object({ tipo: z.literal("texto"), texto: z.string().trim().min(1).max(60) }),
+  z.object({
+    tipo: z.literal("imagen"),
+    media_handle: z.string().trim().default(""),
+    media_url: z.string().trim().nullable().default(null),
+  }),
+  z.object({
+    tipo: z.literal("video"),
+    media_handle: z.string().trim().default(""),
+    media_url: z.string().trim().nullable().default(null),
+  }),
+  z.object({
+    tipo: z.literal("documento"),
+    media_handle: z.string().trim().default(""),
+    media_url: z.string().trim().nullable().default(null),
+    nombre_archivo: z.string().trim().nullable().default(null),
+  }),
+]);
+
 const componentesSchema = z.object({
-  header: z.object({ texto: z.string().trim().min(1).max(60) }).nullable().default(null),
+  header: headerSchema.nullable().default(null),
   body: z.object({
     texto: z.string().trim().min(1).max(1024),
     ejemplos: z.array(z.string().trim().min(1)).default([]),
@@ -45,6 +70,7 @@ const componentesSchema = z.object({
 });
 
 const plantillaSchema = z.object({
+  nombre: z.string().trim().min(1).max(200),
   nombre_tecnico: z
     .string()
     .trim()
@@ -84,7 +110,13 @@ function componentesAMeta(componentes: Componentes): ComponentePlantilla[] {
   const lista: ComponentePlantilla[] = [];
 
   if (componentes.header) {
-    lista.push({ type: "HEADER", format: "TEXT", text: componentes.header.texto });
+    const h = componentes.header;
+    if (h.tipo === "texto") {
+      lista.push({ type: "HEADER", format: "TEXT", text: h.texto });
+    } else {
+      const formato = h.tipo === "imagen" ? "IMAGE" : h.tipo === "video" ? "VIDEO" : "DOCUMENT";
+      lista.push({ type: "HEADER", format: formato, example: { header_handle: [h.media_handle] } });
+    }
   }
 
   lista.push({
@@ -121,19 +153,82 @@ function componentesAMeta(componentes: Componentes): ComponentePlantilla[] {
 async function obtenerConfigWhatsapp(sucursalId: string) {
   const { data, error } = await getSupabase()
     .from("whatsapp_config")
-    .select("waba_id, access_token")
+    .select("app_id, waba_id, access_token")
     .eq("sucursal_id", sucursalId)
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data;
 }
 
+const MIME_PERMITIDO: Record<"imagen" | "video" | "documento", string[]> = {
+  imagen: ["image/jpeg", "image/png"],
+  video: ["video/mp4"],
+  documento: ["application/pdf"],
+};
+
+const subirMediaSchema = z.object({
+  tipo: z.enum(["imagen", "video", "documento"]),
+  nombre_archivo: z.string().trim().min(1).max(200),
+  tipo_mime: z.string().trim().min(1),
+  // Data URL completa (data:<mime>;base64,<...>) o el base64 pelado; se acepta cualquiera de los dos.
+  contenido_base64: z.string().trim().min(1),
+});
+
+/**
+ * Sube el archivo de muestra del header (imagen/video/documento) a Meta vía
+ * su Resumable Upload API y también a Storage propio, para poder mostrarlo
+ * en la vista previa sin depender de que el handle de Meta siga vivo.
+ */
+adminPlantillasRouter.post("/sucursales/:id/plantillas/subir-media", async (req, res, next) => {
+  const parsed = subirMediaSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos.", detalle: parsed.error.flatten() });
+    return;
+  }
+  if (!MIME_PERMITIDO[parsed.data.tipo].includes(parsed.data.tipo_mime)) {
+    const permitidos = MIME_PERMITIDO[parsed.data.tipo].join(", ");
+    res.status(400).json({ error: `Tipo de archivo no permitido para ${parsed.data.tipo}. Usa: ${permitidos}.` });
+    return;
+  }
+
+  try {
+    const config = await obtenerConfigWhatsapp(req.params.id);
+    if (!config?.app_id || !config.access_token) {
+      res.status(400).json({ error: "Esta sucursal no tiene configurado el App ID de Meta." });
+      return;
+    }
+
+    const base64Puro = parsed.data.contenido_base64.replace(/^data:[^;]+;base64,/, "");
+    const archivo = Buffer.from(base64Puro, "base64");
+
+    const handle = await subirMediaPlantilla(config.app_id, config.access_token, archivo, parsed.data.tipo_mime);
+
+    const extension = parsed.data.tipo_mime.split("/")[1] ?? "bin";
+    const ruta = `plantillas/${req.params.id}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
+    const supabase = getSupabase();
+    const { error: errorSubida } = await supabase.storage
+      .from("whatsapp-media")
+      .upload(ruta, archivo, { contentType: parsed.data.tipo_mime, upsert: false });
+    if (errorSubida) throw new Error(errorSubida.message);
+
+    const { data: publica } = supabase.storage.from("whatsapp-media").getPublicUrl(ruta);
+
+    res.json({ media_handle: handle, media_url: publica.publicUrl });
+  } catch (err) {
+    if (err instanceof Error) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
 /** Listado local de plantillas de la sucursal. */
 adminPlantillasRouter.get("/sucursales/:id/plantillas", async (req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("whatsapp_plantillas")
-      .select("id, nombre_tecnico, idioma, categoria, estado, motivo_rechazo, creado_en, actualizado_en")
+      .select("id, nombre, nombre_tecnico, idioma, categoria, estado, motivo_rechazo, creado_en, actualizado_en")
       .eq("sucursal_id", req.params.id)
       .order("creado_en", { ascending: false });
     if (error) throw new Error(error.message);
@@ -182,6 +277,7 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas", async (req, res, next) 
       .from("whatsapp_plantillas")
       .insert({
         sucursal_id: req.params.id,
+        nombre: parsed.data.nombre,
         nombre_tecnico: parsed.data.nombre_tecnico,
         idioma: parsed.data.idioma,
         categoria: parsed.data.categoria,
@@ -205,7 +301,7 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas", async (req, res, next) 
 
 /** Edita una plantilla que aún no fue aprobada (borrador o rechazada). */
 adminPlantillasRouter.patch("/sucursales/:id/plantillas/:pid", async (req, res, next) => {
-  const parsed = plantillaSchema.partial({ nombre_tecnico: true }).safeParse(req.body);
+  const parsed = plantillaSchema.partial({ nombre: true, nombre_tecnico: true }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Datos inválidos.", detalle: parsed.error.flatten() });
     return;
@@ -237,6 +333,7 @@ adminPlantillasRouter.patch("/sucursales/:id/plantillas/:pid", async (req, res, 
     }
 
     const cambios: Record<string, unknown> = { actualizado_en: new Date().toISOString() };
+    if (parsed.data.nombre) cambios.nombre = parsed.data.nombre;
     if (parsed.data.idioma) cambios.idioma = parsed.data.idioma;
     if (parsed.data.categoria) cambios.categoria = parsed.data.categoria;
     if (parsed.data.componentes) cambios.componentes = parsed.data.componentes;
@@ -311,6 +408,12 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/:pid/enviar", async (req,
     const parsedComponentes = componentesSchema.safeParse(plantilla.componentes);
     if (!parsedComponentes.success) {
       res.status(400).json({ error: "La plantilla guardada tiene datos corruptos; vuelve a editarla." });
+      return;
+    }
+
+    const header = parsedComponentes.data.header;
+    if (header && header.tipo !== "texto" && !header.media_handle) {
+      res.status(400).json({ error: "Sube el archivo del encabezado antes de enviar a revisión." });
       return;
     }
 

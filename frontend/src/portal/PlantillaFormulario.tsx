@@ -2,6 +2,16 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
+import {
+  IconoBateria,
+  IconoCamara,
+  IconoClip,
+  IconoEmoji,
+  IconoLlamada,
+  IconoMicrofono,
+  IconoSenal,
+  IconoVideollamada,
+} from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 
@@ -13,20 +23,49 @@ type BotonForm =
   | { tipo: "telefono"; texto: string; telefono: string }
   | { tipo: "copiar_codigo"; ejemplo: string };
 
+type HeaderForm =
+  | { tipo: "texto"; texto: string }
+  | { tipo: "imagen"; media_handle: string; media_url: string | null }
+  | { tipo: "video"; media_handle: string; media_url: string | null }
+  | { tipo: "documento"; media_handle: string; media_url: string | null; nombre_archivo: string | null };
+
 type Componentes = {
-  header: { texto: string } | null;
+  header: HeaderForm | null;
   body: { texto: string; ejemplos: string[] };
   footer: string | null;
   botones: BotonForm[];
 };
 
+const MIME_POR_TIPO: Record<"imagen" | "video" | "documento", string> = {
+  imagen: "image/jpeg,image/png",
+  video: "video/mp4",
+  documento: "application/pdf",
+};
+
 type PlantillaDetalle = {
   id: string;
+  nombre: string;
   nombre_tecnico: string;
   idioma: string;
   categoria: Categoria;
   componentes: Componentes;
 };
+
+/** Minúsculas, sin acentos, todo lo no alfanumérico colapsado a "_". Solo para comodidad al escribir. */
+function aNombreTecnico(texto: string): string {
+  const normalizado = texto
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+
+  let slug = "";
+  for (const caracter of normalizado) {
+    if (/[a-z0-9]/.test(caracter)) slug += caracter;
+    else if (/[ \-_./]/.test(caracter)) slug += "_";
+  }
+  return slug.replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+}
 
 const CATEGORIAS: { valor: Categoria; etiqueta: string }[] = [
   { valor: "utility", etiqueta: "Utilidad" },
@@ -64,12 +103,18 @@ export default function PlantillaFormulario() {
   const areaRef = useRef<HTMLTextAreaElement>(null);
 
   const [cargando, setCargando] = useState(editando);
+  const [nombre, setNombre] = useState("");
   const [nombreTecnico, setNombreTecnico] = useState("");
   const [idioma, setIdioma] = useState("es_MX");
   const [categoria, setCategoria] = useState<Categoria>("utility");
 
-  const [headerActivo, setHeaderActivo] = useState(false);
+  const [headerTipo, setHeaderTipo] = useState<"ninguno" | "texto" | "imagen" | "video" | "documento">("ninguno");
   const [headerTexto, setHeaderTexto] = useState("");
+  const [headerMediaHandle, setHeaderMediaHandle] = useState("");
+  const [headerMediaUrl, setHeaderMediaUrl] = useState<string | null>(null);
+  const [headerNombreArchivo, setHeaderNombreArchivo] = useState<string | null>(null);
+  const [subiendoHeader, setSubiendoHeader] = useState(false);
+  const [avisoHeader, setAvisoHeader] = useState<string | null>(null);
 
   const [bodyTexto, setBodyTexto] = useState("");
   const [ejemplos, setEjemplos] = useState<string[]>([]);
@@ -96,11 +141,16 @@ export default function PlantillaFormulario() {
     if (!pid) return;
     apiFetch<PlantillaDetalle>(`/api/admin/sucursales/${sucursalId}/plantillas/${pid}`)
       .then((p) => {
+        setNombre(p.nombre);
         setNombreTecnico(p.nombre_tecnico);
         setIdioma(p.idioma);
         setCategoria(p.categoria);
-        setHeaderActivo(Boolean(p.componentes.header));
-        setHeaderTexto(p.componentes.header?.texto ?? "");
+        const h = p.componentes.header;
+        setHeaderTipo(h?.tipo ?? "ninguno");
+        setHeaderTexto(h?.tipo === "texto" ? h.texto : "");
+        setHeaderMediaHandle(h && h.tipo !== "texto" ? h.media_handle : "");
+        setHeaderMediaUrl(h && h.tipo !== "texto" ? h.media_url : null);
+        setHeaderNombreArchivo(h?.tipo === "documento" ? h.nombre_archivo : null);
         setBodyTexto(p.componentes.body.texto);
         setEjemplos(p.componentes.body.ejemplos);
         setFooterActivo(Boolean(p.componentes.footer));
@@ -110,6 +160,58 @@ export default function PlantillaFormulario() {
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la plantilla."))
       .finally(() => setCargando(false));
   }, [sucursalId, pid]);
+
+  function cambiarNombre(valor: string) {
+    setNombre(valor);
+    // El nombre técnico sigue al nombre mientras la plantilla no exista todavía
+    if (!editando) setNombreTecnico(aNombreTecnico(valor));
+  }
+
+  function leerComoBase64(archivo: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const lector = new FileReader();
+      lector.onload = () => resolve(String(lector.result));
+      lector.onerror = () => reject(new Error("No se pudo leer el archivo."));
+      lector.readAsDataURL(archivo);
+    });
+  }
+
+  async function subirArchivoHeader(tipo: "imagen" | "video" | "documento", archivo: File | undefined) {
+    if (!archivo) return;
+
+    // La vista previa no depende de que la subida a Meta funcione: se ve de
+    // inmediato con el archivo local, aunque la sucursal no tenga WhatsApp
+    // configurado todavía (eso solo hace falta para mandarla a revisión).
+    setHeaderMediaUrl(URL.createObjectURL(archivo));
+    setHeaderNombreArchivo(archivo.name);
+    setHeaderMediaHandle("");
+    setAvisoHeader(null);
+    setError(null);
+    setSubiendoHeader(true);
+    try {
+      const contenido_base64 = await leerComoBase64(archivo);
+      const resultado = await apiFetch<{ media_handle: string; media_url: string }>(
+        `/api/admin/sucursales/${sucursalId}/plantillas/subir-media`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            tipo,
+            nombre_archivo: archivo.name,
+            tipo_mime: archivo.type,
+            contenido_base64,
+          }),
+        },
+      );
+      setHeaderMediaHandle(resultado.media_handle);
+      setHeaderMediaUrl(resultado.media_url);
+    } catch (err) {
+      // No se pudo subir a Meta (ej. falta configurar WhatsApp): se avisa,
+      // pero el preview local se queda — no hace falta bloquear el borrador.
+      setAvisoHeader(err instanceof Error ? err.message : "No se pudo subir el archivo a Meta.");
+    } finally {
+      setSubiendoHeader(false);
+    }
+  }
 
   function insertarVariable() {
     const siguiente = variables.length ? Math.max(...variables) + 1 : 1;
@@ -148,9 +250,25 @@ export default function PlantillaFormulario() {
     return botones.filter((b) => b.tipo === tipo).length;
   }
 
+  function construirHeader(): HeaderForm | null {
+    switch (headerTipo) {
+      case "texto":
+        return headerTexto.trim() ? { tipo: "texto", texto: headerTexto.trim() } : null;
+      case "imagen":
+      case "video":
+        return headerMediaHandle ? { tipo: headerTipo, media_handle: headerMediaHandle, media_url: headerMediaUrl } : null;
+      case "documento":
+        return headerMediaHandle
+          ? { tipo: "documento", media_handle: headerMediaHandle, media_url: headerMediaUrl, nombre_archivo: headerNombreArchivo }
+          : null;
+      default:
+        return null;
+    }
+  }
+
   function construirComponentes(): Componentes {
     return {
-      header: headerActivo && headerTexto.trim() ? { texto: headerTexto.trim() } : null,
+      header: construirHeader(),
       body: { texto: bodyTexto.trim(), ejemplos: ejemplos.map((e) => e.trim()) },
       footer: footerActivo && footerTexto.trim() ? footerTexto.trim() : null,
       botones,
@@ -160,6 +278,10 @@ export default function PlantillaFormulario() {
   async function guardar(enviarDespues: boolean) {
     setError(null);
 
+    if (!nombre.trim()) {
+      setError("Escribe el nombre de la plantilla.");
+      return;
+    }
     if (!nombreTecnico.trim() && !editando) {
       setError("Escribe el nombre técnico de la plantilla.");
       return;
@@ -176,6 +298,18 @@ export default function PlantillaFormulario() {
       setError("Captura un ejemplo para cada variable del cuerpo.");
       return;
     }
+    if (subiendoHeader) {
+      setError("Espera a que termine de subirse el archivo del encabezado.");
+      return;
+    }
+    if (
+      enviarDespues &&
+      (headerTipo === "imagen" || headerTipo === "video" || headerTipo === "documento") &&
+      !headerMediaHandle
+    ) {
+      setError("El archivo del encabezado no se pudo subir a Meta; revisa la configuración de WhatsApp o vuelve a intentar.");
+      return;
+    }
 
     setEnviando(true);
     try {
@@ -185,12 +319,18 @@ export default function PlantillaFormulario() {
       if (editando && pid) {
         await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/${pid}`, {
           method: "PATCH",
-          body: JSON.stringify({ idioma, categoria, componentes }),
+          body: JSON.stringify({ nombre: nombre.trim(), idioma, categoria, componentes }),
         });
       } else {
         const creada = await apiFetch<{ id: string }>(`/api/admin/sucursales/${sucursalId}/plantillas`, {
           method: "POST",
-          body: JSON.stringify({ nombre_tecnico: nombreTecnico.trim(), idioma, categoria, componentes }),
+          body: JSON.stringify({
+            nombre: nombre.trim(),
+            nombre_tecnico: nombreTecnico.trim(),
+            idioma,
+            categoria,
+            componentes,
+          }),
         });
         plantillaId = creada.id;
       }
@@ -250,10 +390,23 @@ export default function PlantillaFormulario() {
           <section className="seccion">
             <div className="seccion-info">
               <h2>Identidad</h2>
-              <p>El nombre no se puede cambiar después de crearla.</p>
+              <p>El nombre técnico no se puede cambiar después de crearla.</p>
             </div>
 
             <div className="seccion-campos">
+              <div className="campo-formulario">
+                <label htmlFor="nombre">
+                  Nombre <span className="obligatorio">*</span>
+                </label>
+                <input
+                  id="nombre"
+                  type="text"
+                  value={nombre}
+                  onChange={(e) => cambiarNombre(e.target.value)}
+                  placeholder="Confirmación de garantía"
+                />
+              </div>
+
               <div className="trio-campos">
                 <div className="campo-formulario">
                   <label htmlFor="nombre-tecnico">
@@ -263,9 +416,10 @@ export default function PlantillaFormulario() {
                     id="nombre-tecnico"
                     type="text"
                     value={nombreTecnico}
-                    onChange={(e) => setNombreTecnico(e.target.value.toLowerCase())}
+                    onChange={(e) => setNombreTecnico(aNombreTecnico(e.target.value))}
                     placeholder="confirmacion_garantia"
                     disabled={editando}
+                    style={{ fontFamily: "monospace" }}
                     spellCheck={false}
                   />
                 </div>
@@ -301,16 +455,33 @@ export default function PlantillaFormulario() {
           <section className="seccion">
             <div className="seccion-info">
               <h2>Encabezado</h2>
-              <p>Opcional. Una línea corta en negritas arriba del mensaje.</p>
+              <p>Opcional. Texto, imagen, video o documento arriba del mensaje.</p>
             </div>
 
             <div className="seccion-campos">
-              <label className="opcion-radio">
-                <input type="checkbox" checked={headerActivo} onChange={(e) => setHeaderActivo(e.target.checked)} />
-                <span>Incluir encabezado de texto</span>
-              </label>
+              <div className="campo-formulario">
+                <label htmlFor="header-tipo">Tipo</label>
+                <select
+                  id="header-tipo"
+                  value={headerTipo}
+                  onChange={(e) => {
+                    const tipo = e.target.value as typeof headerTipo;
+                    setHeaderTipo(tipo);
+                    setHeaderTexto("");
+                    setHeaderMediaHandle("");
+                    setHeaderMediaUrl(null);
+                    setHeaderNombreArchivo(null);
+                  }}
+                >
+                  <option value="ninguno">Ninguno</option>
+                  <option value="texto">Texto</option>
+                  <option value="imagen">Imagen</option>
+                  <option value="video">Video</option>
+                  <option value="documento">Documento</option>
+                </select>
+              </div>
 
-              {headerActivo && (
+              {headerTipo === "texto" && (
                 <div className="campo-formulario">
                   <input
                     type="text"
@@ -320,6 +491,43 @@ export default function PlantillaFormulario() {
                     maxLength={60}
                   />
                   <p className="campo-ayuda">{headerTexto.length}/60</p>
+                </div>
+              )}
+
+              {(headerTipo === "imagen" || headerTipo === "video" || headerTipo === "documento") && (
+                <div className="campo-formulario">
+                  <input
+                    type="file"
+                    accept={MIME_POR_TIPO[headerTipo]}
+                    onChange={(e) => subirArchivoHeader(headerTipo, e.target.files?.[0])}
+                    disabled={subiendoHeader}
+                  />
+                  {subiendoHeader && <p className="campo-ayuda">Subiendo a Meta…</p>}
+                  {!subiendoHeader && headerNombreArchivo && (
+                    <p className="campo-ayuda">
+                      {headerMediaHandle ? "Listo: " : "Vista previa lista (falta subirla): "}
+                      {headerNombreArchivo}.{" "}
+                      <button
+                        type="button"
+                        className="boton-quitar"
+                        style={{ padding: 0, display: "inline" }}
+                        onClick={() => {
+                          setHeaderMediaHandle("");
+                          setHeaderMediaUrl(null);
+                          setHeaderNombreArchivo(null);
+                          setAvisoHeader(null);
+                        }}
+                      >
+                        Quitar
+                      </button>
+                    </p>
+                  )}
+                  {avisoHeader && <Alerta tipo="info">{avisoHeader}</Alerta>}
+                  <p className="campo-ayuda">
+                    {headerTipo === "imagen" && "JPG o PNG."}
+                    {headerTipo === "video" && "MP4."}
+                    {headerTipo === "documento" && "PDF."}
+                  </p>
                 </div>
               )}
             </div>
@@ -496,19 +704,80 @@ export default function PlantillaFormulario() {
         {/* ---------- Preview ---------- */}
         <aside className="vista-previa-whatsapp">
           <h3>Vista previa</h3>
-          <div className="burbuja-whatsapp">
-            {headerActivo && headerTexto && <div className="burbuja-header">{headerTexto}</div>}
-            <div className="burbuja-cuerpo">{textoPreview}</div>
-            {footerActivo && footerTexto && <div className="burbuja-footer">{footerTexto}</div>}
-            {botones.length > 0 && (
-              <div className="burbuja-botones">
-                {botones.map((b, i) => (
-                  <div className="burbuja-boton" key={i}>
-                    {b.tipo === "copiar_codigo" ? "Copiar código" : b.texto || "…"}
-                  </div>
-                ))}
+          <div className="telefono-marco">
+            <div className="telefono-pantalla">
+              <div className="telefono-notch" />
+
+              <div className="telefono-statusbar">
+                <span>04:20</span>
+                <span className="telefono-statusbar-iconos">
+                  <IconoSenal />
+                  <IconoBateria />
+                </span>
               </div>
-            )}
+
+              <div className="chat-header">
+                <span className="chat-header-flecha">‹</span>
+                <span className="chat-header-avatar">
+                  <img src="/marca/icono-blanco.png" alt="" />
+                </span>
+                <span className="chat-header-datos">
+                  <span className="chat-header-nombre">{portal?.nombre ?? "Tu sucursal"}</span>
+                  <span className="chat-header-estado">en línea</span>
+                </span>
+                <span className="chat-header-acciones">
+                  <IconoVideollamada />
+                  <IconoLlamada />
+                </span>
+              </div>
+
+              <div className="chat-fondo">
+                <span className="chat-fecha">HOY</span>
+
+                <div className="burbuja-whatsapp">
+                  {headerTipo === "texto" && headerTexto && <div className="burbuja-header">{headerTexto}</div>}
+                  {headerTipo === "imagen" && (
+                    <div className="burbuja-media">
+                      {headerMediaUrl ? <img src={headerMediaUrl} alt="" /> : "Imagen"}
+                    </div>
+                  )}
+                  {headerTipo === "video" && (
+                    <div className="burbuja-media">
+                      {headerMediaUrl ? <video src={headerMediaUrl} controls /> : "Video"}
+                    </div>
+                  )}
+                  {headerTipo === "documento" && (
+                    <div className="burbuja-media">{headerNombreArchivo ?? "Documento"}</div>
+                  )}
+                  <div className="burbuja-cuerpo">{textoPreview}</div>
+                  {footerActivo && footerTexto && <div className="burbuja-footer">{footerTexto}</div>}
+                  {botones.length > 0 && (
+                    <div className="burbuja-botones">
+                      {botones.map((b, i) => (
+                        <div className="burbuja-boton" key={i}>
+                          {b.tipo === "copiar_codigo" ? "Copiar código" : b.texto || "…"}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="burbuja-remate">
+                    <span>04:20</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="chat-entrada">
+                <div className="chat-entrada-campo">
+                  <IconoEmoji />
+                  <span>Mensaje</span>
+                  <IconoClip />
+                  <IconoCamara />
+                </div>
+                <span className="chat-entrada-mic">
+                  <IconoMicrofono />
+                </span>
+              </div>
+            </div>
           </div>
         </aside>
       </div>

@@ -10,6 +10,8 @@ import { adminRouter } from "./routes/admin.js";
 import { adminWhatsappRouter } from "./routes/adminWhatsapp.js";
 import { adminPlantillasRouter } from "./routes/adminPlantillas.js";
 import { adminEntidadesRouter } from "./routes/adminEntidades.js";
+import { entidadDatosRouter } from "./routes/entidadDatos.js";
+import { whatsappChatRouter } from "./routes/whatsappChat.js";
 import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
 import { publicoRouter } from "./routes/publico.js";
 import { perfilRouter } from "./routes/perfil.js";
@@ -33,7 +35,8 @@ app.use(
 // su propio parser. El resto de la API sí usa JSON ya parseado.
 app.use("/api/webhooks/whatsapp", express.raw({ type: "application/json" }), webhookWhatsappRouter);
 
-app.use(express.json({ limit: "5mb" }));
+// 20mb: alcanza para el base64 de video/documento de muestra en plantillas de WhatsApp.
+app.use(express.json({ limit: "20mb" }));
 
 app.use("/api/health", healthRouter);
 app.use("/api/publico", publicoRouter);
@@ -43,6 +46,8 @@ app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);
 app.use("/api/admin", adminPlantillasRouter);
 app.use("/api/admin", adminEntidadesRouter);
+app.use("/api/admin", entidadDatosRouter);
+app.use("/api/admin", whatsappChatRouter);
 // Ingesta externa: autenticada por API key propia de la sucursal, no por sesión.
 app.use("/api/entidades", entidadesIngestaRouter);
 

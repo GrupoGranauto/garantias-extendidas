@@ -7,6 +7,7 @@ import {
   firmaValida,
   type ConfigSucursal,
 } from "../lib/whatsapp.js";
+import { emitirEventoChat } from "../lib/eventosChat.js";
 
 export const webhookWhatsappRouter = Router();
 
@@ -246,6 +247,8 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
 
   const { error } = await getSupabase().from("whatsapp_mensajes").insert(fila);
   if (error) throw new Error(error.message);
+
+  emitirEventoChat(config.sucursal_id, { tipo: "mensaje_entrante", conversacionId });
 }
 
 async function procesarActualizacionEstado(estado: EstadoMensaje) {
@@ -256,7 +259,16 @@ async function procesarActualizacionEstado(estado: EstadoMensaje) {
 
   // No hay fila que actualizar si el mensaje no es nuestro (ajeno a esta sucursal)
   // o si el estado llegó antes que el insert del mensaje saliente; se ignora en silencio.
-  await getSupabase().from("whatsapp_mensajes").update(cambios).eq("wa_message_id", estado.id);
+  const { data } = await getSupabase()
+    .from("whatsapp_mensajes")
+    .update(cambios)
+    .eq("wa_message_id", estado.id)
+    .select("conversacion_id, sucursal_id")
+    .maybeSingle();
+
+  if (data) {
+    emitirEventoChat(data.sucursal_id, { tipo: "estado_actualizado", conversacionId: data.conversacion_id });
+  }
 }
 
 /* ============================================================

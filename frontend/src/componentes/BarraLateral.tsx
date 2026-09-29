@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { NAVEGACION, type Seccion } from "../navegacion";
-import { IconoChevron } from "./Iconos";
+import { NAVEGACION, type Grupo, type Seccion } from "../navegacion";
+import { IconoChevron, IconoSalir } from "./Iconos";
+
+export type PerfilLateral = {
+  correo: string;
+  nombre: string | null;
+  puesto: string | null;
+  foto_url: string | null;
+};
 
 type Props = {
   /** Colapsada: solo iconos (escritorio). */
@@ -9,14 +16,33 @@ type Props = {
   /** Abierta como panel flotante (móvil). */
   abierta: boolean;
   onNavegar: () => void;
+  /** Menú a mostrar. Por defecto el del panel de plataforma. */
+  grupos?: Grupo[];
+  /** Logo y texto alternativo. Por defecto, el de Auto Insights (panel de plataforma). */
+  logoExpandido?: string;
+  logoColapsado?: string;
+  logoAlt?: string;
+  /** Foto, nombre y puesto de quien tiene sesión, al pie de la barra. */
+  perfil?: PerfilLateral | null;
+  onSalir?: () => void;
 };
 
-export default function BarraLateral({ colapsada, abierta, onNavegar }: Props) {
+export default function BarraLateral({
+  colapsada,
+  abierta,
+  onNavegar,
+  grupos = NAVEGACION,
+  logoExpandido = "/marca/logo-blanco-compacto.png",
+  logoColapsado = "/marca/icono-blanco.png",
+  logoAlt = "Auto Insights",
+  perfil,
+  onSalir,
+}: Props) {
   const { pathname } = useLocation();
 
   // Arranca con el submenú de la sección activa desplegado
   const [desplegadas, setDesplegadas] = useState<string[]>(() =>
-    NAVEGACION.flatMap((g) => g.secciones)
+    grupos.flatMap((g) => g.secciones)
       .filter((s) => s.hijos?.some((h) => pathname.startsWith(h.ruta)))
       .map((s) => s.etiqueta),
   );
@@ -60,15 +86,15 @@ export default function BarraLateral({ colapsada, abierta, onNavegar }: Props) {
       <div className="lateral-marca">
         {/* Colapsada cabe el emblema; expandida, el logotipo completo */}
         <img
-          src={colapsada ? "/marca/icono-blanco.png" : "/marca/logo-blanco-compacto.png"}
-          alt="Auto Insights"
+          src={colapsada ? logoColapsado : logoExpandido}
+          alt={logoAlt}
           className={colapsada ? "lateral-logo lateral-logo-min" : "lateral-logo"}
           draggable={false}
         />
       </div>
 
       <nav className="lateral-nav">
-        {NAVEGACION.map((grupo, i) => (
+        {grupos.map((grupo, i) => (
           <div className="lateral-grupo" key={grupo.titulo ?? i}>
             {grupo.titulo && <p className="lateral-titulo">{grupo.titulo}</p>}
 
@@ -130,6 +156,31 @@ export default function BarraLateral({ colapsada, abierta, onNavegar }: Props) {
           </div>
         ))}
       </nav>
+
+      {perfil && (
+        <div className="lateral-perfil">
+          <div className="lateral-perfil-quien" title={colapsada ? (perfil.nombre ?? perfil.correo) : undefined}>
+            <span className="lateral-perfil-avatar">
+              {perfil.foto_url ? (
+                <img src={perfil.foto_url} alt="" />
+              ) : (
+                (perfil.nombre ?? perfil.correo).charAt(0).toUpperCase()
+              )}
+            </span>
+            {!colapsada && (
+              <span className="lateral-perfil-datos">
+                <strong>{perfil.nombre ?? perfil.correo}</strong>
+                {perfil.puesto && <span>{perfil.puesto}</span>}
+              </span>
+            )}
+          </div>
+
+          <button type="button" className="lateral-perfil-salir" onClick={onSalir} title="Cerrar sesión">
+            <IconoSalir />
+            {!colapsada && <span>Cerrar sesión</span>}
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
