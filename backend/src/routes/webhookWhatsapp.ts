@@ -143,6 +143,28 @@ async function intentarDescargarMedia(mediaId: string, config: ConfigSucursal) {
   }
 }
 
+const ETIQUETAS_TIPO: Record<string, string> = {
+  imagen: "Foto",
+  video: "Video",
+  audio: "Audio",
+  documento: "Documento",
+  sticker: "Sticker",
+  ubicacion: "Ubicación",
+  contacto: "Contacto",
+};
+
+/** Descripción corta del mensaje al que se reaccionó, como en WhatsApp ("hola", "Sticker", "Foto"…). */
+async function descripcionMensajePorWaId(waMessageId: string): Promise<string | null> {
+  const { data } = await getSupabase()
+    .from("whatsapp_mensajes")
+    .select("tipo, texto")
+    .eq("wa_message_id", waMessageId)
+    .maybeSingle();
+  if (!data) return null;
+  if (data.tipo === "texto") return (data.texto ?? "").slice(0, 40);
+  return ETIQUETAS_TIPO[data.tipo] ?? data.tipo;
+}
+
 async function obtenerOCrearConversacion(
   sucursalId: string,
   waId: string,
@@ -239,11 +261,17 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
       fila.texto = JSON.stringify(msg.contacts ?? null);
       break;
 
-    case "reaction":
+    case "reaction": {
       fila.tipo = "reaccion";
-      fila.reaccion_emoji = msg.reaction?.emoji ?? null;
+      const emoji = msg.reaction?.emoji ?? null;
+      fila.reaccion_emoji = emoji;
       fila.reaccion_a_wa_message_id = msg.reaction?.message_id ?? null;
+      if (emoji && msg.reaction?.message_id) {
+        const objetivo = await descripcionMensajePorWaId(msg.reaction.message_id);
+        fila.texto = objetivo ? `Reaccionó con ${emoji} a "${objetivo}"` : `Reaccionó con ${emoji}`;
+      }
       break;
+    }
 
     default:
       // Tipos que Meta agregue después (botones, interactivos, pedidos…):

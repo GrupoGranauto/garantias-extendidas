@@ -67,7 +67,7 @@ function textoPreview(m: Mensaje): string {
 /** Línea de previsualización en el listado de conversaciones (como el desktop): texto si es texto, ícono + etiqueta si no. */
 function previewConversacion(c: Conversacion): string {
   if (!c.ultimo_mensaje_tipo) return c.wa_id;
-  if (c.ultimo_mensaje_tipo === "texto") return c.ultimo_mensaje_texto || "";
+  if (c.ultimo_mensaje_texto) return c.ultimo_mensaje_texto;
   return ETIQUETAS_TIPO[c.ultimo_mensaje_tipo] ?? c.ultimo_mensaje_tipo;
 }
 
@@ -82,11 +82,17 @@ function mapaReacciones(mensajes: Mensaje[]): Record<string, string> {
   return mapa;
 }
 
-function contenidoMensaje(m: Mensaje): ReactNode {
+function contenidoMensaje(m: Mensaje, onMediaLoad: () => void, onAbrirImagen: (url: string) => void): ReactNode {
   if (m.tipo === "imagen" && m.media_url) {
     return (
       <>
-        <img src={m.media_url} alt="" className="chat-media-imagen" />
+        <img
+          src={m.media_url}
+          alt=""
+          className="chat-media-imagen"
+          onLoad={onMediaLoad}
+          onClick={() => onAbrirImagen(m.media_url!)}
+        />
         {m.texto && <div className="chat-burbuja-texto">{m.texto}</div>}
       </>
     );
@@ -94,16 +100,24 @@ function contenidoMensaje(m: Mensaje): ReactNode {
   if (m.tipo === "video" && m.media_url) {
     return (
       <>
-        <video src={m.media_url} controls className="chat-media-video" />
+        <video src={m.media_url} controls className="chat-media-video" onLoadedMetadata={onMediaLoad} />
         {m.texto && <div className="chat-burbuja-texto">{m.texto}</div>}
       </>
     );
   }
   if (m.tipo === "audio" && m.media_url) {
-    return <audio src={m.media_url} controls className="chat-media-audio" />;
+    return <audio src={m.media_url} controls className="chat-media-audio" onLoadedMetadata={onMediaLoad} />;
   }
   if (m.tipo === "sticker" && m.media_url) {
-    return <img src={m.media_url} alt="" className="chat-media-sticker" />;
+    return (
+      <img
+        src={m.media_url}
+        alt=""
+        className="chat-media-sticker"
+        onLoad={onMediaLoad}
+        onClick={() => onAbrirImagen(m.media_url!)}
+      />
+    );
   }
   if (m.tipo === "documento" && m.media_url) {
     return (
@@ -137,6 +151,7 @@ export default function Chat() {
   const [borrador, setBorrador] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [imagenAdjunta, setImagenAdjunta] = useState<File | null>(null);
+  const [imagenVista, setImagenVista] = useState<string | null>(null);
 
   const finHiloRef = useRef<HTMLDivElement>(null);
   const archivoInputRef = useRef<HTMLInputElement>(null);
@@ -212,8 +227,12 @@ export default function Chat() {
     }
   });
 
-  useEffect(() => {
+  function desplazarAlFinal() {
     finHiloRef.current?.scrollIntoView({ block: "end" });
+  }
+
+  useEffect(() => {
+    desplazarAlFinal();
   }, [mensajes]);
 
   function seleccionar(id: string) {
@@ -371,7 +390,7 @@ export default function Chat() {
                       const emoji = m.wa_message_id ? reacciones[m.wa_message_id] : undefined;
                       return (
                         <div key={m.id} className={`chat-burbuja chat-burbuja-${m.direccion}`}>
-                          {contenidoMensaje(m)}
+                          {contenidoMensaje(m, desplazarAlFinal, setImagenVista)}
                           {emoji && <span className="chat-burbuja-reaccion">{emoji}</span>}
                           <div className="chat-burbuja-remate">
                             <span>{formatearHora(m.creado_en)}</span>
@@ -457,6 +476,15 @@ export default function Chat() {
           </>
         )}
       </section>
+
+      {imagenVista && (
+        <div className="chat-visor" onClick={() => setImagenVista(null)}>
+          <button type="button" className="chat-visor-cerrar" onClick={() => setImagenVista(null)}>
+            <IconoXMarca />
+          </button>
+          <img src={imagenVista} alt="" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
     </div>
   );
 }
