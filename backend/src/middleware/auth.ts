@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import jwt from "jsonwebtoken";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { getSupabase } from "../lib/supabase.js";
 import { env } from "../config/env.js";
 
@@ -22,28 +22,32 @@ function extraerToken(req: Request): string | null {
 }
 
 /**
- * Valida el JWT de Supabase localmente (firma HS256 con el JWT secret del
- * proyecto) en vez de pedirle a auth.getUser() que lo verifique por red:
- * ese round-trip extra, sumado al de requireAccesoSucursal, era la mayor
- * parte de la latencia en cada request autenticada.
+ * El proyecto firma sesiones con las JWT Signing Keys nuevas de Supabase
+ * (asimétricas, ES256), no con el legacy JWT secret (HS256). createRemoteJWKSet
+ * cachea la clave pública en memoria del proceso: solo la primera verificación
+ * pega a la red, el resto es verificación local. Eso evita el round-trip que
+ * antes hacía auth.getUser() en cada request autenticada.
  */
-function verificarTokenLocal(token: string): UsuarioSesion | null {
-  if (!env.SUPABASE_JWT_SECRET) return null;
+const JWKS = env.SUPABASE_URL
+  ? createRemoteJWKSet(new URL(`${env.SUPABASE_URL}/auth/v1/.well-known/jwks.json`))
+  : null;
+
+async function verificarTokenLocal(token: string): Promise<UsuarioSesion | null> {
+  if (!JWKS) return null;
   try {
-    const payload = jwt.verify(token, env.SUPABASE_JWT_SECRET) as jwt.JwtPayload;
-    if (!payload.sub) return null;
+    const { payload } = await jwtVerify(token, JWKS);
+    if (typeof payload.sub !== "string") return null;
     return {
       id: payload.sub,
       email: typeof payload.email === "string" ? payload.email : undefined,
       app_metadata: (payload.app_metadata as Record<string, unknown> | undefined) ?? undefined,
     };
-  } catch (err) {
-    console.warn(`JWT local verify falló (${err instanceof Error ? err.message : err}), cae a auth.getUser()`);
+  } catch {
     return null;
   }
 }
 
-/** Round-trip contra Supabase Auth: sin JWT secret configurado, o el verify local falló. */
+/** Round-trip contra Supabase Auth: sin JWKS disponible, o el verify local falló. */
 async function verificarTokenRemoto(token: string): Promise<UsuarioSesion | null> {
   const { data, error } = await getSupabase().auth.getUser(token);
   if (error || !data.user) return null;
@@ -51,7 +55,7 @@ async function verificarTokenRemoto(token: string): Promise<UsuarioSesion | null
 }
 
 async function resolverUsuario(token: string): Promise<UsuarioSesion | null> {
-  const local = verificarTokenLocal(token);
+  const local = await verificarTokenLocal(token);
   if (local) return local;
   return verificarTokenRemoto(token);
 }
