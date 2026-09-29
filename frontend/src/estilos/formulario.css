@@ -1051,6 +1051,9 @@
   color: var(--gris-500);
 }
 .chat-burbuja-error { color: #d92d20; }
+.chat-burbuja-estado { display: inline-flex; align-items: center; color: var(--gris-500); }
+.chat-burbuja-estado svg { width: 15px; height: 11px; }
+.chat-burbuja-estado-leido { color: #53bdeb; }
 .chat-burbuja-reaccion {
   position: absolute;
   bottom: -10px;
@@ -1155,6 +1158,8 @@
 }
 .chat-media-video { display: block; max-width: 260px; border-radius: 6px; }
 .chat-media-audio { display: block; width: 240px; }
+.chat-media-sticker { display: block; width: 120px; height: 120px; object-fit: contain; }
+.chat-burbuja:has(.chat-media-sticker) { background: none; box-shadow: none; padding: 0; }
 .chat-media-documento {
   display: flex;
   align-items: center;

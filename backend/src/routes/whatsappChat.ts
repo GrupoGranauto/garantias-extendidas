@@ -44,7 +44,9 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, re
     const resueltas = req.query.resueltas === "true";
     const { data, error } = await getSupabase()
       .from("whatsapp_conversaciones")
-      .select("id, wa_id, nombre_contacto, ultimo_mensaje_en, no_leidos, resuelto, creado_en")
+      .select(
+        "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, no_leidos, resuelto, creado_en",
+      )
       .eq("sucursal_id", req.params.id)
       .eq("resuelto", resueltas)
       .order("ultimo_mensaje_en", { ascending: false, nullsFirst: false });
@@ -133,7 +135,11 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
 
     await supabase
       .from("whatsapp_conversaciones")
-      .update({ ultimo_mensaje_en: new Date().toISOString() })
+      .update({
+        ultimo_mensaje_en: new Date().toISOString(),
+        ultimo_mensaje_tipo: "texto",
+        ultimo_mensaje_texto: parsed.data.texto,
+      })
       .eq("id", conversacion.id);
 
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
@@ -214,7 +220,11 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
 
     await supabase
       .from("whatsapp_conversaciones")
-      .update({ ultimo_mensaje_en: new Date().toISOString() })
+      .update({
+        ultimo_mensaje_en: new Date().toISOString(),
+        ultimo_mensaje_tipo: "imagen",
+        ultimo_mensaje_texto: parsed.data.caption ?? null,
+      })
       .eq("id", conversacion.id);
 
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });

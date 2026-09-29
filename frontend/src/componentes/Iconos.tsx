@@ -270,6 +270,23 @@ export function IconoXMarca({ className }: IconoProps) {
   );
 }
 
+export function IconoCheck({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 16 12" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 6.5 5 10.5 15 1" />
+    </svg>
+  );
+}
+
+export function IconoDobleCheck({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 20 12" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 6.5 5 10.5 15 1" />
+      <path d="M6 6.5 10 10.5 20 1" />
+    </svg>
+  );
+}
+
 export function IconoSalir({ className }: IconoProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>

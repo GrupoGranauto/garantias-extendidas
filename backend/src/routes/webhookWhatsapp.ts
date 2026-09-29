@@ -143,7 +143,13 @@ async function intentarDescargarMedia(mediaId: string, config: ConfigSucursal) {
   }
 }
 
-async function obtenerOCrearConversacion(sucursalId: string, waId: string, nombreContacto?: string) {
+async function obtenerOCrearConversacion(
+  sucursalId: string,
+  waId: string,
+  nombreContacto: string | undefined,
+  tipoPreview: string,
+  textoPreview: string | null,
+) {
   const supabase = getSupabase();
 
   const { data: existente } = await supabase
@@ -157,6 +163,8 @@ async function obtenerOCrearConversacion(sucursalId: string, waId: string, nombr
     const cambios: Record<string, unknown> = {
       ultimo_mensaje_en: new Date().toISOString(),
       no_leidos: existente.no_leidos + 1,
+      ultimo_mensaje_tipo: tipoPreview,
+      ultimo_mensaje_texto: textoPreview,
     };
     if (nombreContacto) cambios.nombre_contacto = nombreContacto;
 
@@ -172,6 +180,8 @@ async function obtenerOCrearConversacion(sucursalId: string, waId: string, nombr
       nombre_contacto: nombreContacto ?? null,
       ultimo_mensaje_en: new Date().toISOString(),
       no_leidos: 1,
+      ultimo_mensaje_tipo: tipoPreview,
+      ultimo_mensaje_texto: textoPreview,
     })
     .select("id")
     .single();
@@ -181,10 +191,7 @@ async function obtenerOCrearConversacion(sucursalId: string, waId: string, nombr
 }
 
 async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucursal, nombreContacto?: string) {
-  const conversacionId = await obtenerOCrearConversacion(config.sucursal_id, msg.from, nombreContacto);
-
   const fila: Record<string, unknown> = {
-    conversacion_id: conversacionId,
     sucursal_id: config.sucursal_id,
     wa_message_id: msg.id,
     direccion: "entrante",
@@ -244,6 +251,15 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
       fila.tipo = "sistema";
       fila.texto = JSON.stringify(msg);
   }
+
+  const conversacionId = await obtenerOCrearConversacion(
+    config.sucursal_id,
+    msg.from,
+    nombreContacto,
+    fila.tipo as string,
+    (fila.texto as string | null | undefined) ?? null,
+  );
+  fila.conversacion_id = conversacionId;
 
   const { error } = await getSupabase().from("whatsapp_mensajes").insert(fila);
   if (error) throw new Error(error.message);

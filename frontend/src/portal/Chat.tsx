@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
-import { IconoClip, IconoDocumento, IconoXMarca } from "../componentes/Iconos";
+import { IconoCheck, IconoClip, IconoDobleCheck, IconoDocumento, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 import { useEventosChat } from "./useEventosChat";
@@ -11,6 +11,8 @@ type Conversacion = {
   wa_id: string;
   nombre_contacto: string | null;
   ultimo_mensaje_en: string | null;
+  ultimo_mensaje_tipo: string | null;
+  ultimo_mensaje_texto: string | null;
   no_leidos: number;
   resuelto: boolean;
   creado_en: string;
@@ -46,14 +48,27 @@ function formatearHora(valor: string | null): string {
   return new Date(valor).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
 }
 
+const ETIQUETAS_TIPO: Record<string, string> = {
+  imagen: "📷 Foto",
+  video: "🎥 Video",
+  audio: "🎤 Audio",
+  documento: "📄 Documento",
+  sticker: "Sticker",
+  ubicacion: "📍 Ubicación",
+  contacto: "👤 Contacto",
+  reaccion: "Reaccionó",
+  sistema: "Mensaje",
+};
+
 function textoPreview(m: Mensaje): string {
-  const etiquetas: Record<string, string> = {
-    ubicacion: "📍 Ubicación",
-    contacto: "👤 Contacto",
-    reaccion: "Reaccionó",
-    sistema: "Mensaje",
-  };
-  return etiquetas[m.tipo] ?? m.texto ?? m.tipo;
+  return ETIQUETAS_TIPO[m.tipo] ?? m.texto ?? m.tipo;
+}
+
+/** Línea de previsualización en el listado de conversaciones (como el desktop): texto si es texto, ícono + etiqueta si no. */
+function previewConversacion(c: Conversacion): string {
+  if (!c.ultimo_mensaje_tipo) return c.wa_id;
+  if (c.ultimo_mensaje_tipo === "texto") return c.ultimo_mensaje_texto || "";
+  return ETIQUETAS_TIPO[c.ultimo_mensaje_tipo] ?? c.ultimo_mensaje_tipo;
 }
 
 /** Del listado plano de mensajes, arma un mapa wa_message_id -> emoji con la última reacción de cada uno (vacío = se quitó). */
@@ -86,6 +101,9 @@ function contenidoMensaje(m: Mensaje): ReactNode {
   }
   if (m.tipo === "audio" && m.media_url) {
     return <audio src={m.media_url} controls className="chat-media-audio" />;
+  }
+  if (m.tipo === "sticker" && m.media_url) {
+    return <img src={m.media_url} alt="" className="chat-media-sticker" />;
   }
   if (m.tipo === "documento" && m.media_url) {
     return (
@@ -308,7 +326,7 @@ export default function Chat() {
                   <span className="chat-item-hora">{formatearHora(c.ultimo_mensaje_en)}</span>
                 </span>
                 <span className="chat-item-fila">
-                  <span className="chat-item-telefono">{c.wa_id}</span>
+                  <span className="chat-item-telefono">{previewConversacion(c)}</span>
                   {c.no_leidos > 0 && <span className="chat-item-badge">{c.no_leidos}</span>}
                 </span>
               </span>
@@ -360,6 +378,21 @@ export default function Chat() {
                             {m.direccion === "saliente" && m.estado === "fallido" && (
                               <span className="chat-burbuja-error" title={m.error_detalle ?? "Error al enviar"}>
                                 ⚠
+                              </span>
+                            )}
+                            {m.direccion === "saliente" && m.estado === "enviado" && (
+                              <span className="chat-burbuja-estado" title="Enviado">
+                                <IconoCheck />
+                              </span>
+                            )}
+                            {m.direccion === "saliente" && m.estado === "entregado" && (
+                              <span className="chat-burbuja-estado" title="Entregado">
+                                <IconoDobleCheck />
+                              </span>
+                            )}
+                            {m.direccion === "saliente" && m.estado === "leido" && (
+                              <span className="chat-burbuja-estado chat-burbuja-estado-leido" title="Leído">
+                                <IconoDobleCheck />
                               </span>
                             )}
                           </div>
