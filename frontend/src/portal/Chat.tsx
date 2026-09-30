@@ -157,6 +157,25 @@ function textoPreview(m: Mensaje): string {
   return ETIQUETAS_TIPO[m.tipo] ?? m.texto ?? m.tipo;
 }
 
+/** *negrita*, _cursiva_, ~tachado~, ```monoespaciado``` — el mismo formato que WhatsApp interpreta en el teléfono del cliente. */
+function formatoWhatsApp(texto: string): ReactNode {
+  const partes: ReactNode[] = [];
+  const regex = /```([^`]+)```|\*([^*\n]+)\*|_([^_\n]+)_|~([^~\n]+)~/g;
+  let ultimo = 0;
+  let clave = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(texto))) {
+    if (match.index > ultimo) partes.push(texto.slice(ultimo, match.index));
+    if (match[1] !== undefined) partes.push(<code key={clave++}>{match[1]}</code>);
+    else if (match[2] !== undefined) partes.push(<strong key={clave++}>{match[2]}</strong>);
+    else if (match[3] !== undefined) partes.push(<em key={clave++}>{match[3]}</em>);
+    else if (match[4] !== undefined) partes.push(<del key={clave++}>{match[4]}</del>);
+    ultimo = regex.lastIndex;
+  }
+  if (ultimo < texto.length) partes.push(texto.slice(ultimo));
+  return partes;
+}
+
 /** Línea de previsualización en el listado de conversaciones (como el desktop): texto si es texto, ícono + etiqueta si no. */
 function previewConversacion(c: Conversacion): string {
   if (!c.ultimo_mensaje_tipo) return c.wa_id;
@@ -186,7 +205,7 @@ function contenidoMensaje(m: Mensaje, onMediaLoad: () => void, onAbrirImagen: (u
           onLoad={onMediaLoad}
           onClick={() => onAbrirImagen(m.media_url!)}
         />
-        {m.texto && <div className="chat-burbuja-texto">{m.texto}</div>}
+        {m.texto && <div className="chat-burbuja-texto">{formatoWhatsApp(m.texto)}</div>}
       </>
     );
   }
@@ -194,7 +213,7 @@ function contenidoMensaje(m: Mensaje, onMediaLoad: () => void, onAbrirImagen: (u
     return (
       <>
         <video src={m.media_url} controls className="chat-media-video" onLoadedMetadata={onMediaLoad} />
-        {m.texto && <div className="chat-burbuja-texto">{m.texto}</div>}
+        {m.texto && <div className="chat-burbuja-texto">{formatoWhatsApp(m.texto)}</div>}
       </>
     );
   }
@@ -220,7 +239,7 @@ function contenidoMensaje(m: Mensaje, onMediaLoad: () => void, onAbrirImagen: (u
       </a>
     );
   }
-  return <div className="chat-burbuja-texto">{textoPreview(m)}</div>;
+  return <div className="chat-burbuja-texto">{m.tipo === "texto" && m.texto ? formatoWhatsApp(m.texto) : textoPreview(m)}</div>;
 }
 
 /** Chat de WhatsApp de la sucursal: conversaciones a la izquierda, hilo a la derecha. Tiempo real por SSE. */

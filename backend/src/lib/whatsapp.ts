@@ -137,13 +137,16 @@ export async function enviarMensaje(
     cuerpo.document = { link: envio.url, filename: envio.nombreArchivo, caption: envio.caption };
   } else {
     cuerpo.type = "template";
-    cuerpo.template = {
-      name: envio.nombreTecnico,
-      language: { code: envio.idioma },
-      components: envio.parametrosBody.length
-        ? [{ type: "body", parameters: envio.parametrosBody.map((texto) => ({ type: "text", text: texto })) }]
-        : [],
-    };
+    // Sin variables, Meta exige que "components" ni siquiera venga en el
+    // cuerpo — un arreglo vacío lo rechaza con (#131008) Required parameter
+    // is missing.
+    cuerpo.template = envio.parametrosBody.length
+      ? {
+          name: envio.nombreTecnico,
+          language: { code: envio.idioma },
+          components: [{ type: "body", parameters: envio.parametrosBody.map((texto) => ({ type: "text", text: texto })) }],
+        }
+      : { name: envio.nombreTecnico, language: { code: envio.idioma } };
   }
 
   const res = await fetch(`${GRAPH_API}/${config.phone_number_id}/messages`, {
