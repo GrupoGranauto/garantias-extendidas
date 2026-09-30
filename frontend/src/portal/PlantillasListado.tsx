@@ -182,6 +182,11 @@ export default function PlantillasListado() {
                           </button>
                         </>
                       )}
+                      {p.estado === "aprobada" && (
+                        <Link to={`/plantillas/${p.id}/editar`} className="boton-tenue">
+                          Variables
+                        </Link>
+                      )}
                       <button
                         type="button"
                         className="boton-tenue boton-peligro"

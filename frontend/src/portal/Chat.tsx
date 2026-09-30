@@ -15,6 +15,7 @@ type Conversacion = {
   ultimo_mensaje_texto: string | null;
   ultimo_mensaje_direccion: "entrante" | "saliente" | null;
   ultimo_mensaje_estado: string | null;
+  ultimo_mensaje_cliente_en: string | null;
   no_leidos: number;
   resuelto: boolean;
   creado_en: string;
@@ -36,6 +37,8 @@ type Mensaje = {
   creado_en: string;
 };
 
+type PlantillaDisponible = { id: string; nombre: string; nombre_tecnico: string; idioma: string; preview: string };
+
 function etiquetaConversacion(c: Conversacion): string {
   return c.nombre_contacto?.trim() || c.wa_id;
 }
@@ -48,6 +51,25 @@ function iniciales(texto: string): string {
 function formatearHora(valor: string | null): string {
   if (!valor) return "";
   return new Date(valor).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+}
+
+const VENTANA_24H_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Ventana de 24h de WhatsApp: solo se puede mandar texto/imagen libre dentro
+ * de las 24h desde el último mensaje del CLIENTE. Pasadas, solo se reabre
+ * si el cliente vuelve a escribir — no por tiempo — o se manda una plantilla.
+ */
+function estadoVentana24h(ultimoMensajeClienteEn: string | null): { cerrada: boolean; restanteMs: number } {
+  if (!ultimoMensajeClienteEn) return { cerrada: true, restanteMs: 0 };
+  const restanteMs = VENTANA_24H_MS - (Date.now() - new Date(ultimoMensajeClienteEn).getTime());
+  return { cerrada: restanteMs <= 0, restanteMs };
+}
+
+function formatearRestante(ms: number): string {
+  const horas = Math.floor(ms / 3600000);
+  const minutos = Math.floor((ms % 3600000) / 60000);
+  return `${horas}h ${minutos}m`;
 }
 
 function diasDesdeHoy(fecha: Date): number {
@@ -208,7 +230,8 @@ export default function Chat() {
 
   const [conversaciones, setConversaciones] = useState<Conversacion[] | null>(null);
   const [errorLista, setErrorLista] = useState<string | null>(null);
-  const [vista, setVista] = useState<"activas" | "resueltas">("activas");
+  const [vista, setVista] = useState<"activas" | "no_leidos" | "resueltas">("activas");
+  const [busqueda, setBusqueda] = useState("");
   const [resolviendo, setResolviendo] = useState(false);
   const [seleccionadaId, setSeleccionadaId] = useState<string | null>(null);
   const seleccionadaIdRef = useRef<string | null>(null);
@@ -222,13 +245,24 @@ export default function Chat() {
   const [borrador, setBorrador] = useState("");
   const [imagenAdjunta, setImagenAdjunta] = useState<File | null>(null);
   const [imagenVista, setImagenVista] = useState<string | null>(null);
+  const [plantillas, setPlantillas] = useState<PlantillaDisponible[] | null>(null);
+  const [enviandoPlantilla, setEnviandoPlantilla] = useState(false);
+  const [, forzarRecalculoVentana] = useState(0);
+
+  useEffect(() => {
+    const intervalo = setInterval(() => forzarRecalculoVentana((n) => n + 1), 60000);
+    return () => clearInterval(intervalo);
+  }, []);
 
   const finHiloRef = useRef<HTMLDivElement>(null);
   const archivoInputRef = useRef<HTMLInputElement>(null);
 
   function cargarConversaciones() {
     const resueltas = vista === "resueltas" ? "true" : "false";
-    apiFetch<Conversacion[]>(`/api/admin/sucursales/${sucursalId}/whatsapp/conversaciones?resueltas=${resueltas}`)
+    const noLeidos = vista === "no_leidos" ? "&no_leidos=true" : "";
+    apiFetch<Conversacion[]>(
+      `/api/admin/sucursales/${sucursalId}/whatsapp/conversaciones?resueltas=${resueltas}${noLeidos}`,
+    )
       .then((lista) => {
         setConversaciones(lista);
         setErrorLista(null);
@@ -242,13 +276,19 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sucursalId, vista]);
 
+  useEffect(() => {
+    apiFetch<PlantillaDisponible[]>(`/api/admin/sucursales/${sucursalId}/whatsapp/plantillas-disponibles`)
+      .then(setPlantillas)
+      .catch(() => setPlantillas([]));
+  }, [sucursalId]);
+
   async function alternarResuelto() {
     if (!seleccionadaId) return;
     setResolviendo(true);
     try {
       await apiFetch(`/api/admin/sucursales/${sucursalId}/whatsapp/conversaciones/${seleccionadaId}/resolver`, {
         method: "POST",
-        body: JSON.stringify({ resuelto: vista === "activas" }),
+        body: JSON.stringify({ resuelto: vista !== "resueltas" }),
       });
       setSeleccionadaId(null);
       cargarConversaciones();
@@ -319,9 +359,49 @@ export default function Chat() {
     });
   }
 
+  async function enviarPlantilla(plantilla: PlantillaDisponible) {
+    if (!seleccionadaId) return;
+    setBorrador("");
+
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimista: Mensaje = {
+      id: tempId,
+      wa_message_id: null,
+      direccion: "saliente",
+      tipo: "texto",
+      texto: `📄 ${plantilla.nombre}`,
+      media_url: null,
+      media_mime_type: null,
+      media_nombre_archivo: null,
+      reaccion_emoji: null,
+      reaccion_a_wa_message_id: null,
+      estado: "enviando",
+      error_detalle: null,
+      creado_en: new Date().toISOString(),
+    };
+    setMensajes((prev) => [...(prev ?? []), optimista]);
+    setEnviandoPlantilla(true);
+
+    try {
+      const mensaje = await apiFetch<Mensaje>(
+        `/api/admin/sucursales/${sucursalId}/whatsapp/conversaciones/${seleccionadaId}/plantilla`,
+        { method: "POST", body: JSON.stringify({ plantilla_id: plantilla.id }) },
+      );
+      setMensajes((prev) => (prev ?? []).map((m) => (m.id === tempId ? mensaje : m)));
+      cargarConversaciones();
+    } catch (err) {
+      const detalle = err instanceof Error ? err.message : "No se pudo enviar la plantilla.";
+      setMensajes((prev) => (prev ?? []).map((m) => (m.id === tempId ? { ...m, estado: "fallido", error_detalle: detalle } : m)));
+      setErrorHilo(detalle);
+    } finally {
+      setEnviandoPlantilla(false);
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!seleccionadaId) return;
+    if (borrador.startsWith("/")) return; // se manda desde el picker de plantillas, no como texto
     const texto = borrador.trim();
     const archivo = imagenAdjunta;
     if (!texto && !archivo) return;
@@ -380,12 +460,31 @@ export default function Chat() {
   }
 
   const seleccionada = conversaciones?.find((c) => c.id === seleccionadaId) ?? null;
+  const ventana = estadoVentana24h(seleccionada?.ultimo_mensaje_cliente_en ?? null);
+
+  const mostrarPickerPlantillas = borrador.startsWith("/");
+  const plantillasFiltradas = mostrarPickerPlantillas
+    ? (plantillas ?? []).filter((p) => p.nombre.toLowerCase().includes(borrador.slice(1).trim().toLowerCase()))
+    : [];
+
+  const conversacionesFiltradas = (conversaciones ?? []).filter((c) => {
+    const texto = busqueda.trim().toLowerCase();
+    if (!texto) return true;
+    return etiquetaConversacion(c).toLowerCase().includes(texto) || c.wa_id.includes(texto);
+  });
+  const totalNoLeidos = conversacionesFiltradas.reduce((suma, c) => suma + (c.no_leidos > 0 ? 1 : 0), 0);
 
   return (
     <div className="chat-inbox">
       <aside className="chat-lista">
         <header className="chat-lista-cabecera">
-          <h1>Chat</h1>
+          <input
+            type="text"
+            className="chat-buscador"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Buscar por nombre o teléfono…"
+          />
           <div className="chat-tabs">
             <button
               type="button"
@@ -396,13 +495,27 @@ export default function Chat() {
             </button>
             <button
               type="button"
+              className={`chat-tab${vista === "no_leidos" ? " chat-tab-activo" : ""}`}
+              onClick={() => setVista("no_leidos")}
+            >
+              No leídos
+            </button>
+            <button
+              type="button"
               className={`chat-tab${vista === "resueltas" ? " chat-tab-activo" : ""}`}
               onClick={() => setVista("resueltas")}
             >
-              Resueltas
+              Resueltos
             </button>
           </div>
         </header>
+
+        {conversaciones && conversaciones.length > 0 && (
+          <div className="chat-lista-contador">
+            <span>{totalNoLeidos} no leídos</span>
+            <span>{conversacionesFiltradas.length} conversaciones</span>
+          </div>
+        )}
 
         {errorLista && (
           <div className="aviso-formulario">
@@ -420,7 +533,7 @@ export default function Chat() {
         )}
 
         <div className="chat-lista-items">
-          {conversaciones?.map((c) => (
+          {conversacionesFiltradas.map((c) => (
             <button
               key={c.id}
               type="button"
@@ -462,9 +575,13 @@ export default function Chat() {
                 <p>{seleccionada.wa_id}</p>
               </div>
               <button type="button" className="boton-tenue" onClick={alternarResuelto} disabled={resolviendo}>
-                {resolviendo ? "Guardando…" : vista === "activas" ? "Resolver" : "Reabrir"}
+                {resolviendo ? "Guardando…" : vista === "resueltas" ? "Reabrir" : "Resolver"}
               </button>
             </header>
+
+            {!ventana.cerrada && (
+              <div className="chat-ventana-24h">Ventana de atención activa ({formatearRestante(ventana.restanteMs)} restantes)</div>
+            )}
 
             {errorHilo && (
               <div className="aviso-formulario">
@@ -512,6 +629,38 @@ export default function Chat() {
             </div>
 
             <form className="chat-composer" onSubmit={onSubmit}>
+              {ventana.cerrada && (
+                <div className="chat-ventana-cerrada">
+                  <strong>Ventana de 24h cerrada.</strong>
+                  <span>
+                    {etiquetaConversacion(seleccionada)} debe escribirte de nuevo para reabrirla — no se reabre por
+                    tiempo. Mientras tanto solo puedes mandar una plantilla aprobada: escribe "/" para elegir una.
+                  </span>
+                </div>
+              )}
+              {mostrarPickerPlantillas && (
+                <div className="chat-plantillas-picker">
+                  {plantillas === null && <div className="chat-plantillas-picker-vacio">Cargando plantillas…</div>}
+                  {plantillas !== null && plantillasFiltradas.length === 0 && (
+                    <div className="chat-plantillas-picker-vacio">Sin plantillas listas para enviar así.</div>
+                  )}
+                  {plantillasFiltradas.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className="chat-plantillas-picker-item"
+                      disabled={enviandoPlantilla}
+                      onClick={() => enviarPlantilla(p)}
+                    >
+                      <span className="chat-plantillas-picker-item-cabecera">
+                        <strong>{p.nombre}</strong>
+                        <span>{p.idioma}</span>
+                      </span>
+                      {p.preview && <span className="chat-plantillas-picker-item-preview">{p.preview}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
               {imagenAdjunta && (
                 <div className="chat-adjunto">
                   <img src={URL.createObjectURL(imagenAdjunta)} alt="" />
@@ -540,6 +689,7 @@ export default function Chat() {
                   type="button"
                   className="chat-adjunto-boton"
                   onClick={() => archivoInputRef.current?.click()}
+                  disabled={ventana.cerrada}
                   title="Adjuntar imagen"
                 >
                   <IconoClip />
@@ -548,9 +698,19 @@ export default function Chat() {
                   type="text"
                   value={borrador}
                   onChange={(e) => setBorrador(e.target.value)}
-                  placeholder={imagenAdjunta ? "Escribe un pie de foto (opcional)…" : "Escribe un mensaje…"}
+                  placeholder={
+                    ventana.cerrada
+                      ? 'Ventana cerrada — escribe "/" para mandar una plantilla…'
+                      : imagenAdjunta
+                        ? "Escribe un pie de foto (opcional)…"
+                        : "Escribe un mensaje…"
+                  }
                 />
-                <button type="submit" className="boton-guardar" disabled={!borrador.trim() && !imagenAdjunta}>
+                <button
+                  type="submit"
+                  className="boton-guardar"
+                  disabled={(!borrador.trim() && !imagenAdjunta) || (ventana.cerrada && !mostrarPickerPlantillas)}
+                >
                   Enviar
                 </button>
               </div>

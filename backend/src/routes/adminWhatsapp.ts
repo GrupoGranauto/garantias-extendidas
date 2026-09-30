@@ -14,6 +14,9 @@ const configSchema = z.object({
   phone_number_id: z.string().trim().min(1).nullable().optional(),
   numero_telefono: z.string().trim().nullable().optional(),
   webhook_verify_token: z.string().trim().nullable().optional(),
+  // Campo técnico de la entidad de Base de Datos de la sucursal que guarda
+  // el teléfono del contacto — para cruzarlo con el wa_id al mandar plantillas.
+  columna_telefono: z.string().trim().nullable().optional(),
   // Los secretos solo se mandan cuando se quieren reemplazar; si no vienen,
   // se conserva lo que ya había guardado.
   access_token: z.string().trim().min(1).optional(),
@@ -30,7 +33,9 @@ adminWhatsappRouter.get("/sucursales/:id/whatsapp", async (req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("whatsapp_config")
-      .select("id, app_id, waba_id, phone_number_id, numero_telefono, webhook_verify_token, activo, access_token, app_secret")
+      .select(
+        "id, app_id, waba_id, phone_number_id, numero_telefono, webhook_verify_token, columna_telefono, activo, access_token, app_secret",
+      )
       .eq("sucursal_id", req.params.id)
       .maybeSingle();
 

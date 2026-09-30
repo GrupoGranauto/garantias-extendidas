@@ -488,3 +488,71 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, n
     next(err);
   }
 });
+
+/* ============================================================
+   Mapeo de variables: qué columna de la Base de Datos de la
+   sucursal llena cada {{n}} del cuerpo, para mandarla sola desde
+   el chat con "/" sin armar el mensaje a mano.
+   ============================================================ */
+
+const variablesSchema = z.array(
+  z.object({
+    indice: z.number().int().min(1),
+    columna_tecnica: z.string().trim().min(1),
+  }),
+);
+
+adminPlantillasRouter.get("/sucursales/:id/plantillas/:pid/variables", async (req, res, next) => {
+  try {
+    const { data, error } = await getSupabase()
+      .from("whatsapp_plantilla_variables")
+      .select("indice, columna_tecnica")
+      .eq("plantilla_id", req.params.pid)
+      .order("indice");
+    if (error) throw new Error(error.message);
+    res.json(data ?? []);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Reemplaza el mapeo completo de la plantilla (borra y vuelve a insertar). */
+adminPlantillasRouter.put("/sucursales/:id/plantillas/:pid/variables", async (req, res, next) => {
+  const parsed = variablesSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos.", detalle: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const supabase = getSupabase();
+    const { data: plantilla, error: errorPlantilla } = await supabase
+      .from("whatsapp_plantillas")
+      .select("id")
+      .eq("sucursal_id", req.params.id)
+      .eq("id", req.params.pid)
+      .maybeSingle();
+    if (errorPlantilla) throw new Error(errorPlantilla.message);
+    if (!plantilla) {
+      res.status(404).json({ error: "Plantilla no encontrada." });
+      return;
+    }
+
+    const { error: errorDelete } = await supabase
+      .from("whatsapp_plantilla_variables")
+      .delete()
+      .eq("plantilla_id", plantilla.id);
+    if (errorDelete) throw new Error(errorDelete.message);
+
+    if (parsed.data.length > 0) {
+      const { error: errorInsert } = await supabase.from("whatsapp_plantilla_variables").insert(
+        parsed.data.map((v) => ({ plantilla_id: plantilla.id, indice: v.indice, columna_tecnica: v.columna_tecnica })),
+      );
+      if (errorInsert) throw new Error(errorInsert.message);
+    }
+
+    res.json({ guardado: true });
+  } catch (err) {
+    next(err);
+  }
+});

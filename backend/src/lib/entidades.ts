@@ -197,6 +197,35 @@ export async function listarRegistros(
   return { filas, total: conteo[0]?.total ?? 0 };
 }
 
+/**
+ * Busca la fila de la entidad cuyo campo de teléfono coincide con el wa_id,
+ * comparando solo los últimos 10 dígitos: así da igual el código de país, el
+ * "1" extra que a veces manda Meta, o si el dato está guardado con guiones,
+ * espacios o paréntesis.
+ */
+export async function buscarContactoPorTelefono(
+  subdominio: string,
+  tabla: string,
+  columnaTelefono: string,
+  columnasDeseadas: string[],
+  waId: string,
+): Promise<Record<string, unknown> | null> {
+  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
+  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  const colTelefono = exigirIdentificador(columnaTelefono, "Columna de teléfono");
+  const columnas = [...new Set(columnasDeseadas)].map((c) => exigirIdentificador(c, "Columna"));
+  if (columnas.length === 0) return null;
+
+  const { rows } = await getPool().query(
+    `SELECT ${columnas.map((c) => `"${c}"`).join(", ")} FROM "${esquema}"."${nombreTabla}" ` +
+      `WHERE "borrado_en" IS NULL ` +
+      `AND right(regexp_replace("${colTelefono}"::text, '\\D', '', 'g'), 10) = right(regexp_replace($1, '\\D', '', 'g'), 10) ` +
+      `ORDER BY "creado_en" DESC LIMIT 1;`,
+    [waId],
+  );
+  return rows[0] ?? null;
+}
+
 type ResultadoValores = { valores: Record<string, unknown> } | { error: string };
 
 /** Valida el cuerpo recibido contra la definición y convierte cada valor a su tipo. */

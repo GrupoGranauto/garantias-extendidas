@@ -12,6 +12,7 @@ export type ConfigSucursal = {
   access_token: string;
   app_secret: string | null;
   webhook_verify_token: string | null;
+  columna_telefono: string | null;
   activo: boolean;
 };
 
@@ -22,7 +23,7 @@ export type ConfigSucursal = {
 export async function configPorPhoneNumberId(phoneNumberId: string): Promise<ConfigSucursal | null> {
   const { data, error } = await getSupabase()
     .from("whatsapp_config")
-    .select("sucursal_id, waba_id, phone_number_id, access_token, app_secret, webhook_verify_token, activo")
+    .select("sucursal_id, waba_id, phone_number_id, access_token, app_secret, webhook_verify_token, columna_telefono, activo")
     .eq("phone_number_id", phoneNumberId)
     .maybeSingle();
 
@@ -34,7 +35,7 @@ export async function configPorPhoneNumberId(phoneNumberId: string): Promise<Con
 export async function configPorSucursalId(sucursalId: string): Promise<ConfigSucursal | null> {
   const { data, error } = await getSupabase()
     .from("whatsapp_config")
-    .select("sucursal_id, waba_id, phone_number_id, access_token, app_secret, webhook_verify_token, activo")
+    .select("sucursal_id, waba_id, phone_number_id, access_token, app_secret, webhook_verify_token, columna_telefono, activo")
     .eq("sucursal_id", sucursalId)
     .maybeSingle();
 
@@ -108,7 +109,8 @@ export async function descargarMedia(
 type EnvioTexto = { tipo: "texto"; texto: string };
 type EnvioImagen = { tipo: "imagen"; url: string; caption?: string };
 type EnvioDocumento = { tipo: "documento"; url: string; nombreArchivo: string; caption?: string };
-export type EnvioMensaje = EnvioTexto | EnvioImagen | EnvioDocumento;
+type EnvioPlantilla = { tipo: "plantilla"; nombreTecnico: string; idioma: string; parametrosBody: string[] };
+export type EnvioMensaje = EnvioTexto | EnvioImagen | EnvioDocumento | EnvioPlantilla;
 
 /**
  * Envía un mensaje saliente por WhatsApp. Fase 2 la usa desde la pantalla
@@ -130,9 +132,18 @@ export async function enviarMensaje(
   } else if (envio.tipo === "imagen") {
     cuerpo.type = "image";
     cuerpo.image = { link: envio.url, caption: envio.caption };
-  } else {
+  } else if (envio.tipo === "documento") {
     cuerpo.type = "document";
     cuerpo.document = { link: envio.url, filename: envio.nombreArchivo, caption: envio.caption };
+  } else {
+    cuerpo.type = "template";
+    cuerpo.template = {
+      name: envio.nombreTecnico,
+      language: { code: envio.idioma },
+      components: envio.parametrosBody.length
+        ? [{ type: "body", parameters: envio.parametrosBody.map((texto) => ({ type: "text", text: texto })) }]
+        : [],
+    };
   }
 
   const res = await fetch(`${GRAPH_API}/${config.phone_number_id}/messages`, {

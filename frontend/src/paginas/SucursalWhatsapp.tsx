@@ -12,10 +12,14 @@ type ConfigWhatsapp = {
   phone_number_id?: string | null;
   numero_telefono?: string | null;
   webhook_verify_token?: string | null;
+  columna_telefono?: string | null;
   activo?: boolean;
   tiene_access_token?: boolean;
   tiene_app_secret?: boolean;
 };
+
+type CampoEntidad = { nombre_tecnico: string; nombre_visible: string };
+type EntidadInfo = { configurado: boolean; campos?: CampoEntidad[] };
 
 const DOMINIO = "ge.autoinsights.mx";
 
@@ -29,6 +33,8 @@ export default function SucursalWhatsapp() {
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [numeroTelefono, setNumeroTelefono] = useState("");
   const [verifyToken, setVerifyToken] = useState("");
+  const [columnaTelefono, setColumnaTelefono] = useState("");
+  const [campos, setCampos] = useState<CampoEntidad[]>([]);
   const [activo, setActivo] = useState(true);
 
   const [accessToken, setAccessToken] = useState("");
@@ -49,6 +55,7 @@ export default function SucursalWhatsapp() {
           setPhoneNumberId(c.phone_number_id ?? "");
           setNumeroTelefono(c.numero_telefono ?? "");
           setVerifyToken(c.webhook_verify_token ?? "");
+          setColumnaTelefono(c.columna_telefono ?? "");
           setActivo(c.activo ?? true);
           setTieneAccessToken(Boolean(c.tiene_access_token));
           setTieneAppSecret(Boolean(c.tiene_app_secret));
@@ -56,6 +63,12 @@ export default function SucursalWhatsapp() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la configuración."))
       .finally(() => setCargando(false));
+
+    apiFetch<EntidadInfo>(`/api/admin/sucursales/${sucursal.id}/entidad`)
+      .then((info) => setCampos(info.configurado ? (info.campos ?? []) : []))
+      .catch(() => {
+        // sin Base de Datos configurada: el selector queda vacío, no es un error del formulario
+      });
   }, [sucursal.id]);
 
   async function onSubmit(e: FormEvent) {
@@ -77,6 +90,7 @@ export default function SucursalWhatsapp() {
         phone_number_id: phoneNumberId.trim(),
         numero_telefono: numeroTelefono.trim() || null,
         webhook_verify_token: verifyToken.trim() || null,
+        columna_telefono: columnaTelefono || null,
         activo,
       };
       // Los secretos solo se mandan si el usuario escribió uno nuevo
@@ -212,6 +226,33 @@ export default function SucursalWhatsapp() {
               placeholder="+52 662 000 0000"
             />
             <p className="campo-ayuda">Solo para identificarlo en el panel; no afecta el envío.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------- Plantillas automáticas ---------- */}
+      <section className="seccion">
+        <div className="seccion-info">
+          <h2>Plantillas automáticas</h2>
+          <p>Para mandar plantillas con "/" desde el chat, llenando sus variables solas.</p>
+        </div>
+
+        <div className="seccion-campos">
+          <div className="campo-formulario">
+            <label htmlFor="columna-telefono">Columna de teléfono</label>
+            <select id="columna-telefono" value={columnaTelefono} onChange={(e) => setColumnaTelefono(e.target.value)}>
+              <option value="">Sin configurar</option>
+              {campos.map((c) => (
+                <option key={c.nombre_tecnico} value={c.nombre_tecnico}>
+                  {c.nombre_visible}
+                </option>
+              ))}
+            </select>
+            <p className="campo-ayuda">
+              Cuál campo de la Base de Datos de esta sucursal guarda el teléfono del contacto — para cruzarlo con el
+              número de WhatsApp y llenar las variables de las plantillas automáticamente.
+              {campos.length === 0 && " Esta sucursal todavía no tiene Base de Datos configurada."}
+            </p>
           </div>
         </div>
       </section>

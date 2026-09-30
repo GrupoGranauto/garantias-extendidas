@@ -42,6 +42,10 @@ const MIME_POR_TIPO: Record<"imagen" | "video" | "documento", string> = {
   documento: "application/pdf",
 };
 
+type CampoEntidad = { nombre_tecnico: string; nombre_visible: string };
+type EntidadRegistros = { configurado: boolean; campos?: CampoEntidad[] };
+type VariableMapeo = { indice: number; columna_tecnica: string };
+
 type PlantillaDetalle = {
   id: string;
   nombre: string;
@@ -49,6 +53,7 @@ type PlantillaDetalle = {
   idioma: string;
   categoria: Categoria;
   componentes: Componentes;
+  estado: string;
 };
 
 /** Minúsculas, sin acentos, todo lo no alfanumérico colapsado a "_". Solo para comodidad al escribir. */
@@ -123,6 +128,12 @@ export default function PlantillaFormulario() {
   const [footerTexto, setFooterTexto] = useState("");
 
   const [botones, setBotones] = useState<BotonForm[]>([]);
+  const [estadoPlantilla, setEstadoPlantilla] = useState<string | null>(null);
+
+  const [campos, setCampos] = useState<CampoEntidad[]>([]);
+  const [variableColumnas, setVariableColumnas] = useState<Record<number, string>>({});
+  const [guardandoMapeo, setGuardandoMapeo] = useState(false);
+  const [mapeoGuardado, setMapeoGuardado] = useState(false);
 
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +156,7 @@ export default function PlantillaFormulario() {
         setNombreTecnico(p.nombre_tecnico);
         setIdioma(p.idioma);
         setCategoria(p.categoria);
+        setEstadoPlantilla(p.estado);
         const h = p.componentes.header;
         setHeaderTipo(h?.tipo ?? "ninguno");
         setHeaderTexto(h?.tipo === "texto" ? h.texto : "");
@@ -159,6 +171,27 @@ export default function PlantillaFormulario() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la plantilla."))
       .finally(() => setCargando(false));
+  }, [sucursalId, pid]);
+
+  useEffect(() => {
+    apiFetch<EntidadRegistros>(`/api/admin/sucursales/${sucursalId}/entidad/registros?limite=1`)
+      .then((info) => setCampos(info.configurado ? (info.campos ?? []) : []))
+      .catch(() => {
+        // sin Base de Datos configurada: el mapeo de variables queda vacío
+      });
+  }, [sucursalId]);
+
+  useEffect(() => {
+    if (!pid) return;
+    apiFetch<VariableMapeo[]>(`/api/admin/sucursales/${sucursalId}/plantillas/${pid}/variables`)
+      .then((filas) => {
+        const mapa: Record<number, string> = {};
+        for (const f of filas) mapa[f.indice] = f.columna_tecnica;
+        setVariableColumnas(mapa);
+      })
+      .catch(() => {
+        // sin mapeo guardado todavía
+      });
   }, [sucursalId, pid]);
 
   function cambiarNombre(valor: string) {
@@ -344,6 +377,28 @@ export default function PlantillaFormulario() {
       setError(err instanceof Error ? err.message : "No se pudo guardar la plantilla.");
     } finally {
       setEnviando(false);
+    }
+  }
+
+  async function guardarMapeoVariables() {
+    if (!pid) return;
+    setGuardandoMapeo(true);
+    setMapeoGuardado(false);
+    setError(null);
+    try {
+      await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/${pid}/variables`, {
+        method: "PUT",
+        body: JSON.stringify(
+          variables
+            .filter((v) => variableColumnas[v])
+            .map((v) => ({ indice: v, columna_tecnica: variableColumnas[v] })),
+        ),
+      });
+      setMapeoGuardado(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar el mapeo de variables.");
+    } finally {
+      setGuardandoMapeo(false);
     }
   }
 
@@ -575,6 +630,60 @@ export default function PlantillaFormulario() {
             </div>
           </section>
 
+          {/* ---------- Variables automáticas ---------- */}
+          {variables.length > 0 && (
+            <section className="seccion">
+              <div className="seccion-info">
+                <h2>Variables automáticas</h2>
+                <p>
+                  Qué columna de la Base de Datos llena cada variable al mandar esta plantilla con "/" desde el chat.
+                  Si falta alguna, esta plantilla no aparece ahí.
+                </p>
+              </div>
+
+              <div className="seccion-campos">
+                {!editando && <Alerta tipo="info">Guarda la plantilla primero para poder mapear sus variables.</Alerta>}
+                {editando && campos.length === 0 && (
+                  <Alerta tipo="info">Esta sucursal todavía no tiene Base de Datos configurada.</Alerta>
+                )}
+
+                {editando &&
+                  variables.map((v) => (
+                    <div className="fila-variable" key={v}>
+                      <span>{`{{${v}}}`}</span>
+                      <select
+                        value={variableColumnas[v] ?? ""}
+                        onChange={(e) =>
+                          setVariableColumnas((prev) => ({ ...prev, [v]: e.target.value }))
+                        }
+                      >
+                        <option value="">Sin asignar</option>
+                        {campos.map((c) => (
+                          <option key={c.nombre_tecnico} value={c.nombre_tecnico}>
+                            {c.nombre_visible}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+
+                {editando && (
+                  <div className="celda-acciones">
+                    <button
+                      type="button"
+                      className="boton-agregar-tenue"
+                      disabled={guardandoMapeo}
+                      onClick={guardarMapeoVariables}
+                    >
+                      {guardandoMapeo ? "Guardando…" : "Guardar mapeo"}
+                    </button>
+                    {mapeoGuardado && <Alerta tipo="ok">Mapeo guardado.</Alerta>}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* ---------- Pie ---------- */}
           <section className="seccion">
             <div className="seccion-info">
@@ -783,20 +892,33 @@ export default function PlantillaFormulario() {
       </div>
 
       <footer className="barra-acciones">
-        <p>
-          Los campos marcados con <span className="obligatorio">*</span> son obligatorios.
-        </p>
-        <div className="pagina-acciones">
-          <Link to="/plantillas" className="boton-secundario-claro">
-            Cancelar
-          </Link>
-          <button type="submit" className="boton-secundario-claro" disabled={enviando}>
-            {enviando ? "Guardando…" : "Guardar borrador"}
-          </button>
-          <button type="button" className="boton-guardar" disabled={enviando} onClick={() => guardar(true)}>
-            {enviando ? "Guardando…" : "Guardar y enviar a revisión"}
-          </button>
-        </div>
+        {editando && estadoPlantilla !== "borrador" && estadoPlantilla !== "rechazada" ? (
+          <>
+            <p>Esta plantilla ya fue enviada a Meta: su contenido no se puede volver a editar. Solo sus variables automáticas (arriba).</p>
+            <div className="pagina-acciones">
+              <Link to="/plantillas" className="boton-secundario-claro">
+                Volver
+              </Link>
+            </div>
+          </>
+        ) : (
+          <>
+            <p>
+              Los campos marcados con <span className="obligatorio">*</span> son obligatorios.
+            </p>
+            <div className="pagina-acciones">
+              <Link to="/plantillas" className="boton-secundario-claro">
+                Cancelar
+              </Link>
+              <button type="submit" className="boton-secundario-claro" disabled={enviando}>
+                {enviando ? "Guardando…" : "Guardar borrador"}
+              </button>
+              <button type="button" className="boton-guardar" disabled={enviando} onClick={() => guardar(true)}>
+                {enviando ? "Guardando…" : "Guardar y enviar a revisión"}
+              </button>
+            </div>
+          </>
+        )}
       </footer>
     </form>
   );

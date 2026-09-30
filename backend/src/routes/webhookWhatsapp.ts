@@ -185,6 +185,7 @@ async function obtenerOCrearConversacion(
   if (existente) {
     const cambios: Record<string, unknown> = {
       ultimo_mensaje_en: new Date().toISOString(),
+      ultimo_mensaje_cliente_en: new Date().toISOString(),
       no_leidos: existente.no_leidos + 1,
       ultimo_mensaje_tipo: tipoPreview,
       ultimo_mensaje_texto: textoPreview,
@@ -205,6 +206,7 @@ async function obtenerOCrearConversacion(
       wa_id: waId,
       nombre_contacto: nombreContacto ?? null,
       ultimo_mensaje_en: new Date().toISOString(),
+      ultimo_mensaje_cliente_en: new Date().toISOString(),
       no_leidos: 1,
       ultimo_mensaje_tipo: tipoPreview,
       ultimo_mensaje_texto: textoPreview,
