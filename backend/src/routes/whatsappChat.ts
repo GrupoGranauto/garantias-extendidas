@@ -103,13 +103,14 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
   }
 
   try {
-    const conversacion = await obtenerConversacion(req.params.id, req.params.conversacionId);
+    const [conversacion, config] = await Promise.all([
+      obtenerConversacion(req.params.id, req.params.conversacionId),
+      configPorSucursalId(req.params.id),
+    ]);
     if (!conversacion) {
       res.status(404).json({ error: "Conversación no encontrada." });
       return;
     }
-
-    const config = await configPorSucursalId(req.params.id);
     if (!config) {
       res.status(400).json({ error: "Esta sucursal no tiene WhatsApp configurado." });
       return;
@@ -118,32 +119,33 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
     const enviado = await enviarMensaje(config, conversacion.wa_id, { tipo: "texto", texto: parsed.data.texto });
 
     const supabase = getSupabase();
-    const { data: mensaje, error: errorInsert } = await supabase
-      .from("whatsapp_mensajes")
-      .insert({
-        conversacion_id: conversacion.id,
-        sucursal_id: req.params.id,
-        wa_message_id: enviado.id,
-        direccion: "saliente",
-        tipo: "texto",
-        texto: parsed.data.texto,
-        estado: "enviado",
-      })
-      .select("id, wa_message_id, direccion, tipo, texto, estado, creado_en")
-      .single();
+    const [{ data: mensaje, error: errorInsert }] = await Promise.all([
+      supabase
+        .from("whatsapp_mensajes")
+        .insert({
+          conversacion_id: conversacion.id,
+          sucursal_id: req.params.id,
+          wa_message_id: enviado.id,
+          direccion: "saliente",
+          tipo: "texto",
+          texto: parsed.data.texto,
+          estado: "enviado",
+        })
+        .select("id, wa_message_id, direccion, tipo, texto, estado, creado_en")
+        .single(),
+      supabase
+        .from("whatsapp_conversaciones")
+        .update({
+          ultimo_mensaje_en: new Date().toISOString(),
+          ultimo_mensaje_tipo: "texto",
+          ultimo_mensaje_texto: parsed.data.texto,
+          ultimo_mensaje_direccion: "saliente",
+          ultimo_mensaje_wa_message_id: enviado.id,
+          ultimo_mensaje_estado: "enviado",
+        })
+        .eq("id", conversacion.id),
+    ]);
     if (errorInsert) throw new Error(errorInsert.message);
-
-    await supabase
-      .from("whatsapp_conversaciones")
-      .update({
-        ultimo_mensaje_en: new Date().toISOString(),
-        ultimo_mensaje_tipo: "texto",
-        ultimo_mensaje_texto: parsed.data.texto,
-        ultimo_mensaje_direccion: "saliente",
-        ultimo_mensaje_wa_message_id: enviado.id,
-        ultimo_mensaje_estado: "enviado",
-      })
-      .eq("id", conversacion.id);
 
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
 
@@ -173,13 +175,14 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
   }
 
   try {
-    const conversacion = await obtenerConversacion(req.params.id, req.params.conversacionId);
+    const [conversacion, config] = await Promise.all([
+      obtenerConversacion(req.params.id, req.params.conversacionId),
+      configPorSucursalId(req.params.id),
+    ]);
     if (!conversacion) {
       res.status(404).json({ error: "Conversación no encontrada." });
       return;
     }
-
-    const config = await configPorSucursalId(req.params.id);
     if (!config) {
       res.status(400).json({ error: "Esta sucursal no tiene WhatsApp configurado." });
       return;
@@ -204,36 +207,37 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
       caption: parsed.data.caption,
     });
 
-    const { data: mensaje, error: errorInsert } = await supabase
-      .from("whatsapp_mensajes")
-      .insert({
-        conversacion_id: conversacion.id,
-        sucursal_id: req.params.id,
-        wa_message_id: enviado.id,
-        direccion: "saliente",
-        tipo: "imagen",
-        texto: parsed.data.caption ?? null,
-        media_url: publica.publicUrl,
-        media_mime_type: parsed.data.tipo_mime,
-        estado: "enviado",
-      })
-      .select(
-        "id, wa_message_id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, estado, creado_en",
-      )
-      .single();
+    const [{ data: mensaje, error: errorInsert }] = await Promise.all([
+      supabase
+        .from("whatsapp_mensajes")
+        .insert({
+          conversacion_id: conversacion.id,
+          sucursal_id: req.params.id,
+          wa_message_id: enviado.id,
+          direccion: "saliente",
+          tipo: "imagen",
+          texto: parsed.data.caption ?? null,
+          media_url: publica.publicUrl,
+          media_mime_type: parsed.data.tipo_mime,
+          estado: "enviado",
+        })
+        .select(
+          "id, wa_message_id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, estado, creado_en",
+        )
+        .single(),
+      supabase
+        .from("whatsapp_conversaciones")
+        .update({
+          ultimo_mensaje_en: new Date().toISOString(),
+          ultimo_mensaje_tipo: "imagen",
+          ultimo_mensaje_texto: parsed.data.caption ?? null,
+          ultimo_mensaje_direccion: "saliente",
+          ultimo_mensaje_wa_message_id: enviado.id,
+          ultimo_mensaje_estado: "enviado",
+        })
+        .eq("id", conversacion.id),
+    ]);
     if (errorInsert) throw new Error(errorInsert.message);
-
-    await supabase
-      .from("whatsapp_conversaciones")
-      .update({
-        ultimo_mensaje_en: new Date().toISOString(),
-        ultimo_mensaje_tipo: "imagen",
-        ultimo_mensaje_texto: parsed.data.caption ?? null,
-        ultimo_mensaje_direccion: "saliente",
-        ultimo_mensaje_wa_message_id: enviado.id,
-        ultimo_mensaje_estado: "enviado",
-      })
-      .eq("id", conversacion.id);
 
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
 
