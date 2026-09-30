@@ -50,6 +50,36 @@ function formatearHora(valor: string | null): string {
   return new Date(valor).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
 }
 
+function diasDesdeHoy(fecha: Date): number {
+  const hoy = new Date();
+  const inicioHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const inicioFecha = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate());
+  return Math.round((inicioHoy.getTime() - inicioFecha.getTime()) / 86400000);
+}
+
+function nombreDia(fecha: Date): string {
+  const texto = fecha.toLocaleDateString("es-MX", { weekday: "long" });
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+/** Etiqueta de día para separadores del hilo: "Hoy", "Ayer", nombre del día (última semana) o fecha completa. */
+function etiquetaFecha(valor: string): string {
+  const fecha = new Date(valor);
+  const diff = diasDesdeHoy(fecha);
+  if (diff <= 0) return "Hoy";
+  if (diff === 1) return "Ayer";
+  if (diff < 7) return nombreDia(fecha);
+  return fecha.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+/** Hora en la tarjeta de la lista: la hora si es de hoy, si no la misma etiqueta de día que el separador del hilo. */
+function formatearHoraLista(valor: string | null): string {
+  if (!valor) return "";
+  const fecha = new Date(valor);
+  if (diasDesdeHoy(fecha) <= 0) return fecha.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+  return etiquetaFecha(valor);
+}
+
 const ETIQUETAS_TIPO: Record<string, string> = {
   imagen: "📷 Foto",
   video: "🎥 Video",
@@ -401,7 +431,7 @@ export default function Chat() {
               <span className="chat-item-datos">
                 <span className="chat-item-fila">
                   <strong>{etiquetaConversacion(c)}</strong>
-                  <span className="chat-item-hora">{formatearHora(c.ultimo_mensaje_en)}</span>
+                  <span className="chat-item-hora">{formatearHoraLista(c.ultimo_mensaje_en)}</span>
                 </span>
                 <span className="chat-item-fila">
                   <span className="chat-item-telefono">
@@ -448,21 +478,35 @@ export default function Chat() {
               {mensajes &&
                 (() => {
                   const reacciones = mapaReacciones(mensajes);
-                  return mensajes
-                    .filter((m) => m.tipo !== "reaccion")
-                    .map((m) => {
-                      const emoji = m.wa_message_id ? reacciones[m.wa_message_id] : undefined;
-                      return (
-                        <div key={m.id} className={`chat-burbuja chat-burbuja-${m.direccion}`}>
-                          {contenidoMensaje(m, desplazarAlFinal, setImagenVista)}
-                          {emoji && <span className="chat-burbuja-reaccion">{emoji}</span>}
-                          <div className="chat-burbuja-remate">
-                            <span>{formatearHora(m.creado_en)}</span>
-                            {m.direccion === "saliente" && iconoEstadoEnvio(m.estado, m.error_detalle)}
-                          </div>
-                        </div>
+                  const visibles = mensajes.filter((m) => m.tipo !== "reaccion");
+                  const elementos: ReactNode[] = [];
+                  let diaAnterior: string | null = null;
+
+                  for (const m of visibles) {
+                    const dia = new Date(m.creado_en).toDateString();
+                    if (dia !== diaAnterior) {
+                      elementos.push(
+                        <div key={`fecha-${dia}`} className="chat-separador-fecha">
+                          <span>{etiquetaFecha(m.creado_en)}</span>
+                        </div>,
                       );
-                    });
+                      diaAnterior = dia;
+                    }
+
+                    const emoji = m.wa_message_id ? reacciones[m.wa_message_id] : undefined;
+                    elementos.push(
+                      <div key={m.id} className={`chat-burbuja chat-burbuja-${m.direccion}`}>
+                        {contenidoMensaje(m, desplazarAlFinal, setImagenVista)}
+                        {emoji && <span className="chat-burbuja-reaccion">{emoji}</span>}
+                        <div className="chat-burbuja-remate">
+                          <span>{formatearHora(m.creado_en)}</span>
+                          {m.direccion === "saliente" && iconoEstadoEnvio(m.estado, m.error_detalle)}
+                        </div>
+                      </div>,
+                    );
+                  }
+
+                  return elementos;
                 })()}
               <div ref={finHiloRef} />
             </div>
