@@ -42,12 +42,17 @@ app.use("/api/health", healthRouter);
 app.use("/api/publico", publicoRouter);
 app.use("/api/perfil", perfilRouter);
 app.use("/api/garantias", garantiasRouter);
+// Routers accesibles para cualquier usuario de la sucursal (asesor incluido):
+// van ANTES de adminRouter porque este aplica requireAdmin a todo /api/admin,
+// y si entrara primero bloquearía a los asesores en el chat y la base de datos.
+// Cada uno protege sus rutas con requireAccesoSucursal.
+app.use("/api/admin", entidadDatosRouter);
+app.use("/api/admin", whatsappChatRouter);
+// Routers solo-admin (adminRouter gatea con requireAdmin todo lo que le llegue).
 app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);
 app.use("/api/admin", adminPlantillasRouter);
 app.use("/api/admin", adminEntidadesRouter);
-app.use("/api/admin", entidadDatosRouter);
-app.use("/api/admin", whatsappChatRouter);
 // Ingesta externa: autenticada por API key propia de la sucursal, no por sesión.
 app.use("/api/entidades", entidadesIngestaRouter);
 
