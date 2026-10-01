@@ -5,6 +5,8 @@ import { exigirIdentificador, identificadorValido } from "./identificadores.js";
 export type TipoCampo = "texto" | "entero" | "decimal" | "booleano" | "fecha" | "fecha_hora" | "uuid";
 export type OrigenCampo = "api" | "back";
 
+export type OpcionCampo = { valor: string; color: string };
+
 export type CampoEntidad = {
   nombre_tecnico: string;
   nombre_visible: string;
@@ -16,6 +18,10 @@ export type CampoEntidad = {
   // pero no se muestra en el portal de la sucursal. No afecta el DDL ni la
   // ingesta; por omisión las columnas son visibles.
   visible?: boolean;
+  // Cómo se edita un campo 'back' de texto en la tabla: 'texto' o 'lista'.
+  editor_tipo?: "texto" | "lista";
+  // Opciones (etiquetas con color) cuando editor_tipo = 'lista'.
+  opciones?: OpcionCampo[];
 };
 
 // Columnas de auditoría que el generador siempre agrega; un campo no puede
@@ -360,6 +366,86 @@ export async function insertarRegistro(
   const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
   const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
   return insertarUno(getPool(), esquema, nombreTabla, valores);
+}
+
+/**
+ * Valida y convierte el cuerpo de una EDICIÓN de fila: solo acepta campos
+ * 'back' (los que captura la app), rechaza los 'api' (vienen del sync), y si un
+ * campo es lista exige que el valor esté entre sus opciones.
+ */
+export function construirValoresEdicion(
+  campos: CampoEntidad[],
+  cuerpo: Record<string, unknown>,
+): { valores: Record<string, unknown> } | { error: string } {
+  const porNombre = new Map(campos.map((c) => [c.nombre_tecnico, c]));
+  const valores: Record<string, unknown> = {};
+
+  for (const clave of Object.keys(cuerpo)) {
+    const campo = porNombre.get(clave);
+    if (!campo) return { error: `El campo '${clave}' no pertenece a la entidad.` };
+    if (campo.origen !== "back") {
+      return { error: `'${campo.nombre_visible}' viene de la fuente y no se puede editar aquí.` };
+    }
+
+    const crudo = cuerpo[clave];
+    if (crudo === null || crudo === undefined || crudo === "") {
+      valores[clave] = null;
+      continue;
+    }
+
+    const coercion = coercionar(campo, crudo);
+    if ("error" in coercion) return coercion;
+
+    if (campo.tipo === "texto" && campo.editor_tipo === "lista") {
+      const permitido = (campo.opciones ?? []).some((o) => o.valor === coercion.valor);
+      if (!permitido) {
+        return { error: `'${coercion.valor}' no está entre las opciones de '${campo.nombre_visible}'.` };
+      }
+    }
+
+    valores[clave] = coercion.valor;
+  }
+
+  if (Object.keys(valores).length === 0) return { error: "No hay nada que actualizar." };
+  return { valores };
+}
+
+/** Lee una sola columna de una fila (ej. el ejecutivo dueño, para permisos). */
+export async function leerColumnaDeFila(
+  subdominio: string,
+  tabla: string,
+  rowId: string,
+  columna: string,
+): Promise<unknown | undefined> {
+  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
+  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  const col = exigirIdentificador(columna, "Columna");
+  const { rows } = await getPool().query(
+    `SELECT "${col}" AS valor FROM "${esquema}"."${nombreTabla}" WHERE "id" = $1 AND "borrado_en" IS NULL;`,
+    [rowId],
+  );
+  return rows[0]?.valor;
+}
+
+/** Actualiza columnas de una fila. Devuelve true si tocó una fila. */
+export async function actualizarRegistro(
+  subdominio: string,
+  tabla: string,
+  rowId: string,
+  valores: Record<string, unknown>,
+): Promise<boolean> {
+  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
+  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  const columnas = Object.keys(valores).map((c) => exigirIdentificador(c, "Columna"));
+  if (columnas.length === 0) return false;
+
+  const asignaciones = columnas.map((c, i) => `"${c}" = $${i + 2}`).join(", ");
+  const { rowCount } = await getPool().query(
+    `UPDATE "${esquema}"."${nombreTabla}" SET ${asignaciones}, "actualizado_en" = now() ` +
+      `WHERE "id" = $1 AND "borrado_en" IS NULL;`,
+    [rowId, ...Object.values(valores)],
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 /** Inserta muchos registros en una sola transacción: todo el lote entra, o nada. */

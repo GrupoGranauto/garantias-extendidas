@@ -18,6 +18,7 @@ import SucursalEditLayout from "../paginas/SucursalEditLayout";
 import SucursalGeneral from "../paginas/SucursalGeneral";
 import SucursalWhatsapp from "../paginas/SucursalWhatsapp";
 import SucursalBaseDatos from "../paginas/SucursalBaseDatos";
+import SucursalCamposEditables from "../paginas/SucursalCamposEditables";
 import UsuariosNuevo from "../paginas/UsuariosNuevo";
 import UsuariosListado from "../paginas/UsuariosListado";
 import UsuarioEditar from "../paginas/UsuarioEditar";
@@ -139,6 +140,7 @@ export default function GuardiaSucursal() {
           <Route path="editar" element={<SucursalGeneral />} />
           <Route path="whatsapp" element={<SucursalWhatsapp />} />
           <Route path="base-datos" element={<SucursalBaseDatos />} />
+          <Route path="campos" element={<SucursalCamposEditables />} />
         </Route>
 
         {/* Igual que sucursales: no vive en el menú, solo se llega desde el listado */}

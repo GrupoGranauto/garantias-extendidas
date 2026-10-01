@@ -140,6 +140,104 @@ adminEntidadesRouter.get("/sucursales/:id/entidad/ejecutivos", async (req, res, 
   }
 });
 
+/* ============================================================
+   Campos editables: configura cómo se edita cada campo 'back' en
+   la tabla del portal (texto libre o lista de opciones con color).
+   Las fechas siempre usan calendario, no se configuran aquí.
+   ============================================================ */
+const opcionSchema = z.object({
+  valor: z.string().trim().min(1).max(80),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color hexadecimal de 6 dígitos."),
+});
+const campoEditableSchema = z.object({
+  nombre_tecnico: z.string().trim().min(1),
+  editor_tipo: z.enum(["texto", "lista"]),
+  opciones: z.array(opcionSchema).default([]),
+});
+const camposEditablesSchema = z.object({ campos: z.array(campoEditableSchema) });
+
+/** Config actual de los campos 'back' (los que captura la app, no el sync). */
+adminEntidadesRouter.get("/sucursales/:id/entidad/campos-editables", async (req, res, next) => {
+  try {
+    const supabase = getSupabase();
+    const { data: definicion, error } = await supabase
+      .from("entidad_definiciones")
+      .select("id")
+      .eq("sucursal_id", req.params.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!definicion) {
+      res.json({ configurado: false, campos: [] });
+      return;
+    }
+
+    const { data: campos, error: errorCampos } = await supabase
+      .from("entidad_campos")
+      .select("nombre_tecnico, nombre_visible, tipo, editor_tipo, opciones")
+      .eq("entidad_id", definicion.id)
+      .eq("origen", "back")
+      .order("posicion");
+    if (errorCampos) throw new Error(errorCampos.message);
+
+    res.json({ configurado: true, campos: campos ?? [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Guarda el editor (texto/lista + opciones) de los campos 'back'. */
+adminEntidadesRouter.put("/sucursales/:id/entidad/campos-editables", async (req, res, next) => {
+  const parsed = camposEditablesSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos.", detalle: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  try {
+    const supabase = getSupabase();
+    const { data: definicion, error } = await supabase
+      .from("entidad_definiciones")
+      .select("id")
+      .eq("sucursal_id", req.params.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!definicion) {
+      res.status(404).json({ error: "Esta sucursal aún no tiene una entidad definida." });
+      return;
+    }
+
+    const { data: existentes, error: errorEx } = await supabase
+      .from("entidad_campos")
+      .select("nombre_tecnico, tipo, origen")
+      .eq("entidad_id", definicion.id);
+    if (errorEx) throw new Error(errorEx.message);
+    const porNombre = new Map((existentes ?? []).map((c) => [c.nombre_tecnico, c]));
+
+    for (const campo of parsed.data.campos) {
+      const actual = porNombre.get(campo.nombre_tecnico);
+      if (!actual || actual.origen !== "back") {
+        res.status(400).json({ error: `'${campo.nombre_tecnico}' no es un campo editable de la app.` });
+        return;
+      }
+      if (campo.editor_tipo === "lista" && actual.tipo !== "texto") {
+        res.status(400).json({ error: `'${campo.nombre_tecnico}' no es de texto: no puede ser lista.` });
+        return;
+      }
+      const opciones = campo.editor_tipo === "lista" ? campo.opciones : [];
+      const { error: errorUpd } = await supabase
+        .from("entidad_campos")
+        .update({ editor_tipo: campo.editor_tipo, opciones })
+        .eq("entidad_id", definicion.id)
+        .eq("nombre_tecnico", campo.nombre_tecnico);
+      if (errorUpd) throw new Error(errorUpd.message);
+    }
+
+    res.json({ guardado: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** Crea la entidad (primera vez) o evoluciona su esquema (agrega/ajusta campos). */
 adminEntidadesRouter.put("/sucursales/:id/entidad", async (req, res, next) => {
   const parsed = definicionSchema.safeParse(req.body);

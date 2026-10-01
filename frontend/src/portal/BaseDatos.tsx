@@ -5,13 +5,20 @@ import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 
 type Tipo = "texto" | "entero" | "decimal" | "booleano" | "fecha" | "fecha_hora" | "uuid";
+type Origen = "api" | "back";
+type Opcion = { valor: string; color: string };
 
 type CampoServidor = {
   nombre_tecnico: string;
   nombre_visible: string;
   tipo: Tipo;
   posicion: number;
+  origen: Origen;
+  editor_tipo: "texto" | "lista";
+  opciones: Opcion[] | null;
 };
+
+type Fila = Record<string, unknown>;
 
 type Respuesta =
   | { configurado: false }
@@ -19,21 +26,35 @@ type Respuesta =
       configurado: true;
       nombre_visible: string;
       campos: CampoServidor[];
-      filas: Record<string, unknown>[];
+      filas: Fila[];
       total: number;
       pagina: number;
       limite: number;
     };
 
 function formatearValor(valor: unknown, tipo: Tipo): string {
-  if (valor === null || valor === undefined) return "—";
+  if (valor === null || valor === undefined || valor === "") return "—";
   if (tipo === "booleano") return valor ? "Sí" : "No";
-  if (tipo === "fecha") return new Date(String(valor)).toLocaleDateString();
+  if (tipo === "fecha") return new Date(String(valor) + "T00:00:00").toLocaleDateString();
   if (tipo === "fecha_hora") return new Date(String(valor)).toLocaleString();
   return String(valor);
 }
 
-/** Los datos de la entidad que la sucursal dio de alta (o que le dieron de alta a ella). Solo lectura. */
+/** 'YYYY-MM-DD' para <input type="date">, desde una fecha o datetime. */
+function aValorFecha(valor: unknown): string {
+  if (!valor) return "";
+  return String(valor).slice(0, 10);
+}
+
+function Chip({ texto, color }: { texto: string; color: string }) {
+  return (
+    <span style={{ background: color, color: "#fff", borderRadius: 999, padding: "2px 10px", fontSize: 12, whiteSpace: "nowrap" }}>
+      {texto}
+    </span>
+  );
+}
+
+/** Los datos de la entidad de la sucursal. Los campos que captura la app son editables. */
 export default function BaseDatos() {
   const { portal } = usePortal();
   const sucursalId = portal!.id;
@@ -41,20 +62,105 @@ export default function BaseDatos() {
   const [pagina, setPagina] = useState(1);
   const [datos, setDatos] = useState<Respuesta | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Ediciones pendientes por fila: { rowId: { campo: valor } }
+  const [ediciones, setEdiciones] = useState<Record<string, Record<string, string>>>({});
+  const [guardandoId, setGuardandoId] = useState<string | null>(null);
 
-  useEffect(() => {
+  function cargar() {
     setError(null);
     apiFetch<Respuesta>(`/api/admin/sucursales/${sucursalId}/entidad/registros?pagina=${pagina}&limite=50`)
-      .then(setDatos)
+      .then((d) => {
+        setDatos(d);
+        setEdiciones({});
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la información."));
-  }, [sucursalId, pagina]);
+  }
+
+  useEffect(cargar, [sucursalId, pagina]);
+
+  function editar(rowId: string, campo: string, valor: string) {
+    setEdiciones((prev) => ({ ...prev, [rowId]: { ...prev[rowId], [campo]: valor } }));
+  }
+
+  function valorActual(fila: Fila, campo: CampoServidor): string {
+    const id = String(fila.id);
+    const editado = ediciones[id]?.[campo.nombre_tecnico];
+    if (editado !== undefined) return editado;
+    const original = fila[campo.nombre_tecnico];
+    if (campo.tipo === "fecha") return aValorFecha(original);
+    return original === null || original === undefined ? "" : String(original);
+  }
+
+  async function guardarFila(rowId: string) {
+    const cambios = ediciones[rowId];
+    if (!cambios || Object.keys(cambios).length === 0) return;
+    setGuardandoId(rowId);
+    setError(null);
+    try {
+      await apiFetch(`/api/admin/sucursales/${sucursalId}/entidad/registros/${rowId}`, {
+        method: "PATCH",
+        body: JSON.stringify(cambios),
+      });
+      // Reflejar en memoria y limpiar edición de esa fila.
+      setDatos((prev) => {
+        if (!prev || !prev.configurado) return prev;
+        return {
+          ...prev,
+          filas: prev.filas.map((f) => (String(f.id) === rowId ? { ...f, ...cambios } : f)),
+        };
+      });
+      setEdiciones((prev) => {
+        const copia = { ...prev };
+        delete copia[rowId];
+        return copia;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar el registro.");
+    } finally {
+      setGuardandoId(null);
+    }
+  }
+
+  function celdaEditable(fila: Fila, campo: CampoServidor) {
+    const id = String(fila.id);
+    const valor = valorActual(fila, campo);
+
+    if (campo.tipo === "fecha") {
+      return <input type="date" value={valor} onChange={(e) => editar(id, campo.nombre_tecnico, e.target.value)} />;
+    }
+    if (campo.tipo === "texto" && campo.editor_tipo === "lista") {
+      const opciones = campo.opciones ?? [];
+      const color = opciones.find((o) => o.valor === valor)?.color;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <select value={valor} onChange={(e) => editar(id, campo.nombre_tecnico, e.target.value)}>
+            <option value="">—</option>
+            {opciones.map((o) => (
+              <option key={o.valor} value={o.valor}>
+                {o.valor}
+              </option>
+            ))}
+          </select>
+          {valor && color && <Chip texto={valor} color={color} />}
+        </div>
+      );
+    }
+    return (
+      <input
+        type="text"
+        value={valor}
+        onChange={(e) => editar(id, campo.nombre_tecnico, e.target.value)}
+        placeholder="—"
+      />
+    );
+  }
 
   return (
     <div className="pagina-formulario">
       <header className="pagina-cabecera">
         <div>
           <h1>Base de datos</h1>
-          <p>Los datos que se registraron para tu sucursal. Solo lectura.</p>
+          <p>Los campos que captura el personal se pueden editar; los de la fuente son solo lectura.</p>
         </div>
       </header>
 
@@ -89,16 +195,43 @@ export default function BaseDatos() {
                   {datos.campos.map((c) => (
                     <th key={c.nombre_tecnico}>{c.nombre_visible}</th>
                   ))}
+                  <th aria-label="Acciones" />
                 </tr>
               </thead>
               <tbody>
-                {datos.filas.map((fila) => (
-                  <tr key={String(fila.id)}>
-                    {datos.campos.map((c) => (
-                      <td key={c.nombre_tecnico}>{formatearValor(fila[c.nombre_tecnico], c.tipo)}</td>
-                    ))}
-                  </tr>
-                ))}
+                {datos.filas.map((fila) => {
+                  const id = String(fila.id);
+                  const sucia = Boolean(ediciones[id] && Object.keys(ediciones[id]).length > 0);
+                  return (
+                    <tr key={id}>
+                      {datos.campos.map((c) => (
+                        <td key={c.nombre_tecnico}>
+                          {c.origen === "back"
+                            ? celdaEditable(fila, c)
+                            : c.tipo === "texto" && c.editor_tipo === "lista"
+                              ? (() => {
+                                  const v = fila[c.nombre_tecnico];
+                                  const color = (c.opciones ?? []).find((o) => o.valor === v)?.color;
+                                  return v && color ? <Chip texto={String(v)} color={color} /> : formatearValor(v, c.tipo);
+                                })()
+                              : formatearValor(fila[c.nombre_tecnico], c.tipo)}
+                        </td>
+                      ))}
+                      <td>
+                        {sucia && (
+                          <button
+                            type="button"
+                            className="boton-guardar"
+                            disabled={guardandoId === id}
+                            onClick={() => guardarFila(id)}
+                          >
+                            {guardandoId === id ? "…" : "Guardar"}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
