@@ -368,6 +368,26 @@ export async function insertarRegistro(
   return insertarUno(getPool(), esquema, nombreTabla, valores);
 }
 
+const FECHA_MINIMA = "2000-01-01";
+
+/**
+ * Rechaza fechas incoherentes al capturar: formato inválido, una fecha que no
+ * existe (ej. 2026-02-31), anteriores a 2000, o en el futuro. Devuelve el texto
+ * del error o null si la fecha es válida.
+ */
+export function validarFechaCoherente(valor: string, nombreVisible: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(valor)) return `La fecha de '${nombreVisible}' no es válida.`;
+  const fecha = new Date(`${valor}T00:00:00Z`);
+  // new Date normaliza (2026-02-31 -> marzo); si no "regresa" al mismo texto, no existía.
+  if (Number.isNaN(fecha.getTime()) || fecha.toISOString().slice(0, 10) !== valor) {
+    return `La fecha de '${nombreVisible}' no existe.`;
+  }
+  if (valor < FECHA_MINIMA) return `La fecha de '${nombreVisible}' es demasiado antigua (antes de ${FECHA_MINIMA}).`;
+  const hoy = new Date().toISOString().slice(0, 10);
+  if (valor > hoy) return `La fecha de '${nombreVisible}' no puede ser futura.`;
+  return null;
+}
+
 /**
  * Valida y convierte el cuerpo de una EDICIÓN de fila: solo acepta campos
  * 'back' (los que captura la app), rechaza los 'api' (vienen del sync), y si un
@@ -395,6 +415,11 @@ export function construirValoresEdicion(
 
     const coercion = coercionar(campo, crudo);
     if ("error" in coercion) return coercion;
+
+    if (campo.tipo === "fecha") {
+      const error = validarFechaCoherente(String(coercion.valor), campo.nombre_visible);
+      if (error) return { error };
+    }
 
     if (campo.tipo === "texto" && campo.editor_tipo === "lista") {
       const permitido = (campo.opciones ?? []).some((o) => o.valor === coercion.valor);

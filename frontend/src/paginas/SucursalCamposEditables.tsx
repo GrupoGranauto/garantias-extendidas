@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
+import { IconoCalendario } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { useSucursal } from "./SucursalEditLayout";
 
@@ -171,8 +172,8 @@ export default function SucursalCamposEditables() {
           </div>
           <div className="seccion-campos">
             {campo.tipo === "fecha" ? (
-              <p className="campo-ayuda">
-                📅 Fecha — se edita con <strong>calendario</strong> (no configurable).
+              <p className="campo-ayuda" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <IconoCalendario className="icono-inline" /> Fecha — se edita con <strong>calendario</strong> (no configurable).
               </p>
             ) : campo.tipo !== "texto" ? (
               <p className="campo-ayuda">

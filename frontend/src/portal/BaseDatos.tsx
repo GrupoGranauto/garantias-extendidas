@@ -46,6 +46,8 @@ function aValorFecha(valor: unknown): string {
   return String(valor).slice(0, 10);
 }
 
+const HOY = new Date().toISOString().slice(0, 10);
+
 function Chip({ texto, color }: { texto: string; color: string }) {
   return (
     <span style={{ background: color, color: "#fff", borderRadius: 999, padding: "2px 10px", fontSize: 12, whiteSpace: "nowrap" }}>
@@ -126,7 +128,15 @@ export default function BaseDatos() {
     const valor = valorActual(fila, campo);
 
     if (campo.tipo === "fecha") {
-      return <input type="date" value={valor} onChange={(e) => editar(id, campo.nombre_tecnico, e.target.value)} />;
+      return (
+        <input
+          type="date"
+          value={valor}
+          min="2000-01-01"
+          max={HOY}
+          onChange={(e) => editar(id, campo.nombre_tecnico, e.target.value)}
+        />
+      );
     }
     if (campo.tipo === "texto" && campo.editor_tipo === "lista") {
       const opciones = campo.opciones ?? [];

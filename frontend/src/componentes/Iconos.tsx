@@ -296,6 +296,15 @@ export function IconoReloj({ className }: IconoProps) {
   );
 }
 
+export function IconoCalendario({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="12" height="11" rx="1.5" />
+      <path d="M2 6.5h12M5 2v2.5M11 2v2.5" />
+    </svg>
+  );
+}
+
 export function IconoSalir({ className }: IconoProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
