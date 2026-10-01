@@ -23,6 +23,7 @@ const campoSchema = z.object({
   longitud: z.number().int().positive().nullable().default(null),
   requerido: z.boolean().default(false),
   origen: z.enum(["api", "back"]).default("api"),
+  visible: z.boolean().default(true),
 });
 
 const definicionSchema = z.object({
@@ -86,7 +87,7 @@ adminEntidadesRouter.get("/sucursales/:id/entidad", async (req, res, next) => {
 
     const { data: campos, error: errorCampos } = await supabase
       .from("entidad_campos")
-      .select("nombre_tecnico, nombre_visible, tipo, longitud, requerido, origen, posicion")
+      .select("nombre_tecnico, nombre_visible, tipo, longitud, requerido, origen, posicion, visible")
       .eq("entidad_id", definicion.id)
       .order("posicion");
     if (errorCampos) throw new Error(errorCampos.message);

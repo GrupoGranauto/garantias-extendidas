@@ -12,6 +12,10 @@ export type CampoEntidad = {
   longitud: number | null;
   requerido: boolean;
   origen: OrigenCampo;
+  // Solo metadato de presentación: si es false, la columna existe en la tabla
+  // pero no se muestra en el portal de la sucursal. No afecta el DDL ni la
+  // ingesta; por omisión las columnas son visibles.
+  visible?: boolean;
 };
 
 // Columnas de auditoría que el generador siempre agrega; un campo no puede

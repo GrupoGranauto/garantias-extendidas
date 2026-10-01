@@ -15,6 +15,7 @@ type CampoServidor = {
   longitud: number | null;
   requerido: boolean;
   origen: Origen;
+  visible: boolean;
 };
 
 type Entidad = {
@@ -106,6 +107,7 @@ function nuevaFila(): FilaCampo {
     longitud: null,
     requerido: false,
     origen: "api",
+    visible: true,
   };
 }
 
@@ -428,6 +430,14 @@ export default function SucursalBaseDatos() {
                       onChange={(e) => actualizarCampo(campo.clave, { requerido: e.target.checked })}
                     />
                     Obligatorio
+                  </label>
+                  <label className="campo-check-inline" title="Si se desmarca, la columna no se muestra en el portal de la sucursal">
+                    <input
+                      type="checkbox"
+                      checked={campo.visible}
+                      onChange={(e) => actualizarCampo(campo.clave, { visible: e.target.checked })}
+                    />
+                    Visible
                   </label>
                   <button
                     type="button"

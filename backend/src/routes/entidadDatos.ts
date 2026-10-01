@@ -46,12 +46,13 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros", async (req, res, nex
 
     const { data: camposFilas, error: errorCampos } = await supabase
       .from("entidad_campos")
-      .select("nombre_tecnico, nombre_visible, tipo, longitud, requerido, origen, posicion")
+      .select("nombre_tecnico, nombre_visible, tipo, longitud, requerido, origen, posicion, visible")
       .eq("entidad_id", definicion.id)
       .order("posicion");
     if (errorCampos) throw new Error(errorCampos.message);
 
-    const campos = (camposFilas ?? []) as CampoEntidad[];
+    // El portal de la sucursal solo ve las columnas marcadas como visibles.
+    const campos = ((camposFilas ?? []) as CampoEntidad[]).filter((c) => c.visible !== false);
 
     const limite = Math.min(Math.max(Number(req.query.limite) || 50, 1), LIMITE_MAXIMO);
     const pagina = Math.max(Number(req.query.pagina) || 1, 1);
