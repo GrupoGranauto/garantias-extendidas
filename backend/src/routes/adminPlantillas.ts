@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
-import { requireAuth, requireAccesoSucursal } from "../middleware/auth.js";
+import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../middleware/auth.js";
 import {
   crearPlantillaMeta,
   eliminarPlantillaMeta,
@@ -17,7 +17,9 @@ export const adminPlantillasRouter = Router();
 adminPlantillasRouter.use(requireAuth);
 // Todas las rutas de este router cuelgan de /sucursales/:id/plantillas...:
 // este patrón hace que Express ya tenga req.params.id disponible aquí.
-adminPlantillasRouter.use("/sucursales/:id/plantillas", requireAccesoSucursal);
+// La gestión de plantillas es solo del admin; el asesor no la toca (aunque sí
+// puede MANDAR plantillas desde el chat, eso vive en whatsappChat).
+adminPlantillasRouter.use("/sucursales/:id/plantillas", requireAccesoSucursal, requireAdminSucursal);
 
 /* ============================================================
    Forma local de los componentes: más simple que el payload de

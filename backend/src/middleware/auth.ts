@@ -138,6 +138,24 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 }
 
 /**
+ * Exige rol admin, apoyándose en el perfil que ya adjuntó requireAccesoSucursal.
+ * Úsalo DESPUÉS de requireAccesoSucursal. Un asesor queda fuera; el admin de la
+ * sucursal y el de plataforma pasan. Para acciones que solo el admin maneja
+ * (ej. la gestión de plantillas de WhatsApp).
+ */
+export function requireAdminSucursal(req: Request, res: Response, next: NextFunction) {
+  if (!req.perfil) {
+    res.status(401).json({ error: "Sesión requerida." });
+    return;
+  }
+  if (req.perfil.rol !== "admin") {
+    res.status(403).json({ error: "Solo un administrador puede hacer esto." });
+    return;
+  }
+  next();
+}
+
+/**
  * Exige que la cuenta pertenezca a la sucursal de `:id` en la URL (o sea
  * administrador de plataforma). No exige rol admin: dentro de su propia
  * sucursal, un asesor también necesita esto (ej. mandar plantillas de

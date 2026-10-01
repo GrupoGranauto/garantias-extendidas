@@ -85,12 +85,22 @@ export default function GuardiaSucursal() {
       );
     }
 
+    // La pestaña de Plantillas solo la maneja el admin. El asesor ve y usa todo
+    // lo demás (incluido mandar plantillas desde el chat), pero no la gestión.
+    const esAdmin = perfil?.rol === "admin";
+    const navPortal = esAdmin
+      ? NAVEGACION_PORTAL
+      : NAVEGACION_PORTAL.map((g) => ({
+          ...g,
+          secciones: g.secciones.filter((s) => s.ruta !== "/plantillas"),
+        }));
+
     return (
       <Routes>
         <Route
           element={
             <LayoutPanel
-              grupos={NAVEGACION_PORTAL}
+              grupos={navPortal}
               logo={portal.logoPanel ?? portal.logo}
               logoAlt={portal.nombre}
               perfil={perfil}
@@ -100,9 +110,9 @@ export default function GuardiaSucursal() {
           <Route path="/" element={<EnConstruccion titulo="Inicio" />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/base-datos" element={<BaseDatos />} />
-          <Route path="/plantillas" element={<PlantillasListado />} />
-          <Route path="/plantillas/nueva" element={<PlantillaFormulario />} />
-          <Route path="/plantillas/:pid/editar" element={<PlantillaFormulario />} />
+          {esAdmin && <Route path="/plantillas" element={<PlantillasListado />} />}
+          {esAdmin && <Route path="/plantillas/nueva" element={<PlantillaFormulario />} />}
+          {esAdmin && <Route path="/plantillas/:pid/editar" element={<PlantillaFormulario />} />}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
