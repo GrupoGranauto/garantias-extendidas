@@ -151,6 +151,11 @@
   height: 14px;
   flex: 0 0 auto;
 }
+.chat-tipo-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 
 .seccion-campos input[type="text"],
 .seccion-campos select,

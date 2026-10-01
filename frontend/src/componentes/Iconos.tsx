@@ -305,6 +305,15 @@ export function IconoCalendario({ className }: IconoProps) {
   );
 }
 
+export function IconoUbicacion({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 14.5s5-4.2 5-8a5 5 0 0 0-10 0c0 3.8 5 8 5 8Z" />
+      <circle cx="8" cy="6.5" r="1.8" />
+    </svg>
+  );
+}
+
 export function IconoSalir({ className }: IconoProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>

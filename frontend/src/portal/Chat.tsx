@@ -1,7 +1,21 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
-import { IconoCheck, IconoClip, IconoDobleCheck, IconoDocumento, IconoReloj, IconoXMarca } from "../componentes/Iconos";
+import {
+  IconoCamara,
+  IconoCheck,
+  IconoClip,
+  IconoDobleCheck,
+  IconoDocumento,
+  IconoEmoji,
+  IconoMensaje,
+  IconoMicrofono,
+  IconoReloj,
+  IconoUbicacion,
+  IconoUsuarios,
+  IconoVideollamada,
+  IconoXMarca,
+} from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 import { useEventosChat } from "./useEventosChat";
@@ -104,16 +118,41 @@ function formatearHoraLista(valor: string | null): string {
 }
 
 const ETIQUETAS_TIPO: Record<string, string> = {
-  imagen: "📷 Foto",
-  video: "🎥 Video",
-  audio: "🎤 Audio",
-  documento: "📄 Documento",
+  imagen: "Foto",
+  video: "Video",
+  audio: "Audio",
+  documento: "Documento",
   sticker: "Sticker",
-  ubicacion: "📍 Ubicación",
-  contacto: "👤 Contacto",
-  reaccion: "Reaccionó",
+  ubicacion: "Ubicación",
+  contacto: "Contacto",
+  reaccion: "Reacción",
   sistema: "Mensaje",
 };
+
+const ICONO_TIPO: Record<string, (props: { className?: string }) => ReactNode> = {
+  imagen: IconoCamara,
+  video: IconoVideollamada,
+  audio: IconoMicrofono,
+  documento: IconoDocumento,
+  sticker: IconoEmoji,
+  ubicacion: IconoUbicacion,
+  contacto: IconoUsuarios,
+  reaccion: IconoEmoji,
+  sistema: IconoMensaje,
+};
+
+/** Ícono + etiqueta para un tipo de mensaje que no es texto (sin emojis). */
+function TipoMensaje({ tipo }: { tipo: string | null }) {
+  if (!tipo) return null;
+  const Icono = ICONO_TIPO[tipo];
+  const etiqueta = ETIQUETAS_TIPO[tipo] ?? tipo;
+  return (
+    <span className="chat-tipo-preview">
+      {Icono && <Icono className="icono-inline" />}
+      {etiqueta}
+    </span>
+  );
+}
 
 function iconoEstadoEnvio(estado: string, errorDetalle?: string | null): ReactNode {
   if (estado === "fallido") {
@@ -154,10 +193,6 @@ function iconoEstadoEnvio(estado: string, errorDetalle?: string | null): ReactNo
   return null;
 }
 
-function textoPreview(m: Mensaje): string {
-  return ETIQUETAS_TIPO[m.tipo] ?? m.texto ?? m.tipo;
-}
-
 /** *negrita*, _cursiva_, ~tachado~, ```monoespaciado``` — el mismo formato que WhatsApp interpreta en el teléfono del cliente. */
 function formatoWhatsApp(texto: string): ReactNode {
   const partes: ReactNode[] = [];
@@ -177,11 +212,11 @@ function formatoWhatsApp(texto: string): ReactNode {
   return partes;
 }
 
-/** Línea de previsualización en el listado de conversaciones (como el desktop): texto si es texto, ícono + etiqueta si no. */
-function previewConversacion(c: Conversacion): string {
+/** Línea de previsualización en el listado de conversaciones: texto si es texto, ícono + etiqueta si no. */
+function previewConversacion(c: Conversacion): ReactNode {
   if (!c.ultimo_mensaje_tipo) return c.wa_id;
   if (c.ultimo_mensaje_texto) return c.ultimo_mensaje_texto;
-  return ETIQUETAS_TIPO[c.ultimo_mensaje_tipo] ?? c.ultimo_mensaje_tipo;
+  return <TipoMensaje tipo={c.ultimo_mensaje_tipo} />;
 }
 
 /** Del listado plano de mensajes, arma un mapa wa_message_id -> emoji con la última reacción de cada uno (vacío = se quitó). */
@@ -240,7 +275,11 @@ function contenidoMensaje(m: Mensaje, onMediaLoad: () => void, onAbrirImagen: (u
       </a>
     );
   }
-  return <div className="chat-burbuja-texto">{m.tipo === "texto" && m.texto ? formatoWhatsApp(m.texto) : textoPreview(m)}</div>;
+  return (
+    <div className="chat-burbuja-texto">
+      {m.tipo === "texto" && m.texto ? formatoWhatsApp(m.texto) : <TipoMensaje tipo={m.tipo} />}
+    </div>
+  );
 }
 
 /** Chat de WhatsApp de la sucursal: conversaciones a la izquierda, hilo a la derecha. Tiempo real por SSE. */
@@ -397,7 +436,7 @@ export default function Chat() {
       wa_message_id: null,
       direccion: "saliente",
       tipo: "texto",
-      texto: `📄 ${plantilla.nombre}`,
+      texto: `Plantilla: ${plantilla.nombre}`,
       media_url: null,
       media_mime_type: null,
       media_nombre_archivo: null,
