@@ -17,6 +17,7 @@ type UsuarioDetalle = {
   foto_url: string | null;
   rol: Rol;
   sucursal_id: string | null;
+  ejecutivo_asignado: string | null;
   activo: boolean;
 };
 
@@ -39,6 +40,8 @@ export default function UsuarioEditar() {
   const [sucursalId, setSucursalId] = useState("");
   const [urlFoto, setUrlFoto] = useState<string | null>(null);
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [ejecutivos, setEjecutivos] = useState<string[]>([]);
+  const [ejecutivo, setEjecutivo] = useState("");
 
   const foto = useImagen(urlFoto);
   const esPlataforma = sucursalId === "";
@@ -60,12 +63,27 @@ export default function UsuarioEditar() {
         setPuesto(u.puesto ?? "");
         setRol(u.rol);
         setSucursalId(u.sucursal_id ?? "");
+        setEjecutivo(u.ejecutivo_asignado ?? "");
         setUrlFoto(u.foto_url);
         setSucursales(s.sucursales);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar el usuario."))
       .finally(() => setCargando(false));
   }, [id]);
+
+  // Ejecutivos disponibles de la sucursal (no resetea la selección: eso lo hace
+  // el onChange del selector de sucursal cuando el admin la cambia a mano).
+  useEffect(() => {
+    if (!sucursalId) {
+      setEjecutivos([]);
+      return;
+    }
+    apiFetch<{ configurado: boolean; ejecutivos: string[] }>(
+      `/api/admin/sucursales/${sucursalId}/entidad/ejecutivos`,
+    )
+      .then((r) => setEjecutivos(r.ejecutivos ?? []))
+      .catch(() => setEjecutivos([]));
+  }, [sucursalId]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -91,6 +109,7 @@ export default function UsuarioEditar() {
           puesto: puesto.trim() || null,
           rol: esPlataforma ? "admin" : rol,
           sucursal_id: sucursalId || null,
+          ejecutivo_asignado: !esPlataforma && rol === "asesor" && ejecutivo ? ejecutivo : null,
           ...(foto_url !== undefined ? { foto_url } : {}),
         }),
       });
@@ -178,7 +197,14 @@ export default function UsuarioEditar() {
           <div className={esPlataforma ? "pareja-campos" : "trio-campos"}>
             <div className="campo-formulario">
               <label htmlFor="sucursal">Sucursal</label>
-              <select id="sucursal" value={sucursalId} onChange={(e) => setSucursalId(e.target.value)}>
+              <select
+                id="sucursal"
+                value={sucursalId}
+                onChange={(e) => {
+                  setSucursalId(e.target.value);
+                  setEjecutivo(""); // al cambiar de sucursal, se reelige ejecutivo
+                }}
+              >
                 <option value="">— Administrador de plataforma —</option>
                 {sucursales.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -201,6 +227,25 @@ export default function UsuarioEditar() {
               </div>
             )}
           </div>
+
+          {!esPlataforma && rol === "asesor" && (ejecutivos.length > 0 || ejecutivo) && (
+            <div className="campo-formulario">
+              <label htmlFor="ejecutivo">Ejecutivo asignado</label>
+              <select id="ejecutivo" value={ejecutivo} onChange={(e) => setEjecutivo(e.target.value)}>
+                <option value="">— Todos (sin filtro) —</option>
+                {(ejecutivos.includes(ejecutivo) || !ejecutivo ? ejecutivos : [ejecutivo, ...ejecutivos]).map(
+                  (nombre) => (
+                    <option key={nombre} value={nombre}>
+                      {nombre}
+                    </option>
+                  ),
+                )}
+              </select>
+              <p className="campo-ayuda">
+                Si eliges uno, este asesor solo verá los leads y chats de ese ejecutivo (más los chats sueltos).
+              </p>
+            </div>
+          )}
 
           {esPlataforma && (
             <p className="campo-ayuda">

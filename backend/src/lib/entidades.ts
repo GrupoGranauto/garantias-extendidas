@@ -181,6 +181,9 @@ export async function listarRegistros(
   campos: CampoEntidad[],
   limite: number,
   desplazamiento: number,
+  // Filtro opcional por una columna (ej. restringir por Ejecutivo). La columna
+  // se valida como identificador; el valor va parametrizado.
+  filtro?: { columna: string; valor: string },
 ): Promise<{ filas: Record<string, unknown>[]; total: number }> {
   const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
   const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
@@ -188,17 +191,43 @@ export async function listarRegistros(
   // las columnas de su propio esquema, no las de auditoría interna.
   const columnas = ["id", ...campos.map((c) => exigirIdentificador(c.nombre_tecnico, "Nombre técnico del campo"))];
 
+  let filtroSql = "";
+  const paramsFiltro: unknown[] = [];
+  if (filtro) {
+    const col = exigirIdentificador(filtro.columna, "Columna de filtro");
+    filtroSql = ` AND "${col}" = $3`;
+    paramsFiltro.push(filtro.valor);
+  }
+
   const pool = getPool();
   const { rows: filas } = await pool.query(
     `SELECT ${columnas.map((c) => `"${c}"`).join(", ")} FROM "${esquema}"."${nombreTabla}" ` +
-      `WHERE "borrado_en" IS NULL ORDER BY "creado_en" DESC LIMIT $1 OFFSET $2;`,
-    [limite, desplazamiento],
+      `WHERE "borrado_en" IS NULL${filtroSql} ORDER BY "creado_en" DESC LIMIT $1 OFFSET $2;`,
+    [limite, desplazamiento, ...paramsFiltro],
   );
   const { rows: conteo } = await pool.query(
-    `SELECT count(*)::int AS total FROM "${esquema}"."${nombreTabla}" WHERE "borrado_en" IS NULL;`,
+    `SELECT count(*)::int AS total FROM "${esquema}"."${nombreTabla}" ` +
+      `WHERE "borrado_en" IS NULL${filtro ? ` AND "${exigirIdentificador(filtro.columna, "Columna de filtro")}" = $1` : ""};`,
+    filtro ? [filtro.valor] : [],
   );
 
   return { filas, total: conteo[0]?.total ?? 0 };
+}
+
+/** Valores distintos de una columna (ej. los ejecutivos), para poblar un selector. */
+export async function listarValoresDistintos(
+  subdominio: string,
+  tabla: string,
+  columna: string,
+): Promise<string[]> {
+  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
+  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  const col = exigirIdentificador(columna, "Columna");
+  const { rows } = await getPool().query(
+    `SELECT DISTINCT "${col}"::text AS valor FROM "${esquema}"."${nombreTabla}" ` +
+      `WHERE "borrado_en" IS NULL AND "${col}" IS NOT NULL AND "${col}"::text <> '' ORDER BY 1;`,
+  );
+  return rows.map((r) => r.valor as string);
 }
 
 /**

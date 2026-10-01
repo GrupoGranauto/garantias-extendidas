@@ -34,7 +34,7 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros", async (req, res, nex
 
     const { data: definicion, error: errorDefinicion } = await supabase
       .from("entidad_definiciones")
-      .select("id, nombre_tecnico, nombre_visible")
+      .select("id, nombre_tecnico, nombre_visible, columna_ejecutivo")
       .eq("sucursal_id", req.params.id)
       .maybeSingle();
     if (errorDefinicion) throw new Error(errorDefinicion.message);
@@ -58,7 +58,23 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros", async (req, res, nex
     const pagina = Math.max(Number(req.query.pagina) || 1, 1);
     const desplazamiento = (pagina - 1) * limite;
 
-    const { filas, total } = await listarRegistros(sucursal.subdominio, definicion.nombre_tecnico, campos, limite, desplazamiento);
+    // Un asesor con ejecutivo asignado solo ve los leads de su ejecutivo; admin, todos.
+    const filtro =
+      req.perfil &&
+      req.perfil.rol !== "admin" &&
+      req.perfil.ejecutivo_asignado &&
+      definicion.columna_ejecutivo
+        ? { columna: definicion.columna_ejecutivo as string, valor: req.perfil.ejecutivo_asignado }
+        : undefined;
+
+    const { filas, total } = await listarRegistros(
+      sucursal.subdominio,
+      definicion.nombre_tecnico,
+      campos,
+      limite,
+      desplazamiento,
+      filtro,
+    );
 
     res.json({
       configurado: true,

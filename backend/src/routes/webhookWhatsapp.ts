@@ -8,6 +8,7 @@ import {
   type ConfigSucursal,
 } from "../lib/whatsapp.js";
 import { emitirEventoChat } from "../lib/eventosChat.js";
+import { buscarContactoPorTelefono } from "../lib/entidades.js";
 
 export const webhookWhatsappRouter = Router();
 
@@ -165,6 +166,35 @@ async function descripcionMensajePorWaId(waMessageId: string): Promise<string | 
   return ETIQUETAS_TIPO[data.tipo] ?? data.tipo;
 }
 
+/**
+ * Si el teléfono del cliente cruza con un lead de la Base de Datos, devuelve el
+ * ejecutivo dueño de ese lead; si no hay match (o no está configurada la columna
+ * de ejecutivo/teléfono), null. Sirve para asignar la conversación al dueño.
+ */
+async function resolverEjecutivoDeLead(config: ConfigSucursal, waId: string): Promise<string | null> {
+  if (!config.columna_telefono) return null;
+  const supabase = getSupabase();
+  const [{ data: sucursal }, { data: definicion }] = await Promise.all([
+    supabase.from("sucursales").select("subdominio").eq("id", config.sucursal_id).maybeSingle(),
+    supabase
+      .from("entidad_definiciones")
+      .select("nombre_tecnico, columna_ejecutivo")
+      .eq("sucursal_id", config.sucursal_id)
+      .maybeSingle(),
+  ]);
+  if (!sucursal || !definicion || !definicion.columna_ejecutivo) return null;
+
+  const fila = await buscarContactoPorTelefono(
+    sucursal.subdominio,
+    definicion.nombre_tecnico,
+    config.columna_telefono,
+    [definicion.columna_ejecutivo],
+    waId,
+  );
+  const valor = fila?.[definicion.columna_ejecutivo];
+  return valor === null || valor === undefined || valor === "" ? null : String(valor);
+}
+
 async function obtenerOCrearConversacion(
   sucursalId: string,
   waId: string,
@@ -172,6 +202,7 @@ async function obtenerOCrearConversacion(
   waMessageId: string,
   tipoPreview: string,
   textoPreview: string | null,
+  asignadoA: string | null,
 ) {
   const supabase = getSupabase();
 
@@ -212,6 +243,9 @@ async function obtenerOCrearConversacion(
       ultimo_mensaje_texto: textoPreview,
       ultimo_mensaje_direccion: "entrante",
       ultimo_mensaje_wa_message_id: waMessageId,
+      // Dueño inicial: el ejecutivo del lead si el teléfono cruza; si no, queda
+      // suelto (null) y lo verán todos los asesores hasta que alguien conteste.
+      asignado_a: asignadoA,
     })
     .select("id")
     .single();
@@ -288,6 +322,7 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
       fila.texto = JSON.stringify(msg);
   }
 
+  const ejecutivoDeLead = await resolverEjecutivoDeLead(config, msg.from);
   const conversacionId = await obtenerOCrearConversacion(
     config.sucursal_id,
     msg.from,
@@ -295,6 +330,7 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
     msg.id,
     fila.tipo as string,
     (fila.texto as string | null | undefined) ?? null,
+    ejecutivoDeLead,
   );
   fila.conversacion_id = conversacionId;
 

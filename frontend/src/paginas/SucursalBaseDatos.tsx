@@ -22,6 +22,7 @@ type Entidad = {
   configurado: boolean;
   nombre_tecnico?: string;
   nombre_visible?: string;
+  columna_ejecutivo?: string | null;
   creado_en?: string;
   campos?: CampoServidor[];
   api_key: string;
@@ -145,6 +146,7 @@ export default function SucursalBaseDatos() {
 
   const [nombreVisible, setNombreVisible] = useState("");
   const [nombreTecnico, setNombreTecnico] = useState("");
+  const [columnaEjecutivo, setColumnaEjecutivo] = useState<string>("");
   const [campos, setCampos] = useState<FilaCampo[]>([]);
 
   function cargar() {
@@ -162,6 +164,7 @@ export default function SucursalBaseDatos() {
   function iniciarFormularioVacio() {
     setNombreVisible("");
     setNombreTecnico("");
+    setColumnaEjecutivo("");
     setCampos([nuevaFila()]);
     setEditando(false);
   }
@@ -170,6 +173,7 @@ export default function SucursalBaseDatos() {
     if (!entidad?.configurado) return;
     setNombreVisible(entidad.nombre_visible ?? "");
     setNombreTecnico(entidad.nombre_tecnico ?? "");
+    setColumnaEjecutivo(entidad.columna_ejecutivo ?? "");
     setCampos(
       (entidad.campos ?? []).map((campo) => ({ ...campo, clave: crypto.randomUUID(), existente: true })),
     );
@@ -231,6 +235,7 @@ export default function SucursalBaseDatos() {
         body: JSON.stringify({
           nombre_visible: nombreVisible.trim(),
           nombre_tecnico: nombreTecnico.trim(),
+          columna_ejecutivo: columnaEjecutivo || null,
           campos: campos.map(({ clave: _clave, existente: _existente, ...campo }) => ({
             ...campo,
             nombre_visible: campo.nombre_visible.trim(),
@@ -463,6 +468,35 @@ export default function SucursalBaseDatos() {
                 <button type="button" className="boton-tenue" onClick={agregarCampo}>
                   + Agregar campo
                 </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="seccion">
+            <div className="seccion-info">
+              <h2>3 · Campo del Ejecutivo</h2>
+              <p>
+                Qué columna identifica al ejecutivo responsable. Se usa para asignar leads y chats a cada
+                asesor. Opcional: si no eliges, todos ven todo.
+              </p>
+            </div>
+            <div className="seccion-campos">
+              <div className="campo-formulario">
+                <label htmlFor="columna-ejecutivo">Columna de Ejecutivo</label>
+                <select
+                  id="columna-ejecutivo"
+                  value={columnaEjecutivo}
+                  onChange={(e) => setColumnaEjecutivo(e.target.value)}
+                >
+                  <option value="">— Sin asignación por ejecutivo —</option>
+                  {campos
+                    .filter((c) => c.tipo === "texto" && c.nombre_tecnico.trim())
+                    .map((c) => (
+                      <option key={c.clave} value={c.nombre_tecnico}>
+                        {c.nombre_visible || c.nombre_tecnico}
+                      </option>
+                    ))}
+                </select>
               </div>
             </div>
           </section>

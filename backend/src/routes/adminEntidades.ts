@@ -8,6 +8,7 @@ import {
   eliminarTabla,
   evolucionarTabla,
   validarCampos,
+  listarValoresDistintos,
   type CampoEntidad,
 } from "../lib/entidades.js";
 import { aNombreTecnico, identificadorValido } from "../lib/identificadores.js";
@@ -29,6 +30,7 @@ const campoSchema = z.object({
 const definicionSchema = z.object({
   nombre_visible: z.string().trim().min(1),
   nombre_tecnico: z.string().trim().min(1).optional(), // solo se usa al crear
+  columna_ejecutivo: z.string().trim().nullable().default(null),
   campos: z.array(campoSchema),
 });
 
@@ -73,7 +75,7 @@ adminEntidadesRouter.get("/sucursales/:id/entidad", async (req, res, next) => {
     const supabase = getSupabase();
     const { data: definicion, error } = await supabase
       .from("entidad_definiciones")
-      .select("id, nombre_tecnico, nombre_visible, creado_en")
+      .select("id, nombre_tecnico, nombre_visible, columna_ejecutivo, creado_en")
       .eq("sucursal_id", sucursal.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -96,10 +98,43 @@ adminEntidadesRouter.get("/sucursales/:id/entidad", async (req, res, next) => {
       configurado: true,
       nombre_tecnico: definicion.nombre_tecnico,
       nombre_visible: definicion.nombre_visible,
+      columna_ejecutivo: definicion.columna_ejecutivo,
       creado_en: definicion.creado_en,
       campos: campos ?? [],
       api_key: apiKey,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Valores distintos de la columna de Ejecutivo: para asignar un ejecutivo a un usuario. */
+adminEntidadesRouter.get("/sucursales/:id/entidad/ejecutivos", async (req, res, next) => {
+  try {
+    const sucursal = await obtenerSucursal(req.params.id);
+    if (!sucursal) {
+      res.status(404).json({ error: "Sucursal no encontrada." });
+      return;
+    }
+
+    const { data: definicion, error } = await getSupabase()
+      .from("entidad_definiciones")
+      .select("nombre_tecnico, columna_ejecutivo")
+      .eq("sucursal_id", sucursal.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+
+    if (!definicion || !definicion.columna_ejecutivo) {
+      res.json({ configurado: false, ejecutivos: [] });
+      return;
+    }
+
+    const ejecutivos = await listarValoresDistintos(
+      sucursal.subdominio,
+      definicion.nombre_tecnico,
+      definicion.columna_ejecutivo,
+    );
+    res.json({ configurado: true, ejecutivos });
   } catch (err) {
     next(err);
   }
@@ -147,7 +182,12 @@ adminEntidadesRouter.put("/sucursales/:id/entidad", async (req, res, next) => {
 
       const { data: definicion, error: errorInsert } = await supabase
         .from("entidad_definiciones")
-        .insert({ sucursal_id: sucursal.id, nombre_tecnico: nombreTecnico, nombre_visible: parsed.data.nombre_visible })
+        .insert({
+          sucursal_id: sucursal.id,
+          nombre_tecnico: nombreTecnico,
+          nombre_visible: parsed.data.nombre_visible,
+          columna_ejecutivo: parsed.data.columna_ejecutivo,
+        })
         .select("id")
         .single();
 
@@ -176,7 +216,11 @@ adminEntidadesRouter.put("/sucursales/:id/entidad", async (req, res, next) => {
 
     const { error: errorUpdate } = await supabase
       .from("entidad_definiciones")
-      .update({ nombre_visible: parsed.data.nombre_visible, actualizado_en: new Date().toISOString() })
+      .update({
+        nombre_visible: parsed.data.nombre_visible,
+        columna_ejecutivo: parsed.data.columna_ejecutivo,
+        actualizado_en: new Date().toISOString(),
+      })
       .eq("id", existente.id);
     if (errorUpdate) throw new Error(errorUpdate.message);
 

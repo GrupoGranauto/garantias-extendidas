@@ -53,10 +53,15 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, re
     let consulta = getSupabase()
       .from("whatsapp_conversaciones")
       .select(
-        "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, ultimo_mensaje_direccion, ultimo_mensaje_estado, ultimo_mensaje_cliente_en, no_leidos, resuelto, creado_en",
+        "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, ultimo_mensaje_direccion, ultimo_mensaje_estado, ultimo_mensaje_cliente_en, no_leidos, resuelto, asignado_a, creado_en",
       )
       .eq("sucursal_id", req.params.id)
       .eq("resuelto", resueltas);
+    // Un asesor con ejecutivo asignado solo ve sus chats (los de su ejecutivo)
+    // más los sueltos sin dueño. Un admin ve todos.
+    if (req.perfil && req.perfil.rol !== "admin" && req.perfil.ejecutivo_asignado) {
+      consulta = consulta.or(`asignado_a.is.null,asignado_a.eq.${req.perfil.ejecutivo_asignado}`);
+    }
     if (req.query.no_leidos === "true") consulta = consulta.gt("no_leidos", 0);
     const { data, error } = await consulta.order("ultimo_mensaje_en", { ascending: false, nullsFirst: false });
     if (error) throw new Error(error.message);
@@ -69,12 +74,41 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, re
 async function obtenerConversacion(sucursalId: string, conversacionId: string) {
   const { data, error } = await getSupabase()
     .from("whatsapp_conversaciones")
-    .select("id, wa_id, ultimo_mensaje_cliente_en")
+    .select("id, wa_id, ultimo_mensaje_cliente_en, asignado_a")
     .eq("id", conversacionId)
     .eq("sucursal_id", sucursalId)
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data;
+}
+
+/** Un asesor con ejecutivo solo puede tocar sus chats o los sueltos. Admin, todos. */
+function puedeVerConversacion(
+  perfil: { rol: string; ejecutivo_asignado: string | null } | undefined,
+  asignadoA: string | null,
+): boolean {
+  if (!perfil || perfil.rol === "admin" || !perfil.ejecutivo_asignado) return true;
+  return asignadoA === null || asignadoA === perfil.ejecutivo_asignado;
+}
+
+/**
+ * Al contestar un chat suelto (sin dueño), el asesor lo reclama: se marca con su
+ * ejecutivo y deja de verse para los demás. No pisa un chat que ya tiene dueño.
+ */
+async function reclamarSiSuelto(
+  sucursalId: string,
+  conversacion: { id: string; asignado_a: string | null },
+  perfil: { rol: string; ejecutivo_asignado: string | null } | undefined,
+): Promise<boolean> {
+  if (!perfil || perfil.rol === "admin" || !perfil.ejecutivo_asignado) return false;
+  if (conversacion.asignado_a !== null) return false;
+  const { error } = await getSupabase()
+    .from("whatsapp_conversaciones")
+    .update({ asignado_a: perfil.ejecutivo_asignado })
+    .eq("id", conversacion.id)
+    .is("asignado_a", null); // condición de carrera: solo si sigue suelto
+  if (error) throw new Error(error.message);
+  return true;
 }
 
 const VENTANA_24H_MS = 24 * 60 * 60 * 1000;
@@ -89,7 +123,7 @@ function ventanaCerrada(ultimoMensajeClienteEn: string | null): boolean {
 whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones/:conversacionId/mensajes", async (req, res, next) => {
   try {
     const conversacion = await obtenerConversacion(req.params.id, req.params.conversacionId);
-    if (!conversacion) {
+    if (!conversacion || !puedeVerConversacion(req.perfil, conversacion.asignado_a)) {
       res.status(404).json({ error: "Conversación no encontrada." });
       return;
     }
@@ -124,7 +158,7 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
       obtenerConversacion(req.params.id, req.params.conversacionId),
       configPorSucursalId(req.params.id),
     ]);
-    if (!conversacion) {
+    if (!conversacion || !puedeVerConversacion(req.perfil, conversacion.asignado_a)) {
       res.status(404).json({ error: "Conversación no encontrada." });
       return;
     }
@@ -168,6 +202,10 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
     ]);
     if (errorInsert) throw new Error(errorInsert.message);
 
+    // Si era un chat suelto, contestarlo lo reclama para este asesor (realtime
+    // de Supabase se encarga de quitárselo a los demás en vivo).
+    await reclamarSiSuelto(req.params.id, conversacion, req.perfil);
+
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
 
     res.status(201).json(mensaje);
@@ -200,7 +238,7 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
       obtenerConversacion(req.params.id, req.params.conversacionId),
       configPorSucursalId(req.params.id),
     ]);
-    if (!conversacion) {
+    if (!conversacion || !puedeVerConversacion(req.perfil, conversacion.asignado_a)) {
       res.status(404).json({ error: "Conversación no encontrada." });
       return;
     }
@@ -263,6 +301,8 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
         .eq("id", conversacion.id),
     ]);
     if (errorInsert) throw new Error(errorInsert.message);
+
+    await reclamarSiSuelto(req.params.id, conversacion, req.perfil);
 
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
 
@@ -391,7 +431,7 @@ whatsappChatRouter.post(
         obtenerConversacion(req.params.id, req.params.conversacionId),
         configPorSucursalId(req.params.id),
       ]);
-      if (!conversacion) {
+      if (!conversacion || !puedeVerConversacion(req.perfil, conversacion.asignado_a)) {
         res.status(404).json({ error: "Conversación no encontrada." });
         return;
       }
@@ -499,6 +539,8 @@ whatsappChatRouter.post(
           .eq("id", conversacion.id),
       ]);
       if (errorInsert) throw new Error(errorInsert.message);
+
+      await reclamarSiSuelto(req.params.id, conversacion, req.perfil);
 
       emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
 

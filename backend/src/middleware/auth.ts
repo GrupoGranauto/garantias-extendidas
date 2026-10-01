@@ -5,11 +5,19 @@ import { env } from "../config/env.js";
 
 type UsuarioSesion = { id: string; email?: string; app_metadata?: Record<string, unknown> };
 
+type PerfilSesion = {
+  rol: string;
+  sucursal_id: string | null;
+  ejecutivo_asignado: string | null;
+};
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       usuario?: UsuarioSesion;
+      // Perfil de public.usuarios, lo adjunta requireAccesoSucursal.
+      perfil?: PerfilSesion;
     }
   }
 }
@@ -148,7 +156,7 @@ export async function requireAccesoSucursal(req: Request, res: Response, next: N
   try {
     const { data, error } = await getSupabase()
       .from("usuarios")
-      .select("activo, sucursal_id")
+      .select("activo, sucursal_id, rol, ejecutivo_asignado")
       .eq("id", req.usuario.id)
       .single();
 
@@ -165,6 +173,11 @@ export async function requireAccesoSucursal(req: Request, res: Response, next: N
       res.status(403).json({ error: "No tienes acceso a esta sucursal." });
       return;
     }
+    req.perfil = {
+      rol: data.rol as string,
+      sucursal_id: (data.sucursal_id as string | null) ?? null,
+      ejecutivo_asignado: (data.ejecutivo_asignado as string | null) ?? null,
+    };
     next();
   } catch (err) {
     next(err);

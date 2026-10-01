@@ -23,6 +23,8 @@ export default function UsuariosNuevo() {
   const [rol, setRol] = useState<Rol>("asesor");
   const [sucursalId, setSucursalId] = useState("");
   const esPlataforma = sucursalId === "";
+  const [ejecutivos, setEjecutivos] = useState<string[]>([]);
+  const [ejecutivo, setEjecutivo] = useState("");
   const [definirPassword, setDefinirPassword] = useState(false);
   const [password, setPassword] = useState("");
 
@@ -38,12 +40,25 @@ export default function UsuariosNuevo() {
       });
   }, []);
 
+  // Ejecutivos disponibles de la sucursal elegida (valores distintos de su columna).
+  useEffect(() => {
+    setEjecutivo("");
+    setEjecutivos([]);
+    if (!sucursalId) return;
+    apiFetch<{ configurado: boolean; ejecutivos: string[] }>(
+      `/api/admin/sucursales/${sucursalId}/entidad/ejecutivos`,
+    )
+      .then((r) => setEjecutivos(r.ejecutivos ?? []))
+      .catch(() => setEjecutivos([]));
+  }, [sucursalId]);
+
   function limpiar() {
     setCorreo("");
     setNombre("");
     setPuesto("");
     setRol("asesor");
     setSucursalId("");
+    setEjecutivo("");
     setDefinirPassword(false);
     setPassword("");
     setCreado(null);
@@ -74,6 +89,7 @@ export default function UsuariosNuevo() {
           puesto: puesto.trim() || undefined,
           rol: esPlataforma ? "admin" : rol,
           sucursal_id: sucursalId || null,
+          ejecutivo_asignado: !esPlataforma && rol === "asesor" && ejecutivo ? ejecutivo : null,
           password: definirPassword ? password : undefined,
         }),
       });
@@ -223,6 +239,23 @@ export default function UsuariosNuevo() {
               </div>
             )}
           </div>
+
+          {!esPlataforma && rol === "asesor" && ejecutivos.length > 0 && (
+            <div className="campo-formulario">
+              <label htmlFor="ejecutivo">Ejecutivo asignado</label>
+              <select id="ejecutivo" value={ejecutivo} onChange={(e) => setEjecutivo(e.target.value)}>
+                <option value="">— Todos (sin filtro) —</option>
+                {ejecutivos.map((nombre) => (
+                  <option key={nombre} value={nombre}>
+                    {nombre}
+                  </option>
+                ))}
+              </select>
+              <p className="campo-ayuda">
+                Si eliges uno, este asesor solo verá los leads y chats de ese ejecutivo (más los chats sueltos).
+              </p>
+            </div>
+          )}
 
           {esPlataforma && (
             <p className="campo-ayuda">

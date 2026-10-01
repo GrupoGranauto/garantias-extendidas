@@ -22,16 +22,21 @@ const altaSchema = z
     password: z.string().min(8).optional(),
     /** Null = administrador de plataforma (entra por el dominio raíz). */
     sucursal_id: z.string().uuid().nullable().default(null),
+    /** Ejecutivo (valor de la columna de la entidad) al que se restringe un asesor. */
+    ejecutivo_asignado: z.string().trim().min(1).nullable().default(null),
   })
-  // Sin sucursal es administrador de plataforma: el rol no se elige, siempre es admin.
-  .transform((datos) => (datos.sucursal_id === null ? { ...datos, rol: "admin" as const } : datos));
+  // Sin sucursal es administrador de plataforma: el rol no se elige (admin) y no
+  // se restringe por ejecutivo.
+  .transform((datos) =>
+    datos.sucursal_id === null ? { ...datos, rol: "admin" as const, ejecutivo_asignado: null } : datos,
+  );
 
 /** Lista de usuarios con su rol. */
 adminRouter.get("/usuarios", async (_req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("usuarios")
-      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, activo, creado_en")
+      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, ejecutivo_asignado, activo, creado_en")
       .order("creado_en");
 
     if (error) throw new Error(error.message);
@@ -69,7 +74,7 @@ adminRouter.post("/usuarios", async (req, res, next) => {
     return;
   }
 
-  const { correo, nombre, puesto, rol, password, sucursal_id } = parsed.data;
+  const { correo, nombre, puesto, rol, password, sucursal_id, ejecutivo_asignado } = parsed.data;
   const supabase = getSupabase();
 
   try {
@@ -94,6 +99,7 @@ adminRouter.post("/usuarios", async (req, res, next) => {
       ...(nombre ? { full_name: nombre } : {}),
       ...(puesto ? { puesto } : {}),
       ...(sucursal_id ? { sucursal_id } : {}),
+      ...(ejecutivo_asignado ? { ejecutivo_asignado } : {}),
     };
 
     // Sin sucursal (administrador de plataforma) el único host que siempre
@@ -206,7 +212,7 @@ adminRouter.get("/usuarios/:id", async (req, res, next) => {
   try {
     const { data, error } = await getSupabase()
       .from("usuarios")
-      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, activo")
+      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, ejecutivo_asignado, activo")
       .eq("id", req.params.id)
       .maybeSingle();
 
@@ -228,9 +234,13 @@ const edicionSchema = z
     foto_url: z.string().url().nullable().optional(),
     rol: z.enum(["admin", "asesor"]).optional(),
     sucursal_id: z.string().uuid().nullable().optional(),
+    ejecutivo_asignado: z.string().trim().min(1).nullable().optional(),
   })
-  // Igual que en el alta: sin sucursal el rol no se elige, siempre es admin.
-  .transform((datos) => (datos.sucursal_id === null ? { ...datos, rol: "admin" as const } : datos));
+  // Igual que en el alta: sin sucursal el rol no se elige (admin) y sin restricción
+  // por ejecutivo.
+  .transform((datos) =>
+    datos.sucursal_id === null ? { ...datos, rol: "admin" as const, ejecutivo_asignado: null } : datos,
+  );
 
 /** Edita nombre, puesto, foto, rol o sucursal. El correo no se toca (es la identidad de la cuenta). */
 adminRouter.patch("/usuarios/:id", async (req, res, next) => {
@@ -246,7 +256,7 @@ adminRouter.patch("/usuarios/:id", async (req, res, next) => {
       .from("usuarios")
       .update(parsed.data)
       .eq("id", req.params.id)
-      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, activo")
+      .select("id, correo, nombre, puesto, foto_url, rol, sucursal_id, ejecutivo_asignado, activo")
       .single();
 
     if (error) throw new Error(error.message);

@@ -5,6 +5,7 @@ import { IconoCheck, IconoClip, IconoDobleCheck, IconoDocumento, IconoReloj, Ico
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 import { useEventosChat } from "./useEventosChat";
+import { useRealtimeChat } from "./useRealtimeChat";
 
 type Conversacion = {
   id: string;
@@ -354,6 +355,14 @@ export default function Chat() {
         });
       }
     }
+  });
+
+  // Supabase Realtime: mantiene la lista en vivo entre asesores (y si cambia el
+  // dueño de un chat suelto, le desaparece a los demás al instante).
+  useRealtimeChat(sucursalId, () => {
+    cargarConversaciones();
+    const sel = seleccionadaIdRef.current;
+    if (sel) cargarMensajes(sel);
   });
 
   function desplazarAlFinal() {
