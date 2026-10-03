@@ -6,12 +6,15 @@ import { generarApiKey, descifrarApiKey } from "../lib/apiKeyEntidad.js";
 import {
   crearEsquemaYTabla,
   eliminarTabla,
+  esEntidadCrm,
   evolucionarTabla,
   validarCampos,
   listarValoresDistintos,
   type CampoEntidad,
 } from "../lib/entidades.js";
 import { aNombreTecnico, identificadorValido } from "../lib/identificadores.js";
+import { panelSchema, validarPanel, leerPanelGuardado, type ItemPanel } from "../lib/panel.js";
+import { emitirBroadcast } from "../lib/realtime.js";
 
 export const adminEntidadesRouter = Router();
 
@@ -133,6 +136,9 @@ adminEntidadesRouter.get("/sucursales/:id/entidad/ejecutivos", async (req, res, 
       sucursal.subdominio,
       definicion.nombre_tecnico,
       definicion.columna_ejecutivo,
+      undefined,
+      200,
+      sucursal.id,
     );
     res.json({ configurado: true, ejecutivos });
   } catch (err) {
@@ -155,6 +161,7 @@ const campoEditableSchema = z.object({
   opciones: z.array(opcionSchema).default([]),
 });
 const camposEditablesSchema = z.object({ campos: z.array(campoEditableSchema) });
+const COLUMNAS_LISTA_CRM = new Set(["etapa_embudo", "estado_contacto", "motivo_perdida", "ejecutivo"]);
 
 /** Config actual de los campos 'back' (los que captura la app, no el sync). */
 adminEntidadesRouter.get("/sucursales/:id/entidad/campos-editables", async (req, res, next) => {
@@ -162,7 +169,7 @@ adminEntidadesRouter.get("/sucursales/:id/entidad/campos-editables", async (req,
     const supabase = getSupabase();
     const { data: definicion, error } = await supabase
       .from("entidad_definiciones")
-      .select("id")
+      .select("id, nombre_tecnico")
       .eq("sucursal_id", req.params.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -170,6 +177,7 @@ adminEntidadesRouter.get("/sucursales/:id/entidad/campos-editables", async (req,
       res.json({ configurado: false, campos: [] });
       return;
     }
+    const esCrm = esEntidadCrm(definicion.nombre_tecnico);
 
     const { data: campos, error: errorCampos } = await supabase
       .from("entidad_campos")
@@ -179,7 +187,9 @@ adminEntidadesRouter.get("/sucursales/:id/entidad/campos-editables", async (req,
       .order("posicion");
     if (errorCampos) throw new Error(errorCampos.message);
 
-    res.json({ configurado: true, campos: campos ?? [] });
+    // En el CRM las listas de etapa, estado de contacto, motivo y ejecutivo salen de sus tablas: no se configuran aquí.
+    const propias = (campos ?? []).filter((c) => !COLUMNAS_LISTA_CRM.has(c.nombre_tecnico) || !esCrm);
+    res.json({ configurado: true, campos: propias });
   } catch (err) {
     next(err);
   }
@@ -238,6 +248,93 @@ adminEntidadesRouter.put("/sucursales/:id/entidad/campos-editables", async (req,
   }
 });
 
+/* ============================================================
+   Panel de filtrado de la tabla: búsquedas, desplegables, KPIs y
+   botones rápidos que el admin arma por sucursal.
+   ============================================================ */
+
+/** Panel guardado + columnas visibles (lo único que se puede usar en un elemento). */
+adminEntidadesRouter.get("/sucursales/:id/entidad/panel", async (req, res, next) => {
+  try {
+    const supabase = getSupabase();
+    const { data: definicion, error } = await supabase
+      .from("entidad_definiciones")
+      .select("id, panel")
+      .eq("sucursal_id", req.params.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!definicion) {
+      res.json({ configurado: false, items: [], campos: [] });
+      return;
+    }
+
+    const { data: campos, error: errorCampos } = await supabase
+      .from("entidad_campos")
+      .select("nombre_tecnico, nombre_visible, tipo, visible")
+      .eq("entidad_id", definicion.id)
+      .order("posicion");
+    if (errorCampos) throw new Error(errorCampos.message);
+
+    res.json({
+      configurado: true,
+      items: leerPanelGuardado(definicion.panel),
+      campos: (campos ?? []).filter((c) => c.visible !== false),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Guarda el panel completo (el arreglo define también el orden). */
+adminEntidadesRouter.put("/sucursales/:id/entidad/panel", async (req, res, next) => {
+  const parsed = panelSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const primero = parsed.error.issues[0];
+    res.status(400).json({ error: primero?.message ?? "Datos inválidos.", detalle: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  try {
+    const supabase = getSupabase();
+    const { data: definicion, error } = await supabase
+      .from("entidad_definiciones")
+      .select("id")
+      .eq("sucursal_id", req.params.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!definicion) {
+      res.status(404).json({ error: "Esta sucursal aún no tiene una entidad definida." });
+      return;
+    }
+
+    const { data: campos, error: errorCampos } = await supabase
+      .from("entidad_campos")
+      .select("nombre_tecnico, nombre_visible, tipo, longitud, requerido, origen, visible")
+      .eq("entidad_id", definicion.id);
+    if (errorCampos) throw new Error(errorCampos.message);
+
+    const visibles = ((campos ?? []) as CampoEntidad[]).filter((c) => c.visible !== false);
+    const errorPanel = validarPanel(parsed.data.items as ItemPanel[], visibles);
+    if (errorPanel) {
+      res.status(400).json({ error: errorPanel });
+      return;
+    }
+
+    const { error: errorGuardar } = await supabase
+      .from("entidad_definiciones")
+      .update({ panel: parsed.data.items, actualizado_en: new Date().toISOString() })
+      .eq("id", definicion.id);
+    if (errorGuardar) throw new Error(errorGuardar.message);
+
+    // Quien tenga la tabla abierta recarga el panel sin refrescar la página.
+    emitirBroadcast(`datos:${req.params.id}`, "panel", {});
+
+    res.json({ guardado: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** Crea la entidad (primera vez) o evoluciona su esquema (agrega/ajusta campos). */
 adminEntidadesRouter.put("/sucursales/:id/entidad", async (req, res, next) => {
   const parsed = definicionSchema.safeParse(req.body);
@@ -267,6 +364,11 @@ adminEntidadesRouter.put("/sucursales/:id/entidad", async (req, res, next) => {
       .eq("sucursal_id", sucursal.id)
       .maybeSingle();
     if (errorExistente) throw new Error(errorExistente.message);
+
+    if (existente && esEntidadCrm(existente.nombre_tecnico)) {
+      res.status(409).json({ error: "Esta sucursal usa el modelo relacional del CRM: sus columnas no se editan desde aquí." });
+      return;
+    }
 
     if (!existente) {
       // ---------- Crear ----------
@@ -355,6 +457,11 @@ adminEntidadesRouter.delete("/sucursales/:id/entidad", async (req, res, next) =>
 
     if (!definicion) {
       res.json({ eliminado: true });
+      return;
+    }
+
+    if (esEntidadCrm(definicion.nombre_tecnico)) {
+      res.status(409).json({ error: "La entidad del CRM no se elimina desde aquí: sus datos son relacionales." });
       return;
     }
 

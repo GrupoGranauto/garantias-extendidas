@@ -305,6 +305,23 @@ export function IconoCalendario({ className }: IconoProps) {
   );
 }
 
+export function IconoBuscar({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="7" cy="7" r="4.8" />
+      <path d="M10.6 10.6 14 14" />
+    </svg>
+  );
+}
+
+export function IconoFiltro({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 3.5h12L9.5 8.8V13l-3-1.4V8.8L2 3.5Z" />
+    </svg>
+  );
+}
+
 export function IconoUbicacion({ className }: IconoProps) {
   return (
     <svg viewBox="0 0 16 16" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
@@ -320,6 +337,43 @@ export function IconoSalir({ className }: IconoProps) {
       <path d="M15 17v1.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2V7" />
       <path d="M10 12h11" />
       <path d="m18 9 3 3-3 3" />
+    </svg>
+  );
+}
+
+export function IconoVistaTabla({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M2 6.7h12M2 10h12M6.2 6.7V13" />
+    </svg>
+  );
+}
+
+export function IconoVistaEmbudo({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2.5" width="3.2" height="11" rx="1" />
+      <rect x="6.4" y="2.5" width="3.2" height="7" rx="1" />
+      <rect x="10.8" y="2.5" width="3.2" height="9" rx="1" />
+    </svg>
+  );
+}
+
+export function IconoTareas({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <rect x="4" y="3.5" width="16" height="17" rx="2.5" />
+      <path d="m8.5 9 1.5 1.5L13 7.5" />
+      <path d="M8.5 15h7" />
+    </svg>
+  );
+}
+
+export function IconoAutomatizaciones({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z" />
     </svg>
   );
 }

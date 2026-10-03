@@ -190,6 +190,7 @@ async function resolverEjecutivoDeLead(config: ConfigSucursal, waId: string): Pr
     config.columna_telefono,
     [definicion.columna_ejecutivo],
     waId,
+    config.sucursal_id,
   );
   const valor = fila?.[definicion.columna_ejecutivo];
   return valor === null || valor === undefined || valor === "" ? null : String(valor);

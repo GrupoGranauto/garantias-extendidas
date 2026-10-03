@@ -71,6 +71,27 @@ export function nombreEsquema(subdominio: string): string {
   return `datos_${subdominio.replace(/-/g, "_")}`;
 }
 
+/**
+ * Vista relacional del CRM (todas las sucursales juntas). Una entidad cuyo
+ * nombre técnico es este no es una tabla propia de la sucursal: toda consulta
+ * debe llevar su sucursal_id, y sus columnas no se modifican desde la definición.
+ */
+export const VISTA_CRM = "crm_v_oportunidades";
+
+export function esEntidadCrm(tabla: string): boolean {
+  return tabla === VISTA_CRM;
+}
+
+/** Relación a consultar: la tabla de la sucursal, o la vista del CRM (que exige sucursal). */
+function relacionDe(subdominio: string, tabla: string, sucursalId?: string): string {
+  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  if (esEntidadCrm(nombreTabla)) {
+    if (!sucursalId) throw new Error("La vista del CRM exige la sucursal.");
+    return `"public"."${nombreTabla}"`;
+  }
+  return `"${exigirIdentificador(nombreEsquema(subdominio), "Esquema")}"."${nombreTabla}"`;
+}
+
 function tipoPostgres(campo: Pick<CampoEntidad, "tipo" | "longitud">): string {
   switch (campo.tipo) {
     case "texto":
@@ -180,41 +201,229 @@ export async function eliminarTabla(subdominio: string, tabla: string): Promise<
   await getPool().query(`DROP TABLE IF EXISTS "${esquema}"."${nombreTabla}";`);
 }
 
-/** Lee registros de la tabla de la entidad, paginado. Para el portal de la sucursal (solo lectura). */
+/** Fechas relativas a "hoy" en la zona horaria de la sucursal. La semana va de lunes a domingo. */
+export type FechaRelativa = "hoy" | "manana" | "semana" | "mes" | "mes_anterior";
+
+/**
+ * Condición sobre una columna. Todo lo que traiga un mismo filtro se exige a la
+ * vez (AND); varios filtros también se combinan con AND.
+ */
+export type FiltroColumna = {
+  columna: string;
+  /** Igual a alguno de estos valores (sin distinguir mayúsculas). */
+  valores?: string[];
+  /** Con `valores`: además acepta las celdas sin valor (ej. "No" también cuenta lo nunca llenado). */
+  incluirVacio?: boolean;
+  /** Solo las celdas sin valor. */
+  vacio?: boolean;
+  /** Contiene este texto (sin distinguir mayúsculas). */
+  contiene?: string;
+  /** Rango de fechas inclusivo. */
+  desde?: string;
+  hasta?: string;
+  /** Fecha relativa a hoy. */
+  relativo?: FechaRelativa;
+};
+
+export type OpcionesListado = {
+  /** Sucursal dueña de los datos: obligatoria con la vista del CRM, que mezcla a todas. */
+  sucursalId?: string;
+  /** Solo las oportunidades de esta etapa del embudo (vista del CRM). */
+  etapaId?: string;
+  /** Orden del embudo: por posición dentro de la etapa, en vez de por una columna. */
+  porPosicion?: boolean;
+  /** Restricción obligatoria por una columna (ej. el Ejecutivo de un asesor). Puede ser una columna no visible. */
+  restriccion?: { columna: string; valor: string };
+  filtros?: FiltroColumna[];
+  /** Cada texto debe aparecer (sin distinguir mayúsculas) en alguna columna visible. */
+  busquedas?: string[];
+  orden?: { columna: string; dir: "asc" | "desc" };
+  /** Zona horaria IANA con la que se resuelven "hoy", "esta semana"… Por omisión, Hermosillo. */
+  zona?: string;
+};
+
+const ZONA_POR_OMISION = "America/Hermosillo";
+
+/**
+ * Arma el WHERE y sus parámetros. Las columnas se validan contra la lista de
+ * campos visibles (o como identificador, en la restricción); los valores siempre
+ * van parametrizados, nunca interpolados.
+ */
+function construirDonde(
+  campos: CampoEntidad[],
+  opciones: OpcionesListado,
+): { sql: string; params: unknown[] } | { error: string } {
+  const visibles = new Map(campos.map((c) => [c.nombre_tecnico, c]));
+  const params: unknown[] = [];
+  const condiciones: string[] = [`"borrado_en" IS NULL`];
+  const marcador = (valor: unknown) => {
+    params.push(valor);
+    return `$${params.length}`;
+  };
+  // La zona se registra como parámetro una sola vez y se reutiliza.
+  let marcadorZona: string | null = null;
+  const zona = () => {
+    if (marcadorZona === null) marcadorZona = marcador(opciones.zona ?? ZONA_POR_OMISION);
+    return marcadorZona;
+  };
+  const hoy = () => `(now() AT TIME ZONE ${zona()})::date`;
+  const comoLike = (texto: string) => `%${texto.replace(/[\\%_]/g, "\\$&")}%`;
+
+  if (opciones.sucursalId) condiciones.push(`"sucursal_id" = ${marcador(opciones.sucursalId)}::uuid`);
+  if (opciones.etapaId) condiciones.push(`"etapa_id" = ${marcador(opciones.etapaId)}::uuid`);
+
+  if (opciones.restriccion) {
+    const col = exigirIdentificador(opciones.restriccion.columna, "Columna de restricción");
+    condiciones.push(`"${col}" = ${marcador(opciones.restriccion.valor)}`);
+  }
+
+  for (const filtro of opciones.filtros ?? []) {
+    const campo = visibles.get(filtro.columna);
+    if (!campo) return { error: `No se puede filtrar por '${filtro.columna}'.` };
+    const col = exigirIdentificador(campo.nombre_tecnico, "Columna de filtro");
+    const esFecha = campo.tipo === "fecha" || campo.tipo === "fecha_hora";
+    const sinValor = `("${col}" IS NULL OR "${col}"::text = '')`;
+
+    if (filtro.valores && filtro.valores.length > 0) {
+      const igual = `lower("${col}"::text) = ANY(${marcador(filtro.valores.map((v) => v.toLowerCase()))}::text[])`;
+      condiciones.push(filtro.incluirVacio ? `(${igual} OR ${sinValor})` : igual);
+    }
+    if (filtro.vacio) condiciones.push(sinValor);
+    if (filtro.contiene) condiciones.push(`"${col}"::text ILIKE ${marcador(comoLike(filtro.contiene))}`);
+
+    if (filtro.desde || filtro.hasta || filtro.relativo) {
+      if (!esFecha) return { error: `'${campo.nombre_visible}' no es una fecha: no admite filtro de fecha.` };
+      // La fecha de un instante (timestamptz) se mide en la zona de la sucursal, no en la del servidor.
+      const dia = campo.tipo === "fecha_hora" ? `("${col}" AT TIME ZONE ${zona()})::date` : `"${col}"::date`;
+
+      if (filtro.desde) condiciones.push(`${dia} >= ${marcador(filtro.desde)}::date`);
+      if (filtro.hasta) condiciones.push(`${dia} <= ${marcador(filtro.hasta)}::date`);
+
+      switch (filtro.relativo) {
+        case "hoy":
+          condiciones.push(`${dia} = ${hoy()}`);
+          break;
+        case "manana":
+          condiciones.push(`${dia} = ${hoy()} + 1`);
+          break;
+        case "semana":
+          condiciones.push(`${dia} >= date_trunc('week', ${hoy()})::date AND ${dia} < date_trunc('week', ${hoy()})::date + 7`);
+          break;
+        case "mes":
+          condiciones.push(
+            `${dia} >= date_trunc('month', ${hoy()})::date AND ${dia} < (date_trunc('month', ${hoy()}) + interval '1 month')::date`,
+          );
+          break;
+        case "mes_anterior":
+          condiciones.push(
+            `${dia} >= (date_trunc('month', ${hoy()}) - interval '1 month')::date AND ${dia} < date_trunc('month', ${hoy()})::date`,
+          );
+          break;
+      }
+    }
+  }
+
+  for (const busqueda of opciones.busquedas ?? []) {
+    const texto = busqueda.trim();
+    if (!texto) continue;
+    const ph = marcador(comoLike(texto));
+    const columnasBusqueda = campos
+      .filter((c) => c.tipo !== "booleano")
+      .map((c) => `"${exigirIdentificador(c.nombre_tecnico, "Nombre técnico del campo")}"::text ILIKE ${ph}`);
+    if (columnasBusqueda.length > 0) condiciones.push(`(${columnasBusqueda.join(" OR ")})`);
+  }
+
+  return { sql: condiciones.join(" AND "), params };
+}
+
+/** Cuántas filas cumplen los filtros actuales más, opcionalmente, una condición extra (para los KPIs). */
+export async function contarRegistros(
+  subdominio: string,
+  tabla: string,
+  campos: CampoEntidad[],
+  opciones: OpcionesListado,
+  extra?: FiltroColumna,
+): Promise<{ total: number } | { error: string }> {
+  const relacion = relacionDe(subdominio, tabla, opciones.sucursalId);
+  const donde = construirDonde(campos, extra ? { ...opciones, filtros: [...(opciones.filtros ?? []), extra] } : opciones);
+  if ("error" in donde) return donde;
+
+  const { rows } = await getPool().query(
+    `SELECT count(*)::int AS total FROM ${relacion} WHERE ${donde.sql};`,
+    donde.params,
+  );
+  return { total: rows[0]?.total ?? 0 };
+}
+
+/**
+ * Valores distintos de una columna dentro de lo que dejan pasar los filtros que
+ * se le manden: así cada desplegable solo ofrece lo que todavía es alcanzable.
+ * Elegir una Agencia reduce los Capturistas disponibles. Quien llama omite el
+ * filtro del propio desplegable (si no, elegir un valor dejaría solo ese valor).
+ */
+export async function valoresDistintosFiltrados(
+  subdominio: string,
+  tabla: string,
+  campos: CampoEntidad[],
+  columna: string,
+  opciones: OpcionesListado,
+  limite = 200,
+): Promise<string[] | { error: string }> {
+  const relacion = relacionDe(subdominio, tabla, opciones.sucursalId);
+  const campo = campos.find((c) => c.nombre_tecnico === columna);
+  if (!campo) return { error: `No se puede enumerar '${columna}'.` };
+  const col = exigirIdentificador(campo.nombre_tecnico, "Columna");
+
+  const donde = construirDonde(campos, opciones);
+  if ("error" in donde) return donde;
+
+  const { rows } = await getPool().query(
+    `SELECT DISTINCT "${col}"::text AS valor FROM ${relacion} ` +
+      `WHERE ${donde.sql} AND "${col}" IS NOT NULL AND "${col}"::text <> '' ORDER BY 1 LIMIT ${Math.max(1, Math.floor(limite))};`,
+    donde.params,
+  );
+  return rows.map((r) => r.valor as string);
+}
+
 export async function listarRegistros(
   subdominio: string,
   tabla: string,
   campos: CampoEntidad[],
   limite: number,
   desplazamiento: number,
-  // Filtro opcional por una columna (ej. restringir por Ejecutivo). La columna
-  // se valida como identificador; el valor va parametrizado.
-  filtro?: { columna: string; valor: string },
-): Promise<{ filas: Record<string, unknown>[]; total: number }> {
-  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
-  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  opciones: OpcionesListado = {},
+): Promise<{ filas: Record<string, unknown>[]; total: number } | { error: string }> {
+  const relacion = relacionDe(subdominio, tabla, opciones.sucursalId);
   // Sin "creado_en": esto lo ve el portal de la sucursal, solo le corresponden
   // las columnas de su propio esquema, no las de auditoría interna.
   const columnas = ["id", ...campos.map((c) => exigirIdentificador(c.nombre_tecnico, "Nombre técnico del campo"))];
 
-  let filtroSql = "";
-  const paramsFiltro: unknown[] = [];
-  if (filtro) {
-    const col = exigirIdentificador(filtro.columna, "Columna de filtro");
-    filtroSql = ` AND "${col}" = $3`;
-    paramsFiltro.push(filtro.valor);
+  const donde = construirDonde(campos, opciones);
+  if ("error" in donde) return donde;
+
+  // Orden: solo por una columna visible. Desempate estable (creado_en, id) para
+  // que la paginación no repita ni se salte filas cuando hay valores iguales.
+  let orden = `"creado_en" DESC, "id"`;
+  if (opciones.porPosicion) {
+    orden = `"posicion" ASC, "id"`;
+  } else if (opciones.orden) {
+    const campo = campos.find((c) => c.nombre_tecnico === opciones.orden!.columna);
+    if (!campo) return { error: `No se puede ordenar por '${opciones.orden.columna}'.` };
+    const col = exigirIdentificador(campo.nombre_tecnico, "Columna de orden");
+    const dir = opciones.orden.dir === "desc" ? "DESC" : "ASC";
+    orden = `"${col}" ${dir} NULLS LAST, "creado_en" DESC, "id"`;
   }
 
   const pool = getPool();
+  const n = donde.params.length;
   const { rows: filas } = await pool.query(
-    `SELECT ${columnas.map((c) => `"${c}"`).join(", ")} FROM "${esquema}"."${nombreTabla}" ` +
-      `WHERE "borrado_en" IS NULL${filtroSql} ORDER BY "creado_en" DESC LIMIT $1 OFFSET $2;`,
-    [limite, desplazamiento, ...paramsFiltro],
+    `SELECT ${columnas.map((c) => `"${c}"`).join(", ")} FROM ${relacion} ` +
+      `WHERE ${donde.sql} ORDER BY ${orden} LIMIT $${n + 1} OFFSET $${n + 2};`,
+    [...donde.params, limite, desplazamiento],
   );
   const { rows: conteo } = await pool.query(
-    `SELECT count(*)::int AS total FROM "${esquema}"."${nombreTabla}" ` +
-      `WHERE "borrado_en" IS NULL${filtro ? ` AND "${exigirIdentificador(filtro.columna, "Columna de filtro")}" = $1` : ""};`,
-    filtro ? [filtro.valor] : [],
+    `SELECT count(*)::int AS total FROM ${relacion} WHERE ${donde.sql};`,
+    donde.params,
   );
 
   return { filas, total: conteo[0]?.total ?? 0 };
@@ -225,13 +434,29 @@ export async function listarValoresDistintos(
   subdominio: string,
   tabla: string,
   columna: string,
+  // Restricción opcional (ej. el Ejecutivo de un asesor): solo valores de filas visibles para él.
+  restriccion?: { columna: string; valor: string },
+  limite = 200,
+  sucursalId?: string,
 ): Promise<string[]> {
-  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
-  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  const relacion = relacionDe(subdominio, tabla, sucursalId);
   const col = exigirIdentificador(columna, "Columna");
+  const params: unknown[] = [];
+  let restriccionSql = "";
+  if (sucursalId && esEntidadCrm(tabla)) {
+    params.push(sucursalId);
+    restriccionSql += ` AND "sucursal_id" = $${params.length}::uuid`;
+  }
+  if (restriccion) {
+    const colR = exigirIdentificador(restriccion.columna, "Columna de restricción");
+    params.push(restriccion.valor);
+    restriccionSql += ` AND "${colR}" = $${params.length}`;
+  }
   const { rows } = await getPool().query(
-    `SELECT DISTINCT "${col}"::text AS valor FROM "${esquema}"."${nombreTabla}" ` +
-      `WHERE "borrado_en" IS NULL AND "${col}" IS NOT NULL AND "${col}"::text <> '' ORDER BY 1;`,
+    `SELECT DISTINCT "${col}"::text AS valor FROM ${relacion} ` +
+      `WHERE "borrado_en" IS NULL AND "${col}" IS NOT NULL AND "${col}"::text <> ''${restriccionSql} ` +
+      `ORDER BY 1 LIMIT ${Math.max(1, Math.floor(limite))};`,
+    params,
   );
   return rows.map((r) => r.valor as string);
 }
@@ -248,19 +473,20 @@ export async function buscarContactoPorTelefono(
   columnaTelefono: string,
   columnasDeseadas: string[],
   waId: string,
+  sucursalId?: string,
 ): Promise<Record<string, unknown> | null> {
-  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
-  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  const relacion = relacionDe(subdominio, tabla, sucursalId);
   const colTelefono = exigirIdentificador(columnaTelefono, "Columna de teléfono");
   const columnas = [...new Set(columnasDeseadas)].map((c) => exigirIdentificador(c, "Columna"));
   if (columnas.length === 0) return null;
 
+  const porSucursal = sucursalId && esEntidadCrm(tabla) ? ` AND "sucursal_id" = $2::uuid` : "";
   const { rows } = await getPool().query(
-    `SELECT ${columnas.map((c) => `"${c}"`).join(", ")} FROM "${esquema}"."${nombreTabla}" ` +
-      `WHERE "borrado_en" IS NULL ` +
+    `SELECT ${columnas.map((c) => `"${c}"`).join(", ")} FROM ${relacion} ` +
+      `WHERE "borrado_en" IS NULL${porSucursal} ` +
       `AND right(regexp_replace("${colTelefono}"::text, '\\D', '', 'g'), 10) = right(regexp_replace($1, '\\D', '', 'g'), 10) ` +
       `ORDER BY "creado_en" DESC LIMIT 1;`,
-    [waId],
+    porSucursal ? [waId, sucursalId] : [waId],
   );
   return rows[0] ?? null;
 }
@@ -441,13 +667,14 @@ export async function leerColumnaDeFila(
   tabla: string,
   rowId: string,
   columna: string,
+  sucursalId?: string,
 ): Promise<unknown | undefined> {
-  const esquema = exigirIdentificador(nombreEsquema(subdominio), "Esquema");
-  const nombreTabla = exigirIdentificador(tabla, "Nombre técnico de la entidad");
+  const relacion = relacionDe(subdominio, tabla, sucursalId);
   const col = exigirIdentificador(columna, "Columna");
+  const porSucursal = sucursalId && esEntidadCrm(tabla) ? ` AND "sucursal_id" = $2::uuid` : "";
   const { rows } = await getPool().query(
-    `SELECT "${col}" AS valor FROM "${esquema}"."${nombreTabla}" WHERE "id" = $1 AND "borrado_en" IS NULL;`,
-    [rowId],
+    `SELECT "${col}" AS valor FROM ${relacion} WHERE "id" = $1 AND "borrado_en" IS NULL${porSucursal};`,
+    porSucursal ? [rowId, sucursalId] : [rowId],
   );
   return rows[0]?.valor;
 }

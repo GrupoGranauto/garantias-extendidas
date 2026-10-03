@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { IconoCalendario } from "../componentes/Iconos";
@@ -212,17 +212,7 @@ export default function SucursalCamposEditables() {
                           placeholder="Nombre de la opción"
                           style={{ flex: 1 }}
                         />
-                        <span
-                          className="etiqueta-chip"
-                          style={{
-                            background: op.color,
-                            color: "#fff",
-                            borderRadius: 999,
-                            padding: "2px 10px",
-                            fontSize: 12,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
+                        <span className="etiqueta-chip" style={{ "--chip": op.color } as CSSProperties}>
                           {op.valor || "Ejemplo"}
                         </span>
                         <button

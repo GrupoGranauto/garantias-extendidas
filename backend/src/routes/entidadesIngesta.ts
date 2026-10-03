@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { getSupabase } from "../lib/supabase.js";
 import { requireApiKeyEntidad } from "../middleware/apiKeyEntidad.js";
-import { construirValores, insertarRegistro, insertarRegistrosLote, type CampoEntidad } from "../lib/entidades.js";
+import { construirValores, esEntidadCrm, insertarRegistro, insertarRegistrosLote, type CampoEntidad } from "../lib/entidades.js";
 
 export const entidadesIngestaRouter = Router();
 
@@ -45,6 +45,10 @@ entidadesIngestaRouter.post("/:sucursalId/registros", async (req, res, next) => 
       res.status(404).json({ error: "Esta sucursal aún no tiene una entidad definida." });
       return;
     }
+    if (esEntidadCrm(entidad.nombreTabla)) {
+      res.status(409).json({ error: "Esta sucursal se alimenta desde BigQuery, no por la API de ingesta." });
+      return;
+    }
 
     const cuerpo = (req.body ?? {}) as Record<string, unknown>;
     const resultado = construirValores(entidad.campos, cuerpo);
@@ -66,6 +70,10 @@ entidadesIngestaRouter.post("/:sucursalId/registros/lote", async (req, res, next
     const entidad = await obtenerEntidad(req.params.sucursalId);
     if (!entidad) {
       res.status(404).json({ error: "Esta sucursal aún no tiene una entidad definida." });
+      return;
+    }
+    if (esEntidadCrm(entidad.nombreTabla)) {
+      res.status(409).json({ error: "Esta sucursal se alimenta desde BigQuery, no por la API de ingesta." });
       return;
     }
 

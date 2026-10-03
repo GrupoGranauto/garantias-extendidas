@@ -7,6 +7,7 @@ const PESTANAS = [
   { etiqueta: "WhatsApp", sufijo: "whatsapp" },
   { etiqueta: "Base de datos", sufijo: "base-datos" },
   { etiqueta: "Campos editables", sufijo: "campos" },
+  { etiqueta: "Panel", sufijo: "panel" },
 ];
 
 export default function PestanasSucursal({ id }: Props) {

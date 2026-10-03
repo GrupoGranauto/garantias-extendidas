@@ -5,7 +5,9 @@ import {
   IconoUsuarios,
   IconoAdministradores,
   IconoMensaje,
+  IconoAutomatizaciones,
   IconoBaseDatos,
+  IconoTareas,
   IconoChat,
 } from "./componentes/Iconos";
 
@@ -66,6 +68,8 @@ export const NAVEGACION_PORTAL: Grupo[] = [
       { etiqueta: "Inicio", icono: <IconoInicio />, ruta: "/" },
       { etiqueta: "Chat", icono: <IconoChat />, ruta: "/chat" },
       { etiqueta: "Base de Datos", icono: <IconoBaseDatos />, ruta: "/base-datos" },
+      { etiqueta: "Tareas", icono: <IconoTareas />, ruta: "/tareas" },
+      { etiqueta: "Automatizaciones", icono: <IconoAutomatizaciones />, ruta: "/automatizaciones" },
       { etiqueta: "Plantillas", icono: <IconoMensaje />, ruta: "/plantillas" },
     ],
   },

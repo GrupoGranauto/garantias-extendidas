@@ -8,6 +8,8 @@ import PlantillasListado from "../portal/PlantillasListado";
 import PlantillaFormulario from "../portal/PlantillaFormulario";
 import BaseDatos from "../portal/BaseDatos";
 import Chat from "../portal/Chat";
+import Tareas from "../portal/Tareas";
+import Automatizaciones from "../portal/Automatizaciones";
 import LayoutPanel from "../componentes/LayoutPanel";
 import { NAVEGACION_PORTAL, RUTAS_DEL_MENU } from "../navegacion";
 import Inicio from "../paginas/Inicio";
@@ -19,6 +21,7 @@ import SucursalGeneral from "../paginas/SucursalGeneral";
 import SucursalWhatsapp from "../paginas/SucursalWhatsapp";
 import SucursalBaseDatos from "../paginas/SucursalBaseDatos";
 import SucursalCamposEditables from "../paginas/SucursalCamposEditables";
+import SucursalPanel from "../paginas/SucursalPanel";
 import UsuariosNuevo from "../paginas/UsuariosNuevo";
 import UsuariosListado from "../paginas/UsuariosListado";
 import UsuarioEditar from "../paginas/UsuarioEditar";
@@ -93,7 +96,7 @@ export default function GuardiaSucursal() {
       ? NAVEGACION_PORTAL
       : NAVEGACION_PORTAL.map((g) => ({
           ...g,
-          secciones: g.secciones.filter((s) => s.ruta !== "/plantillas"),
+          secciones: g.secciones.filter((s) => s.ruta !== "/plantillas" && s.ruta !== "/automatizaciones"),
         }));
 
     return (
@@ -111,6 +114,8 @@ export default function GuardiaSucursal() {
           <Route path="/" element={<EnConstruccion titulo="Inicio" />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/base-datos" element={<BaseDatos />} />
+          <Route path="/tareas" element={<Tareas />} />
+          {esAdmin && <Route path="/automatizaciones" element={<Automatizaciones />} />}
           {esAdmin && <Route path="/plantillas" element={<PlantillasListado />} />}
           {esAdmin && <Route path="/plantillas/nueva" element={<PlantillaFormulario />} />}
           {esAdmin && <Route path="/plantillas/:pid/editar" element={<PlantillaFormulario />} />}
@@ -141,6 +146,7 @@ export default function GuardiaSucursal() {
           <Route path="whatsapp" element={<SucursalWhatsapp />} />
           <Route path="base-datos" element={<SucursalBaseDatos />} />
           <Route path="campos" element={<SucursalCamposEditables />} />
+          <Route path="panel" element={<SucursalPanel />} />
         </Route>
 
         {/* Igual que sucursales: no vive en el menú, solo se llega desde el listado */}

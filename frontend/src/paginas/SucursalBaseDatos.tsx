@@ -289,6 +289,15 @@ export default function SucursalBaseDatos() {
     return <Cargador />;
   }
 
+  if (entidad?.configurado && entidad.nombre_tecnico === "crm_v_oportunidades") {
+    return (
+      <p className="pestana-descripcion">
+        Esta sucursal usa el modelo relacional del CRM: contactos, vehículos, oportunidades, etapas e
+        historial viven en tablas propias y se alimentan desde BigQuery. Sus columnas ya no se definen aquí.
+      </p>
+    );
+  }
+
   const mostrarFormulario = !entidad?.configurado || editando;
   const origenApiUrl = `${window.location.origin}/api/entidades/${sucursal.id}`;
   const camposApi = (entidad?.campos ?? []).filter((c) => c.origen !== "back");

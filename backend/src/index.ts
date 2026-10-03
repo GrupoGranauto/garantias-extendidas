@@ -10,6 +10,10 @@ import { adminRouter } from "./routes/admin.js";
 import { adminWhatsappRouter } from "./routes/adminWhatsapp.js";
 import { adminPlantillasRouter } from "./routes/adminPlantillas.js";
 import { adminEntidadesRouter } from "./routes/adminEntidades.js";
+import { adminCrmRouter } from "./routes/adminCrm.js";
+import { crmPortalRouter } from "./routes/crmPortal.js";
+import { iniciarMotorCrm } from "./lib/motorCrm.js";
+import { iniciarSyncProgramadoCrm } from "./lib/sincronizacionCrm.js";
 import { entidadDatosRouter } from "./routes/entidadDatos.js";
 import { whatsappChatRouter } from "./routes/whatsappChat.js";
 import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
@@ -48,11 +52,13 @@ app.use("/api/garantias", garantiasRouter);
 // Cada uno protege sus rutas con requireAccesoSucursal.
 app.use("/api/admin", entidadDatosRouter);
 app.use("/api/admin", whatsappChatRouter);
+app.use("/api/admin", crmPortalRouter);
 // Routers solo-admin (adminRouter gatea con requireAdmin todo lo que le llegue).
 app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);
 app.use("/api/admin", adminPlantillasRouter);
 app.use("/api/admin", adminEntidadesRouter);
+app.use("/api/admin", adminCrmRouter);
 // Ingesta externa: autenticada por API key propia de la sucursal, no por sesión.
 app.use("/api/entidades", entidadesIngestaRouter);
 
@@ -105,6 +111,8 @@ app.use(
 );
 
 app.listen(env.PORT, () => {
+  if (flags.supabase && process.env.CRM_MOTOR !== "off") iniciarMotorCrm();
+  if (flags.supabase && flags.bigquery && process.env.CRM_SYNC_AUTO === "true") iniciarSyncProgramadoCrm();
   console.log(`[backend] http://localhost:${env.PORT}  (${env.NODE_ENV})`);
   console.log(`[backend] sitio: ${fs.existsSync(sitio) ? sitio : "no compilado (modo desarrollo)"}`);
   console.log(`[backend] supabase: ${flags.supabase ? "ok" : "sin configurar"} | bigquery: ${flags.bigquery ? "ok" : "sin configurar"}`);

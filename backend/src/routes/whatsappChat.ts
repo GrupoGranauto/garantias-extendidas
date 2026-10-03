@@ -492,6 +492,7 @@ whatsappChatRouter.post(
               config.columna_telefono,
               columnasOrdenadas as string[],
               conversacion.wa_id,
+              req.params.id,
             );
           }
         }
