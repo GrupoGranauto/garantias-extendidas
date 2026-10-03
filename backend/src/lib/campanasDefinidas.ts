@@ -1,7 +1,7 @@
 import { getPool } from "./db.js";
 import { ahoraLocal } from "./campanasLogica.js";
 import { COLUMNAS_FECHA } from "./cicloVehiculo.js";
-import { asignarCampana, perteneceACampana, validarDefiniciones, type DefinicionCampana } from "./campanasDefLogica.js";
+import { asignarCampana, describirDefinicion, inicioEnCampana, perteneceACampana, validarDefiniciones, type DefinicionCampana } from "./campanasDefLogica.js";
 
 /**
  * Campañas definidas por el usuario y su cálculo diario. La regla vive en campanasDefLogica.ts (pura y probada);
@@ -46,6 +46,12 @@ function aDefinicion(r: any): Definicion {
 async function leerDefs(cl: Consulta, sucursalId: string): Promise<Definicion[]> {
   const { rows } = await cl.query(`SELECT ${COLUMNAS_SQL} FROM crm_campanas_def WHERE sucursal_id = $1 ORDER BY orden`, [sucursalId]);
   return rows.map(aDefinicion);
+}
+
+/** La regla de cada campaña en una frase (para mostrarla en la pestaña de envíos), por nombre de campaña. */
+export async function leerDescripciones(cl: Consulta, sucursalId: string): Promise<Map<string, string>> {
+  const defs = await leerDefs(cl, sucursalId);
+  return new Map(defs.map((d) => [d.nombre, describirDefinicion(d)]));
 }
 
 /** La primera vez que se abre la pantalla se siembran las campañas que ya existen en la cartera. */
@@ -114,20 +120,29 @@ export async function calcularCampanas(
   const lista = await candidatas(cl, sucursalId);
   const hoy = ahoraLocal().fecha;
 
-  const filas: { oportunidad_id: string; campana_def_id: string; campana: string }[] = [];
+  const filas: { oportunidad_id: string; campana_def_id: string; campana: string; inicio: string; hora_envio: string | null }[] = [];
   let traslapes = 0;
   for (const o of lista) {
-    const { elegida, todas } = asignarCampana(defs, (d) => ({ fecha: d.columna_fecha === "fecha_reporte" ? o.fecha_reporte : o.fecha_factura, etapaOrden: o.etapa_orden }), hoy);
+    const fechaDe = (d: DefinicionCampana) => (d.columna_fecha === "fecha_reporte" ? o.fecha_reporte : o.fecha_factura);
+    const { elegida, todas } = asignarCampana(defs, (d) => ({ fecha: fechaDe(d), etapaOrden: o.etapa_orden }), hoy);
     if (todas.length > 1) traslapes++;
-    if (elegida) filas.push({ oportunidad_id: o.id, campana_def_id: elegida.id, campana: elegida.nombre });
+    if (elegida) {
+      filas.push({
+        oportunidad_id: o.id,
+        campana_def_id: elegida.id,
+        campana: elegida.nombre,
+        inicio: inicioEnCampana(elegida, fechaDe(elegida)!, hoy),
+        hora_envio: elegida.tipo === "meses" ? elegida.hora_envio : null,
+      });
+    }
   }
 
   await cl.query(`DELETE FROM crm_campana_calculada WHERE sucursal_id = $1`, [sucursalId]);
   for (let i = 0; i < filas.length; i += 1000) {
     await cl.query(
-      `INSERT INTO crm_campana_calculada (oportunidad_id, sucursal_id, campana_def_id, campana)
-       SELECT r.oportunidad_id, $1, r.campana_def_id, r.campana
-         FROM jsonb_to_recordset($2::jsonb) AS r(oportunidad_id uuid, campana_def_id uuid, campana text)`,
+      `INSERT INTO crm_campana_calculada (oportunidad_id, sucursal_id, campana_def_id, campana, inicio, hora_envio)
+       SELECT r.oportunidad_id, $1, r.campana_def_id, r.campana, r.inicio::date, r.hora_envio::time
+         FROM jsonb_to_recordset($2::jsonb) AS r(oportunidad_id uuid, campana_def_id uuid, campana text, inicio text, hora_envio text)`,
       [sucursalId, JSON.stringify(filas.slice(i, i + 1000))],
     );
   }
@@ -184,6 +199,58 @@ export async function calcularSiToca(): Promise<number> {
     }
   }
   return corridas;
+}
+
+/* ============================================================
+   Quién manda la campaña para los envíos: BigQuery o la web
+   ============================================================ */
+
+export type FuenteCampanas = "bigquery" | "web";
+
+export async function leerFuente(cl: Consulta, sucursalId: string): Promise<FuenteCampanas> {
+  const { rows } = await cl.query(`SELECT campanas_fuente FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
+  return rows[0]?.campanas_fuente === "web" ? "web" : "bigquery";
+}
+
+export type ResultadoFuente = { ok: true; fuente: FuenteCampanas; pendientes_cancelados: number; calculo?: ResultadoCalculo } | { ok: false; error: string };
+
+/**
+ * Cambia quién decide la campaña de cada oportunidad para los envíos. Al pasar a la web se calcula de nuevo en ese
+ * momento. Lo que estaba pendiente de enviar se cancela (el planificador lo vuelve a programar con la fuente nueva);
+ * lo ya enviado queda como historial. Es reversible.
+ */
+export async function cambiarFuente(sucursalId: string, fuente: FuenteCampanas, usuarioId: string | null): Promise<ResultadoFuente> {
+  const cliente = await getPool().connect();
+  try {
+    await cliente.query("BEGIN");
+    if ((await leerFuente(cliente, sucursalId)) === fuente) {
+      await cliente.query("ROLLBACK");
+      return { ok: true, fuente, pendientes_cancelados: 0 };
+    }
+    let calculo: ResultadoCalculo | undefined;
+    if (fuente === "web") {
+      const { rows } = await cliente.query(`SELECT count(*)::int AS n FROM crm_campanas_def WHERE sucursal_id = $1 AND activa`, [sucursalId]);
+      if ((rows[0]?.n as number) === 0) {
+        await cliente.query("ROLLBACK");
+        return { ok: false, error: "Define y activa al menos una campaña antes de pasar a la web." };
+      }
+      calculo = await calcularCampanas(cliente, sucursalId, "manual");
+    }
+    await cliente.query(
+      `INSERT INTO crm_config (sucursal_id, campanas_fuente, campanas_fuente_cambiada_en, campanas_fuente_cambiada_por) VALUES ($1, $2, now(), $3)
+       ON CONFLICT (sucursal_id) DO UPDATE SET campanas_fuente = EXCLUDED.campanas_fuente, campanas_fuente_cambiada_en = now(),
+              campanas_fuente_cambiada_por = EXCLUDED.campanas_fuente_cambiada_por, actualizado_en = now()`,
+      [sucursalId, fuente, usuarioId],
+    );
+    const { rowCount } = await cliente.query(`DELETE FROM crm_envios WHERE sucursal_id = $1 AND estado = 'pendiente'`, [sucursalId]);
+    await cliente.query("COMMIT");
+    return { ok: true, fuente, pendientes_cancelados: rowCount ?? 0, calculo };
+  } catch (err) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    cliente.release();
+  }
 }
 
 /* ============================================================
@@ -265,6 +332,7 @@ export async function leerCampanasDef(sucursalId: string) {
     ultimo_calculo: (cfg[0]?.ultimo as string | undefined) ?? null,
     ultima_corrida: ultima[0] ?? null,
     columna_fecha_etapas: (ciclo[0]?.columna_fecha as string | undefined) ?? "fecha_factura",
+    fuente: await leerFuente(pool, sucursalId),
     comparacion: ultima[0] ? await compararConBigQuery(sucursalId) : null,
   };
 }

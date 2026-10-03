@@ -1,6 +1,8 @@
 import { getPool } from "./db.js";
 import { configPorSucursalId, enviarMensaje } from "./whatsapp.js";
 import { emitirEventoChat } from "./eventosChat.js";
+import { horaDelPaso } from "./campanasDefLogica.js";
+import { leerDescripciones, leerFuente } from "./campanasDefinidas.js";
 import {
   CAMPANAS_CONOCIDAS,
   ZONA_ENVIOS,
@@ -78,14 +80,26 @@ export async function leerCampanas(sucursalId: string) {
        FROM crm_campana_pasos p JOIN crm_campanas_envio c ON c.id = p.config_id WHERE c.sucursal_id = $1 ORDER BY p.orden`,
     [sucursalId],
   );
-  const { rows: activas } = await pool.query(
-    `SELECT campana, count(*)::int AS n, min(fecha_inicio_campana)::text AS inicio, max(fecha_fin_campana)::text AS fin
-       FROM crm_oportunidades WHERE sucursal_id = $1 AND estado_cartera = 'ACTIVA' AND estado = 'abierta' GROUP BY campana`,
-    [sucursalId],
-  );
+  const fuente = await leerFuente(pool, sucursalId);
+  // Con la web como fuente, «activas» son las que ella calculó; con BigQuery, las que él mandó.
+  const { rows: activas } =
+    fuente === "web"
+      ? await pool.query(
+          `SELECT w.campana, count(*)::int AS n, min(w.inicio)::text AS inicio, max(w.inicio)::text AS fin
+             FROM crm_campana_calculada w JOIN crm_oportunidades o ON o.id = w.oportunidad_id
+            WHERE w.sucursal_id = $1 AND o.estado = 'abierta' GROUP BY w.campana`,
+          [sucursalId],
+        )
+      : await pool.query(
+          `SELECT campana, count(*)::int AS n, min(fecha_inicio_campana)::text AS inicio, max(fecha_fin_campana)::text AS fin
+             FROM crm_oportunidades WHERE sucursal_id = $1 AND estado_cartera = 'ACTIVA' AND estado = 'abierta' GROUP BY campana`,
+          [sucursalId],
+        );
   const porCampana = new Map(activas.map((a) => [a.campana as string, a]));
+  const detalles = await leerDescripciones(pool, sucursalId);
   return cfgs.map((c) => ({
     campana: c.campana as string,
+    detalle: fuente === "web" ? (detalles.get(c.campana as string) ?? null) : null,
     activa: c.activa as boolean,
     modo: c.modo as "simulacion" | "real",
     dias_semana: c.dias_semana as number[],
@@ -196,16 +210,29 @@ export async function vistaPrevia(sucursalId: string, campana: string) {
   const cfg = campanas.find((c) => c.campana === campana);
   if (!cfg) return null;
 
-  const { rows: grupos } = await getPool().query(
-    `SELECT o.fecha_inicio_campana::text AS inicio, count(*)::int AS total,
+  const conteos = `count(*)::int AS total,
             count(*) FILTER (WHERE c.whatsapp_baja)::int AS bajas,
             count(*) FILTER (WHERE NOT ${SQL_TEL_VALIDO} OR c.tiene_celular IS FALSE)::int AS sin_telefono,
-            count(*) FILTER (WHERE ${SQL_TEL_VALIDO} AND c.tiene_celular IS NOT FALSE AND NOT c.whatsapp_baja)::int AS alcanzables
-       FROM crm_oportunidades o JOIN crm_contactos c ON c.id = o.contacto_id
-      WHERE o.sucursal_id = $1 AND o.campana = $2 AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'
-      GROUP BY 1 ORDER BY 1`,
-    [sucursalId, campana],
-  );
+            count(*) FILTER (WHERE ${SQL_TEL_VALIDO} AND c.tiene_celular IS NOT FALSE AND NOT c.whatsapp_baja)::int AS alcanzables`;
+  const fuente = await leerFuente(getPool(), sucursalId);
+  const { rows: grupos } =
+    fuente === "web"
+      ? await getPool().query(
+          `SELECT w.inicio::text AS inicio, w.hora_envio::text AS hora_envio, ${conteos}
+             FROM crm_campana_calculada w
+             JOIN crm_oportunidades o ON o.id = w.oportunidad_id
+             JOIN crm_contactos c ON c.id = o.contacto_id
+            WHERE w.sucursal_id = $1 AND w.campana = $2 AND w.inicio IS NOT NULL AND o.estado = 'abierta'
+            GROUP BY 1, 2 ORDER BY 1`,
+          [sucursalId, campana],
+        )
+      : await getPool().query(
+          `SELECT o.fecha_inicio_campana::text AS inicio, NULL::text AS hora_envio, ${conteos}
+             FROM crm_oportunidades o JOIN crm_contactos c ON c.id = o.contacto_id
+            WHERE o.sucursal_id = $1 AND o.campana = $2 AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'
+            GROUP BY 1 ORDER BY 1`,
+          [sucursalId, campana],
+        );
 
   const suma = (k: "total" | "bajas" | "sin_telefono" | "alcanzables") => grupos.reduce((n, g) => n + (g[k] as number), 0);
   const ventana: Ventana = { dias_semana: cfg.dias_semana, hora_inicio: cfg.hora_inicio, hora_fin: cfg.hora_fin };
@@ -214,7 +241,7 @@ export async function vistaPrevia(sucursalId: string, campana: string) {
   const pasos = cfg.pasos.map((p, i) => {
     const fechas = new Map<string, { fecha: string; hora: string; oportunidades: number; vigente: boolean }>();
     for (const g of grupos) {
-      const prog = calcularProgramacion(g.inicio as string, p.dias_despues, p.hora, ventana);
+      const prog = calcularProgramacion(g.inicio as string, p.dias_despues, horaDelPaso(p.hora, hhmm(g.hora_envio as string | null)), ventana);
       const programadoMs = Date.parse(`${prog.fecha}T${prog.hora}:00-07:00`);
       const vigente = ahoraMs <= programadoMs + p.vigencia_dias * 86_400_000;
       const k = `${prog.fecha} ${prog.hora}`;
@@ -273,37 +300,54 @@ export async function registroEnvios(sucursalId: string, campana: string | null)
 /** Crea la fila de cada paso que aún no existe para las oportunidades de campañas encendidas. */
 export async function planificarEnvios(): Promise<number> {
   const pool = getPool();
-  const { rows } = await pool.query(
+  // Cada sucursal usa UNA fuente de campañas: la que manda BigQuery (por omisión) o la que calcula la web.
+  const { rows: deBigQuery } = await pool.query(
     `SELECT cfg.sucursal_id, cfg.campana, cfg.dias_semana, cfg.hora_inicio::text AS hora_inicio, cfg.hora_fin::text AS hora_fin,
             p.id AS paso_id, p.plantilla_id, p.dias_despues, p.hora::text AS hora,
-            o.id AS oportunidad_id, o.fecha_inicio_campana::text AS inicio
+            o.id AS oportunidad_id, o.fecha_inicio_campana::text AS inicio, NULL::text AS hora_envio
        FROM crm_campanas_envio cfg
+       LEFT JOIN crm_config cc ON cc.sucursal_id = cfg.sucursal_id
        JOIN crm_campana_pasos p ON p.config_id = cfg.id AND p.plantilla_id IS NOT NULL
        JOIN crm_oportunidades o ON o.sucursal_id = cfg.sucursal_id AND o.campana = cfg.campana
                                AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND o.fecha_inicio_campana IS NOT NULL
+      WHERE cfg.activa AND coalesce(cc.campanas_fuente, 'bigquery') = 'bigquery'
+        AND NOT EXISTS (SELECT 1 FROM crm_envios e WHERE e.oportunidad_id = o.id AND e.paso_id = p.id)
+      LIMIT 3000`,
+  );
+  const { rows: deLaWeb } = await pool.query(
+    `SELECT cfg.sucursal_id, cfg.campana, cfg.dias_semana, cfg.hora_inicio::text AS hora_inicio, cfg.hora_fin::text AS hora_fin,
+            p.id AS paso_id, p.plantilla_id, p.dias_despues, p.hora::text AS hora,
+            o.id AS oportunidad_id, w.inicio::text AS inicio, w.hora_envio::text AS hora_envio
+       FROM crm_campanas_envio cfg
+       JOIN crm_config cc ON cc.sucursal_id = cfg.sucursal_id AND cc.campanas_fuente = 'web'
+       JOIN crm_campana_pasos p ON p.config_id = cfg.id AND p.plantilla_id IS NOT NULL
+       JOIN crm_campana_calculada w ON w.sucursal_id = cfg.sucursal_id AND w.campana = cfg.campana AND w.inicio IS NOT NULL
+       JOIN crm_oportunidades o ON o.id = w.oportunidad_id AND o.estado = 'abierta'
       WHERE cfg.activa
         AND NOT EXISTS (SELECT 1 FROM crm_envios e WHERE e.oportunidad_id = o.id AND e.paso_id = p.id)
       LIMIT 3000`,
   );
+  const rows = [...deBigQuery, ...deLaWeb];
   if (rows.length === 0) return 0;
 
   const lote = rows.map((r) => {
     const ventana: Ventana = { dias_semana: r.dias_semana, hora_inicio: r.hora_inicio, hora_fin: r.hora_fin };
-    const prog = calcularProgramacion(r.inicio, r.dias_despues, hhmm(r.hora), ventana);
+    const prog = calcularProgramacion(r.inicio, r.dias_despues, horaDelPaso(hhmm(r.hora), hhmm(r.hora_envio)), ventana);
     return {
       sucursal_id: r.sucursal_id,
       oportunidad_id: r.oportunidad_id,
       paso_id: r.paso_id,
       campana: r.campana,
       plantilla_id: r.plantilla_id,
+      inicio: r.inicio,
       local: `${prog.fecha} ${prog.hora}:00`,
     };
   });
 
   const { rowCount } = await pool.query(
-    `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, plantilla_id, programado_para)
-     SELECT r.sucursal_id, r.oportunidad_id, r.paso_id, r.campana, r.plantilla_id, (r.local::timestamp AT TIME ZONE '${ZONA_ENVIOS}')
-       FROM jsonb_to_recordset($1::jsonb) AS r(sucursal_id uuid, oportunidad_id uuid, paso_id uuid, campana text, plantilla_id uuid, local text)
+    `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, plantilla_id, inicio, programado_para)
+     SELECT r.sucursal_id, r.oportunidad_id, r.paso_id, r.campana, r.plantilla_id, r.inicio::date, (r.local::timestamp AT TIME ZONE '${ZONA_ENVIOS}')
+       FROM jsonb_to_recordset($1::jsonb) AS r(sucursal_id uuid, oportunidad_id uuid, paso_id uuid, campana text, plantilla_id uuid, inicio text, local text)
      ON CONFLICT (oportunidad_id, paso_id) DO NOTHING`,
     [JSON.stringify(lote)],
   );
@@ -357,7 +401,15 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
   const { rows } = await cl.query(
     `SELECT cfg.activa, cfg.modo, cfg.dias_semana, cfg.hora_inicio::text AS hora_inicio, cfg.hora_fin::text AS hora_fin, cfg.max_por_dia, cfg.dias_entre_mensajes,
             p.vigencia_dias, p.solo_sin_respuesta, p.solo_sin_contacto, p.etapas,
-            o.campana, o.estado_cartera, o.estado, o.fecha_inicio_campana::text AS inicio, o.ejecutivo, et.nombre AS etapa,
+            -- Con la web como fuente, la oportunidad «sigue en la campaña» mientras la web no la ponga en OTRA y siga
+            -- sin garantía extendida: salir de la ventana de la campaña no corta la cadencia que ya empezó.
+            CASE WHEN coalesce(cc.campanas_fuente, 'bigquery') = 'web'
+                 THEN (CASE WHEN w.campana IS NULL OR w.campana = e.campana THEN e.campana ELSE w.campana END)
+                 ELSE o.campana END AS campana,
+            CASE WHEN coalesce(cc.campanas_fuente, 'bigquery') = 'web'
+                 THEN (CASE WHEN coalesce(v.tiene_ge, false) THEN 'YA_TIENE_GE' ELSE 'ACTIVA' END)
+                 ELSE o.estado_cartera END AS estado_cartera,
+            o.estado, coalesce(e.inicio, o.fecha_inicio_campana)::text AS inicio, o.ejecutivo, et.nombre AS etapa,
             c.id AS contacto_id, c.nombre AS cliente, c.telefono, c.tiene_celular, c.whatsapp_baja,
             wp.estado AS plantilla_estado, wp.nombre_tecnico, wp.idioma, wp.componentes, wp.nombre AS plantilla_nombre
        FROM crm_envios e
@@ -365,6 +417,9 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
        JOIN crm_campanas_envio cfg ON cfg.id = p.config_id
        JOIN crm_oportunidades o ON o.id = e.oportunidad_id
        JOIN crm_contactos c ON c.id = o.contacto_id
+       JOIN crm_vehiculos v ON v.id = o.vehiculo_id
+       LEFT JOIN crm_config cc ON cc.sucursal_id = e.sucursal_id
+       LEFT JOIN crm_campana_calculada w ON w.oportunidad_id = o.id
        LEFT JOIN crm_etapas et ON et.id = o.etapa_id
        LEFT JOIN whatsapp_plantillas wp ON wp.id = p.plantilla_id
       WHERE e.id = $1`,

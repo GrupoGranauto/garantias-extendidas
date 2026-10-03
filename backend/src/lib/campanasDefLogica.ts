@@ -84,12 +84,37 @@ export function asignarCampana<T extends DefinicionCampana>(
   return { elegida: todas[0] ?? null, todas };
 }
 
+/**
+ * Desde cuándo cuenta la campaña para un lead que pertenece a ella hoy: de aquí se cuentan los días de cada paso.
+ *  - Por días: el primer día que cumple la ventana (la fecha del vehículo + `dias_desde`).
+ *  - Por meses: el día de envío de este mes. Un lead que llega después de ese día queda con un inicio ya pasado: su
+ *    primer mensaje sale en cuanto abra la ventana de envío si todavía está dentro de la vigencia del paso; si no, se
+ *    omite y queda registrado.
+ */
+export function inicioEnCampana(def: DefinicionCampana, fecha: string, hoy: string): string {
+  if (def.tipo === "dias") return sumarDiasFecha(fecha, def.dias_desde ?? 0);
+  return `${hoy.slice(0, 7)}-${String(def.dia_envio ?? 1).padStart(2, "0")}`;
+}
+
+/** Suma días a una fecha 'YYYY-MM-DD'. */
+export function sumarDiasFecha(fecha: string, n: number): string {
+  const d = new Date(`${fecha}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** La hora del primer mensaje: la que puso el paso; si no, la de la campaña por meses; si no, al abrir la ventana (null). */
+export function horaDelPaso(horaPaso: string | null, horaCampana: string | null): string | null {
+  return horaPaso ?? horaCampana ?? null;
+}
+
 const HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** Revisa una definición. Devuelve el texto del error, o null. */
 export function validarDefinicion(d: DefinicionCampana): string | null {
   const nombre = d.nombre.trim();
   if (!nombre) return "Cada campaña necesita un nombre.";
+  if (!/^[A-Za-z0-9_]{1,30}$/.test(nombre)) return `«${nombre}»: el nombre solo puede tener letras, números y guion bajo (sin espacios), hasta 30 caracteres.`;
   if (d.tipo === "dias") {
     if (d.dias_desde === null || d.dias_hasta === null) return `«${nombre}»: indica desde y hasta cuántos días.`;
     if (!Number.isInteger(d.dias_desde) || !Number.isInteger(d.dias_hasta) || d.dias_desde < 0 || d.dias_hasta > 3650) {

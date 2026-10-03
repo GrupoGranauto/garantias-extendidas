@@ -34,6 +34,7 @@ type Respuesta = {
   ultimo_calculo: string | null;
   ultima_corrida: { fecha: string; origen: string; evaluadas: number; asignadas: number; traslapes: number; ejecutado_en: string } | null;
   comparacion: Comparacion | null;
+  fuente: "bigquery" | "web";
 };
 
 const n = (v: number) => v.toLocaleString("es-MX");
@@ -71,6 +72,7 @@ export default function DefinirCampanas() {
   const [sucio, setSucio] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [calculando, setCalculando] = useState(false);
+  const [cambiandoFuente, setCambiandoFuente] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [pruebaFecha, setPruebaFecha] = useState("");
   const [pruebaEtapa, setPruebaEtapa] = useState("");
@@ -143,6 +145,28 @@ export default function DefinirCampanas() {
     }
   }
 
+  async function cambiarFuente(fuente: "bigquery" | "web") {
+    const aviso =
+      fuente === "web"
+        ? "Los envíos de WhatsApp de esta sucursal van a usar las campañas definidas aquí en lugar de las de BigQuery.\n\nLo que estaba pendiente de enviar se cancela y se reprograma con las campañas de la web. Cada campaña sigue apagada o en simulación hasta que la enciendas en «Campañas de WhatsApp».\n\n¿Continuar?"
+        : "Los envíos de WhatsApp van a volver a usar las campañas que manda BigQuery.\n\nLo que estaba pendiente de enviar se cancela y se reprograma. ¿Continuar?";
+    if (!window.confirm(aviso)) return;
+    setCambiandoFuente(true);
+    setAviso(null);
+    try {
+      const r = await apiFetch<{ pendientes_cancelados: number }>(`${base}/fuente`, { method: "PUT", body: JSON.stringify({ fuente }) });
+      setAviso({
+        tipo: "ok",
+        texto: `Ahora los envíos usan ${fuente === "web" ? "las campañas de la web" : "las campañas de BigQuery"}. Se cancelaron ${n(r.pendientes_cancelados)} envíos pendientes para reprogramarlos.`,
+      });
+      cargar();
+    } catch (err) {
+      setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo cambiar." });
+    } finally {
+      setCambiandoFuente(false);
+    }
+  }
+
   async function probar() {
     setAviso(null);
     try {
@@ -171,7 +195,16 @@ export default function DefinirCampanas() {
         hora que elijas). La web calcula las campañas todos los días a la hora que definas.
       </p>
       <Alerta tipo="info">
-        Por ahora la web solo calcula y compara con BigQuery. Los envíos de WhatsApp siguen usando la campaña que manda BigQuery hasta que decidas cambiar.
+        {datos.fuente === "web" ? (
+          <>
+            Los envíos de WhatsApp usan <strong>las campañas de la web</strong>. Cada campaña sigue apagada o en simulación hasta que la enciendas en «Campañas de WhatsApp».
+          </>
+        ) : (
+          <>
+            Los envíos de WhatsApp usan <strong>las campañas que manda BigQuery</strong>. La web calcula las suyas y las compara; cuando coincidan con lo que quieres, puedes
+            pasar los envíos a la web más abajo.
+          </>
+        )}
       </Alerta>
       {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
@@ -212,7 +245,7 @@ export default function DefinirCampanas() {
           <div key={f.clave} className={`camp-def${f.activa ? "" : " camp-def-apagada"}`}>
             <div className="camp-def-cab">
               <span className="camp-def-orden">{i + 1}</span>
-              <input type="text" className="auto-input" maxLength={40} placeholder="Nombre (por ejemplo 48H)" value={f.nombre} onChange={(e) => editar(f.clave, { nombre: e.target.value })} aria-label="Nombre de la campaña" />
+              <input type="text" className="auto-input" maxLength={30} placeholder="Nombre (letras, números y _)" title="Solo letras, números y guion bajo, sin espacios" value={f.nombre} onChange={(e) => editar(f.clave, { nombre: e.target.value.replace(/[^A-Za-z0-9_]/g, "") })} aria-label="Nombre de la campaña" />
               <select className="auto-input" value={f.tipo} onChange={(e) => cambiarTipo(f.clave, e.target.value as Tipo)} aria-label="Tipo de campaña">
                 <option value="dias">Por días</option>
                 <option value="meses">Por meses</option>
@@ -389,6 +422,29 @@ export default function DefinirCampanas() {
             )}
           </>
         )}
+      </section>
+
+      <section className="rep-tarjeta">
+        <div className="inicio-cab">
+          <h3>Quién manda la campaña a los envíos</h3>
+          {datos.fuente === "web" ? (
+            <button type="button" className="boton-secundario-claro" disabled={cambiandoFuente || sucio} onClick={() => cambiarFuente("bigquery")}>
+              {cambiandoFuente ? "Cambiando…" : "Volver a BigQuery"}
+            </button>
+          ) : (
+            <button type="button" className="boton-guardar" disabled={cambiandoFuente || sucio || !datos.ultima_corrida || filas.length === 0} onClick={() => cambiarFuente("web")}>
+              {cambiandoFuente ? "Cambiando…" : "Pasar los envíos a la web"}
+            </button>
+          )}
+        </div>
+        <p className="rep-ayuda">
+          Hoy: <strong>{datos.fuente === "web" ? "la web" : "BigQuery"}</strong>. Con la web, los mensajes salen según las campañas de arriba: los días de cada paso se cuentan desde el inicio de la campaña
+          del lead (en las campañas por meses, desde el día de envío del mes; la hora del primer mensaje es la de la campaña salvo que el paso tenga la suya). Si un lead llega a una cohorte
+          mensual después del día de envío, recibe el mensaje en cuanto abra la ventana de envío siempre que siga dentro de la vigencia del paso; si no, se omite y queda registrado.
+          Una vez que un lead empezó la cadencia, sigue aunque salga de la ventana de la campaña, y se corta si compra una garantía, pide la baja o la web lo pasa a otra campaña.
+        </p>
+        {!datos.ultima_corrida && <p className="rep-ayuda">Primero guarda y calcula las campañas.</p>}
+        {sucio && <p className="rep-ayuda">Guarda los cambios antes de cambiar la fuente.</p>}
       </section>
 
       <section className="rep-tarjeta">

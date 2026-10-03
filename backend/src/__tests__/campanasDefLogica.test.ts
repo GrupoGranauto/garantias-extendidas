@@ -3,6 +3,8 @@ import {
   asignarCampana,
   describirDefinicion,
   diasTranscurridos,
+  horaDelPaso,
+  inicioEnCampana,
   mesAtras,
   perteneceACampana,
   validarDefiniciones,
@@ -152,9 +154,38 @@ describe("validación", () => {
     expect(validarDefinicion(porDias("  ", 1, 4))).toMatch(/nombre/);
     expect(validarDefiniciones([porDias("48H", 1, 4), porMeses("48h", 5)])).toMatch(/dos campañas/);
   });
+  it("el nombre solo admite letras, números y guion bajo (así se usa en la pestaña de WhatsApp)", () => {
+    expect(validarDefinicion(porDias("12M_NURTURING", 1, 4))).toBeNull();
+    expect(validarDefinicion(porDias("Mi campaña", 1, 4))).toMatch(/guion bajo/);
+    expect(validarDefinicion(porDias("a".repeat(31), 1, 4))).toMatch(/30/);
+  });
   it("limita a 20 campañas", () => {
     const muchas = Array.from({ length: 21 }, (_, i) => porDias(`C${i}`, 1, 4));
     expect(validarDefiniciones(muchas)).toMatch(/20/);
+  });
+});
+
+describe("inicio de la campaña", () => {
+  it("por días: la fecha del vehículo más el desde", () => {
+    expect(inicioEnCampana(porDias("48H", 1, 4), "2026-09-30", HOY)).toBe("2026-10-01");
+    expect(inicioEnCampana(porDias("12M", 334, 365), "2025-11-03", HOY)).toBe("2026-10-03");
+  });
+  it("por días: cruza fin de mes y de año", () => {
+    expect(inicioEnCampana(porDias("X", 3, 9), "2026-12-30", HOY)).toBe("2027-01-02");
+  });
+  it("por meses: el día de envío del mes actual", () => {
+    expect(inicioEnCampana(porMeses("5M", 5, { dia_envio: 5 }), "2026-05-20", HOY)).toBe("2026-10-05");
+    expect(inicioEnCampana(porMeses("5M", 5, { dia_envio: 28 }), "2026-05-20", "2026-02-10")).toBe("2026-02-28");
+  });
+  it("por meses: un lead que llega tarde queda con inicio ya pasado (el motor decide por la vigencia)", () => {
+    const inicio = inicioEnCampana(porMeses("5M", 5, { dia_envio: 5 }), "2026-05-20", "2026-10-20");
+    expect(inicio).toBe("2026-10-05");
+    expect(diasTranscurridos(inicio, "2026-10-20")).toBe(15);
+  });
+  it("la hora del primer mensaje: la del paso, la de la campaña o al abrir la ventana", () => {
+    expect(horaDelPaso("11:00", "09:00")).toBe("11:00");
+    expect(horaDelPaso(null, "09:00")).toBe("09:00");
+    expect(horaDelPaso(null, null)).toBeNull();
   });
 });
 

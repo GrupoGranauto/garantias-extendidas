@@ -19,6 +19,8 @@ type Paso = {
 };
 type Campana = {
   campana: string;
+  /** La regla de la campaña en una frase (solo cuando la web es la fuente de campañas). */
+  detalle: string | null;
   activa: boolean;
   modo: "simulacion" | "real";
   dias_semana: number[];
@@ -260,7 +262,7 @@ export default function CampanasEnvio() {
               <div>
                 <h2>{NOMBRES[sel]?.titulo ?? sel}</h2>
                 <p>
-                  {NOMBRES[sel]?.detalle}
+                  {c.detalle ?? NOMBRES[sel]?.detalle}
                   {c.inicio ? ` Empieza ${new Date(`${c.inicio}T00:00:00`).toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}.` : ""}
                 </p>
               </div>
