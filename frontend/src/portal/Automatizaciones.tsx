@@ -7,6 +7,7 @@ import { apiFetch } from "../lib/api";
 import CampanasEnvio from "./CampanasEnvio";
 import EtapasVehiculo from "./EtapasVehiculo";
 import DefinirCampanas from "./DefinirCampanas";
+import Seguimientos from "./Seguimientos";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -92,11 +93,11 @@ export default function Automatizaciones() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
   // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
-  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir";
+  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir" | "seguimientos";
   const [apartado, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" ? guardado : "etapas";
+      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" || guardado === "seguimientos" ? guardado : "etapas";
     } catch {
       return "etapas";
     }
@@ -122,6 +123,9 @@ export default function Automatizaciones() {
       </button>
       <button type="button" role="tab" aria-selected={apartado === "campanas"} className={`vista-opcion${apartado === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("campanas")}>
         Campañas de WhatsApp
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "seguimientos"} className={`vista-opcion${apartado === "seguimientos" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("seguimientos")}>
+        Seguimientos
       </button>
     </div>
   );
@@ -197,6 +201,15 @@ export default function Automatizaciones() {
     } finally {
       setGuardando(false);
     }
+  }
+
+  if (apartado === "seguimientos") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <Seguimientos />
+      </div>
+    );
   }
 
   if (apartado === "definir") {

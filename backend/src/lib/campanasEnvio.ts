@@ -279,9 +279,10 @@ export async function registroEnvios(sucursalId: string, campana: string | null)
       args,
     ),
     pool.query(
-      `SELECT e.id, e.campana, e.estado, e.motivo, e.programado_para, e.enviado_en, e.error, p.orden, c.nombre AS cliente, pl.nombre AS plantilla
+      `SELECT e.id, e.campana, e.estado, e.motivo, e.programado_para, e.enviado_en, e.error, p.orden, sg.nombre AS seguimiento, c.nombre AS cliente, pl.nombre AS plantilla
          FROM crm_envios e
-         JOIN crm_campana_pasos p ON p.id = e.paso_id
+         LEFT JOIN crm_campana_pasos p ON p.id = e.paso_id
+         LEFT JOIN crm_seguimientos sg ON sg.id = e.seguimiento_id
          JOIN crm_oportunidades o ON o.id = e.oportunidad_id
          JOIN crm_contactos c ON c.id = o.contacto_id
          LEFT JOIN whatsapp_plantillas pl ON pl.id = e.plantilla_id
@@ -370,6 +371,7 @@ type FilaContexto = {
   solo_sin_respuesta: boolean;
   solo_sin_contacto: boolean;
   etapas: string[];
+  plantilla_id: string | null;
   campana: string | null;
   estado_cartera: string;
   estado: string;
@@ -400,28 +402,34 @@ const dd = (v: unknown): string => {
 async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string; oportunidad_id: string; campana: string; programado_para: Date; motivo: string | null }, whatsappListo: boolean) {
   const { rows } = await cl.query(
     `SELECT cfg.activa, cfg.modo, cfg.dias_semana, cfg.hora_inicio::text AS hora_inicio, cfg.hora_fin::text AS hora_fin, cfg.max_por_dia, cfg.dias_entre_mensajes,
-            p.vigencia_dias, p.solo_sin_respuesta, p.solo_sin_contacto, p.etapas,
+            -- Un envío viene de un paso de la campaña o de un seguimiento (que no tiene esas condiciones: usa las suyas).
+            coalesce(p.vigencia_dias::float8, sg.vigencia_horas / 24.0) AS vigencia_dias,
+            coalesce(p.solo_sin_respuesta, false) AS solo_sin_respuesta, coalesce(p.solo_sin_contacto, false) AS solo_sin_contacto,
+            coalesce(p.etapas, '{}'::text[]) AS etapas, coalesce(p.plantilla_id, sg.plantilla_id) AS plantilla_id,
             -- Con la web como fuente, la oportunidad «sigue en la campaña» mientras la web no la ponga en OTRA y siga
             -- sin garantía extendida: salir de la ventana de la campaña no corta la cadencia que ya empezó.
-            CASE WHEN coalesce(cc.campanas_fuente, 'bigquery') = 'web'
+            -- Un envío de seguimiento no depende de que el lead siga dentro de la ventana de la campaña.
+            CASE WHEN e.seguimiento_id IS NOT NULL THEN e.campana
+                 WHEN coalesce(cc.campanas_fuente, 'bigquery') = 'web'
                  THEN (CASE WHEN w.campana IS NULL OR w.campana = e.campana THEN e.campana ELSE w.campana END)
                  ELSE o.campana END AS campana,
-            CASE WHEN coalesce(cc.campanas_fuente, 'bigquery') = 'web'
+            CASE WHEN e.seguimiento_id IS NOT NULL OR coalesce(cc.campanas_fuente, 'bigquery') = 'web'
                  THEN (CASE WHEN coalesce(v.tiene_ge, false) THEN 'YA_TIENE_GE' ELSE 'ACTIVA' END)
                  ELSE o.estado_cartera END AS estado_cartera,
             o.estado, coalesce(e.inicio, o.fecha_inicio_campana)::text AS inicio, o.ejecutivo, et.nombre AS etapa,
             c.id AS contacto_id, c.nombre AS cliente, c.telefono, c.tiene_celular, c.whatsapp_baja,
             wp.estado AS plantilla_estado, wp.nombre_tecnico, wp.idioma, wp.componentes, wp.nombre AS plantilla_nombre
        FROM crm_envios e
-       JOIN crm_campana_pasos p ON p.id = e.paso_id
-       JOIN crm_campanas_envio cfg ON cfg.id = p.config_id
+       LEFT JOIN crm_campana_pasos p ON p.id = e.paso_id
+       LEFT JOIN crm_seguimientos sg ON sg.id = e.seguimiento_id
+       JOIN crm_campanas_envio cfg ON cfg.sucursal_id = e.sucursal_id AND cfg.campana = e.campana
        JOIN crm_oportunidades o ON o.id = e.oportunidad_id
        JOIN crm_contactos c ON c.id = o.contacto_id
        JOIN crm_vehiculos v ON v.id = o.vehiculo_id
        LEFT JOIN crm_config cc ON cc.sucursal_id = e.sucursal_id
        LEFT JOIN crm_campana_calculada w ON w.oportunidad_id = o.id
        LEFT JOIN crm_etapas et ON et.id = o.etapa_id
-       LEFT JOIN whatsapp_plantillas wp ON wp.id = p.plantilla_id
+       LEFT JOIN whatsapp_plantillas wp ON wp.id = coalesce(p.plantilla_id, sg.plantilla_id)
       WHERE e.id = $1`,
     [e.id],
   );
@@ -489,7 +497,7 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
 /** Pasa la plantilla por las variables de la oportunidad y la manda; deja el mensaje en el chat. */
 async function enviarPlantilla(
   cl: Consulta,
-  e: { sucursal_id: string; oportunidad_id: string; paso_id: string; campana: string },
+  e: { sucursal_id: string; oportunidad_id: string; campana: string },
   f: FilaContexto,
   tel: string,
 ): Promise<{ waMessageId: string; texto: string; conversacionId: string }> {
@@ -501,11 +509,7 @@ async function enviarPlantilla(
 
   let parametros: string[] = [];
   if (indices.length > 0) {
-    const { rows: mapeos } = await cl.query(
-      `SELECT v.indice, v.columna_tecnica FROM whatsapp_plantilla_variables v
-         JOIN crm_campana_pasos p ON p.plantilla_id = v.plantilla_id WHERE p.id = $1`,
-      [e.paso_id],
-    );
+    const { rows: mapeos } = await cl.query(`SELECT v.indice, v.columna_tecnica FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = $1`, [f.plantilla_id]);
     const { rows: filas } = await cl.query(`SELECT to_jsonb(v) AS f FROM crm_v_oportunidades v WHERE v.id = $1`, [e.oportunidad_id]);
     const fila = (filas[0]?.f ?? {}) as Record<string, unknown>;
     parametros = indices.map((i) => {

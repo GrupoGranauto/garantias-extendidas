@@ -2114,3 +2114,11 @@ textarea.auto-input { resize: vertical; }
 .camp-def-sub { margin: 14px 0 6px; font-size: 0.95rem; }
 .camp-def-cruces { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .camp-def-ejemplos { margin-top: 10px; }
+
+/* ---------- Seguimientos ---------- */
+.seg-bloque { display: grid; gap: 8px; }
+.seg-bloque h4 { margin: 4px 0 0; font-size: 0.9rem; }
+.seg-condicion { display: grid; grid-template-columns: minmax(160px, 1.3fr) minmax(130px, 1fr) minmax(130px, 1fr) auto; gap: 8px; align-items: center; }
+.seg-ancho { grid-column: span 2; }
+.tarea-llamar { display: inline-block; margin-top: 6px; text-decoration: none; }
+@media (max-width: 700px) { .seg-condicion { grid-template-columns: 1fr 1fr; } .seg-ancho { grid-column: span 1; } }

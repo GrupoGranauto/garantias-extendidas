@@ -53,7 +53,7 @@ type VistaPrevia = {
 type Registro = {
   por_estado: { estado: string; n: number }[];
   por_motivo: { motivo: string; estado: string; n: number }[];
-  recientes: { id: string; campana: string; estado: string; motivo: string | null; programado_para: string; enviado_en: string | null; error: string | null; orden: number; cliente: string | null; plantilla: string | null }[];
+  recientes: { id: string; campana: string; estado: string; motivo: string | null; programado_para: string; enviado_en: string | null; error: string | null; orden: number | null; seguimiento: string | null; cliente: string | null; plantilla: string | null }[];
 };
 
 const NOMBRES: Record<string, { titulo: string; detalle: string }> = {
@@ -543,7 +543,7 @@ export default function CampanasEnvio() {
                           <tr key={r.id} title={r.error ?? undefined}>
                             <td>{r.cliente ?? "—"}</td>
                             <td>
-                              {r.orden + 1} · {r.plantilla ?? "—"}
+                              {r.seguimiento ? `Seguimiento «${r.seguimiento}»` : (r.orden ?? 0) + 1} · {r.plantilla ?? "—"}
                             </td>
                             <td>{ESTADOS[r.estado] ?? r.estado}</td>
                             <td>{r.motivo ? (MOTIVOS[r.motivo] ?? r.motivo) : "—"}</td>

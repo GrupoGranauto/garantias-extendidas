@@ -156,7 +156,7 @@ export default function Tareas() {
           return (
             <article key={t.id} className="tarea">
               <div className="tarea-cuerpo">
-                <span className="tarea-tipo">{esPregunta ? "Pregunta" : "Tarea"}</span>
+                <span className="tarea-tipo">{esPregunta ? "Pregunta" : t.config.llamada === true ? "Llamada" : "Tarea"}</span>
                 <strong className="tarea-titulo">{t.titulo}</strong>
                 {t.descripcion && <p className="tarea-desc">{t.descripcion}</p>}
                 <p className="tarea-meta">
@@ -165,6 +165,11 @@ export default function Tareas() {
                   {t.etapa_embudo ? ` · ${t.etapa_embudo}` : ""}
                   {t.asignado_a ? ` · ${t.asignado_a}` : ""}
                 </p>
+                {t.config.llamada === true && t.telefono_principal && filtro === "pendiente" && (
+                  <a className="boton-secundario-claro tarea-llamar" href={`tel:${t.telefono_principal.replace(/[^\d+]/g, "")}`}>
+                    Llamar
+                  </a>
+                )}
                 {filtro === "hecha" && t.respuesta && <p className="tarea-respuesta">Respuesta: {t.respuesta}</p>}
                 {errorTarea?.id === t.id && <Alerta tipo="error">{errorTarea.texto}</Alerta>}
               </div>

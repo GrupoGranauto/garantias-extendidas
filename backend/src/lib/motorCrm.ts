@@ -3,6 +3,7 @@ import { getPool } from "./db.js";
 import { emitirBroadcast } from "./realtime.js";
 import { validarFechaCoherente } from "./entidades.js";
 import { despacharEnvios, planificarEnvios } from "./campanasEnvio.js";
+import { ejecutarSeguimientos, planificarSeguimientos } from "./seguimientos.js";
 import { vincularConversaciones } from "./vinculoWhatsapp.js";
 import { recalcularSiToca } from "./cicloVehiculo.js";
 import { calcularSiToca as calcularCampanasSiToca } from "./campanasDefinidas.js";
@@ -381,6 +382,13 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
         if (porTiempo && process.env.CRM_ENVIOS === "on") {
           await planificarEnvios();
           await despacharEnvios();
+          // Seguimientos (tarea, llamada u otro WhatsApp) de lo que ya se mandó. Un fallo aquí no frena los envíos.
+          try {
+            await planificarSeguimientos();
+            await ejecutarSeguimientos();
+          } catch (err) {
+            console.error("[seguimientos] fallo el ciclo", err instanceof Error ? err.message : err);
+          }
         }
         if (r.tareas + extra > 0) console.log(`[motor-crm] ${r.tareas + extra} tarea(s) creada(s)`);
       })
