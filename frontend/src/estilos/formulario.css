@@ -1995,3 +1995,62 @@ textarea.auto-input { resize: vertical; }
 .equipo-simulacion { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--gris-300); font-size: 13px; }
 .equipo-simulacion ul { margin: 0; padding-left: 18px; }
 .equipo-simulacion .boton-guardar { align-self: flex-start; }
+
+/* ---------- Bloque C: acciones masivas, vistas, Inicio, tarjetas ---------- */
+.col-casilla { width: 36px; text-align: center; }
+.col-casilla input { accent-color: var(--marca); cursor: pointer; }
+.fila-elegida td { background: color-mix(in srgb, var(--marca) 7%, #fff); }
+.masivo { position: sticky; top: 0; z-index: 6; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; padding: 10px 12px; background: #fff; border: 1px solid var(--marca); border-radius: 10px; box-shadow: 0 4px 14px -6px rgba(16, 24, 40, 0.25); }
+.masivo-fila { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.masivo-fila .auto-input { width: auto; min-width: 180px; }
+.masivo-titulo { flex: 1; min-width: 220px; }
+.masivo-horas { width: 90px !important; min-width: 0 !important; }
+
+.vistas-lista { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.vistas-lista li { display: flex; align-items: center; gap: 4px; }
+.vistas-aplicar { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--gris-800); background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
+.vistas-aplicar:hover { background: var(--gris-50); }
+.vistas-aplicar small { color: var(--gris-500); font-size: 11px; }
+.vistas-guardar { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--gris-100); }
+.vistas-compartir { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--gris-600); }
+
+.inicio-titulo { margin: 0 0 4px; font-size: 22px; color: var(--gris-900); }
+.inicio-kpi { text-decoration: none; transition: border-color 0.12s, box-shadow 0.12s; }
+.inicio-kpi:hover { border-color: var(--gris-300); box-shadow: 0 2px 8px -2px rgba(16, 24, 40, 0.12); }
+.inicio-kpi small { font-size: 11px; color: var(--gris-500); }
+.inicio-cab { display: flex; align-items: center; justify-content: space-between; }
+.inicio-tareas { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.inicio-tareas li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--gris-100); font-size: 13px; }
+.inicio-tareas li:last-child { border-bottom: 0; }
+.inicio-tareas small { display: block; margin-top: 2px; color: var(--gris-500); }
+
+.embudo-config { margin-bottom: 8px; font-size: 12px; color: var(--gris-600); }
+.embudo-config summary { display: inline-block; cursor: pointer; padding: 4px 10px; background: var(--gris-100); border-radius: 999px; font-weight: 600; }
+.embudo-config-lista { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 8px 4px; }
+.embudo-config-lista label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.embudo-llamar { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: auto; color: var(--gris-600); background: var(--gris-100); border-radius: 50%; }
+.embudo-llamar:hover { color: #fff; background: var(--marca); }
+
+/* ---------- Rendimiento: las filas fuera de pantalla no se pintan hasta que hacen falta ---------- */
+.tabla tbody tr { content-visibility: auto; contain-intrinsic-size: auto 38px; }
+
+/* ---------- Accesibilidad: foco visible al navegar con teclado ---------- */
+.pagina-formulario button:focus-visible,
+.pagina-formulario a:focus-visible,
+.pagina-formulario select:focus-visible,
+.pagina-formulario input:focus-visible,
+.ficha button:focus-visible,
+.embudo-tarjeta:focus-visible { outline: 2px solid var(--marca); outline-offset: 2px; }
+
+/* ---------- Móvil ---------- */
+@media (max-width: 640px) {
+  .embudo { scroll-snap-type: x mandatory; gap: 8px; margin-inline: -4px; padding-inline: 4px; }
+  .embudo-col { flex-basis: 84vw; scroll-snap-align: start; max-height: calc(100vh - 230px); }
+  .rep-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rep-rejilla { grid-template-columns: 1fr; }
+  .masivo-fila .auto-input { min-width: 0; flex: 1; }
+  .ficha-fila, .ficha-datos { grid-template-columns: 1fr; }
+  .pf-barra { flex-direction: column; align-items: stretch; }
+  .pf-acciones { justify-content: flex-start; }
+  .inicio-titulo { font-size: 19px; }
+}

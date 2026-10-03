@@ -8,6 +8,8 @@ import { SECCIONES, type CampoPanel, type ItemPanel } from "../lib/panel";
 import { supabase } from "../lib/supabase";
 import Embudo from "./Embudo";
 import FichaOportunidad from "./FichaOportunidad";
+import AccionesMasivas from "./AccionesMasivas";
+import MenuVistas from "./MenuVistas";
 import PanelFiltros, { type ValorKpi, type Visibilidad } from "./PanelFiltros";
 import {
   alternarBoton,
@@ -23,7 +25,7 @@ import { usePortal } from "./PortalProvider";
 
 type Tipo = "texto" | "entero" | "decimal" | "booleano" | "fecha" | "fecha_hora" | "uuid";
 type Origen = "api" | "back";
-type Opcion = { valor: string; color: string };
+type Opcion = { valor: string; color: string; tipo?: string };
 
 /** Filtro activo sobre una columna: valores exactos (varios = OR) y/o rango de fechas. */
 type FiltroUI = { columna: string; valores: string[]; desde: string; hasta: string };
@@ -414,6 +416,8 @@ export default function BaseDatos() {
   const [refrescos, setRefrescos] = useState(0);
   // Ficha de oportunidad abierta (clic en un cliente de la tabla o en una tarjeta del embudo).
   const [fichaId, setFichaId] = useState<string | null>(null);
+  // Filas elegidas con la casilla (acciones masivas).
+  const [seleccion, setSeleccion] = useState<string[]>([]);
   function elegirVista(v: "tabla" | "embudo") {
     setVista(v);
     try {
@@ -422,6 +426,22 @@ export default function BaseDatos() {
       // sin persistencia; no afecta el funcionamiento
     }
   }
+
+  // Atajo: "/" lleva el cursor a la búsqueda (como en otras herramientas), salvo si ya se está escribiendo.
+  useEffect(() => {
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      const caja = document.querySelector<HTMLInputElement>(".pf-busqueda input, .tabla-buscar input");
+      if (caja) {
+        e.preventDefault();
+        caja.focus();
+      }
+    };
+    window.addEventListener("keydown", alTeclear);
+    return () => window.removeEventListener("keydown", alTeclear);
+  }, []);
 
   const hayPanel = (itemsPanel?.length ?? 0) > 0;
   const campos: CampoPanel[] = datos?.configurado ? datos.campos : [];
@@ -554,6 +574,32 @@ export default function BaseDatos() {
   }
 
   /** Quita filtros, búsqueda y orden, y deja el panel como al abrirlo: solo con el filtro principal. */
+  /** Foto de lo que el usuario tiene puesto, para guardarla como vista. */
+  function capturarVista(): Record<string, unknown> {
+    return { filtros, busqueda: busquedaAplicada, orden, estado: estadoP, vista };
+  }
+
+  /** Aplica una vista guardada. Se lee con cuidado: una vista vieja no debe romper la pantalla. */
+  function aplicarVista(c: Record<string, unknown>) {
+    const base = estadoInicial(itemsPanel ?? []);
+    const e = (c.estado ?? {}) as Partial<EstadoPanel>;
+    const estado: EstadoPanel = {
+      busquedas: typeof e.busquedas === "object" && e.busquedas ? e.busquedas : base.busquedas,
+      seleccion: typeof e.seleccion === "object" && e.seleccion ? e.seleccion : base.seleccion,
+      fechas: typeof e.fechas === "object" && e.fechas ? e.fechas : base.fechas,
+      botones: Array.isArray(e.botones) ? e.botones.filter((x) => (itemsPanel ?? []).some((i) => i.id === x)) : base.botones,
+    };
+    setFiltros(Array.isArray(c.filtros) ? (c.filtros as FiltroUI[]) : []);
+    const texto = typeof c.busqueda === "string" ? c.busqueda : "";
+    setBusqueda(texto);
+    setBusquedaAplicada(texto);
+    setOrden(c.orden && typeof c.orden === "object" ? (c.orden as Orden) : null);
+    setEstadoP(estado);
+    setEscritos({ ...estado.busquedas });
+    if (c.vista === "embudo" || c.vista === "tabla") elegirVista(c.vista);
+    setPagina(1);
+  }
+
   function limpiarTodo() {
     setFiltros([]);
     setOrden(null);
@@ -728,6 +774,16 @@ export default function BaseDatos() {
 
   const enTabla = vista === "tabla" || !(datos?.configurado && datos.embudo);
 
+  const menuVistas = datos?.configurado && datos.embudo ? (
+    <MenuVistas sucursalId={sucursalId} capturar={capturarVista} aplicar={aplicarVista} onError={(m) => mostrarAviso("error", m)} />
+  ) : null;
+
+  const campoOpciones = (nombre: string): Opcion[] =>
+    (datos?.configurado ? datos.campos.find((c) => c.nombre_tecnico === nombre)?.opciones : null) ?? [];
+  const idsFilas = datos?.configurado ? datos.filas.map((f) => String(f.id)) : [];
+  const todasMarcadas = idsFilas.length > 0 && idsFilas.every((i) => seleccion.includes(i));
+  const alternarFila = (id: string) => setSeleccion((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+
   return (
     <div className="pagina-formulario">
       {error && (
@@ -769,6 +825,7 @@ export default function BaseDatos() {
             </span>
             <div className="pf-acciones">
               {selectorVista}
+              {menuVistas}
               {enTabla && orden && (
                 <button type="button" className="boton-secundario-claro pf-accion" onClick={() => setOrden(null)}>
                   <IconoXMarca className="icono-inline" />
@@ -819,6 +876,7 @@ export default function BaseDatos() {
       {datos?.configurado && itemsPanel !== null && !hayPanel && (
         <div className="tabla-barra">
           {selectorVista}
+          {menuVistas}
           <label className="tabla-buscar">
             <IconoBuscar className="icono-inline" />
             <input
@@ -912,12 +970,40 @@ export default function BaseDatos() {
         />
       )}
 
+      {datos?.configurado && enTabla && datos.embudo && seleccion.length > 0 && (
+        <AccionesMasivas
+          sucursalId={sucursalId}
+          ids={seleccion}
+          etapas={campoOpciones("etapa_embudo")}
+          motivos={campoOpciones("motivo_perdida")}
+          ejecutivos={campoOpciones("ejecutivo")}
+          onLimpiar={() => setSeleccion([])}
+          onError={(m) => mostrarAviso("error", m)}
+          onListo={(m) => {
+            mostrarAviso("ok", m);
+            setSeleccion([]);
+            cargarRef.current();
+            setRefrescos((n) => n + 1);
+          }}
+        />
+      )}
+
       {datos?.configurado && enTabla && datos.filas.length > 0 && (
         <>
           <div className={`tabla-envoltura${cargando ? " tabla-cargando" : ""}`}>
             <table className="tabla">
               <thead>
                 <tr>
+                  {datos.embudo && (
+                    <th className="col-casilla">
+                      <input
+                        type="checkbox"
+                        aria-label="Elegir todas las filas de esta página"
+                        checked={todasMarcadas}
+                        onChange={() => setSeleccion(todasMarcadas ? seleccion.filter((i) => !idsFilas.includes(i)) : [...new Set([...seleccion, ...idsFilas])])}
+                      />
+                    </th>
+                  )}
                   {datos.campos.map((c) => {
                     const ordenada = orden?.columna === c.nombre_tecnico ? orden.dir : null;
                     return (
@@ -939,7 +1025,12 @@ export default function BaseDatos() {
                 {datos.filas.map((fila) => {
                   const id = String(fila.id);
                   return (
-                    <tr key={id}>
+                    <tr key={id} className={seleccion.includes(id) ? "fila-elegida" : undefined}>
+                      {datos.embudo && (
+                        <td className="col-casilla">
+                          <input type="checkbox" aria-label="Elegir esta fila" checked={seleccion.includes(id)} onChange={() => alternarFila(id)} />
+                        </td>
+                      )}
                       {datos.campos.map((c) => (
                         <td key={c.nombre_tecnico} className={c.origen === "back" ? "col-editable" : undefined}>
                           {c.nombre_tecnico === "cliente" && datos.embudo ? (

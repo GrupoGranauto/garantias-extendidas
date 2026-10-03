@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
+import { getPool } from "../lib/db.js";
 import { requireAuth, requireAccesoSucursal } from "../middleware/auth.js";
 import {
   listarRegistros,
@@ -312,6 +313,24 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros/embudo", async (req, r
         return { ...etapa, total: r.total, tarjetas: r.filas, fuera_sla: fueraSla };
       }),
     );
+
+    // Cuántas tareas pendientes (y vencidas) tiene cada tarjeta: una sola consulta para todas.
+    const idsTarjetas = columnas.flatMap((c) => c.tarjetas.map((t) => t.id as string));
+    if (idsTarjetas.length > 0) {
+      const { rows: tareas } = await getPool().query(
+        `SELECT oportunidad_id, count(*)::int AS pendientes, count(*) FILTER (WHERE vence_en < now())::int AS vencidas
+           FROM crm_tareas WHERE sucursal_id = $1 AND estado = 'pendiente' AND oportunidad_id = ANY($2::uuid[]) GROUP BY 1`,
+        [sucursal.id, idsTarjetas],
+      );
+      const porOp = new Map(tareas.map((t) => [t.oportunidad_id as string, t]));
+      for (const c of columnas) {
+        for (const t of c.tarjetas) {
+          const x = porOp.get(t.id as string);
+          t.tareas_pendientes = x?.pendientes ?? 0;
+          t.tareas_vencidas = x?.vencidas ?? 0;
+        }
+      }
+    }
 
     const motivos = (await opcionesDinamicas(sucursal.id)).motivo_perdida.map((o) => o.valor);
     res.json({ configurado: true, campos: camposTarjeta, etapas: columnas, motivos, limite });

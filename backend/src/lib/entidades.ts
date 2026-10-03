@@ -5,7 +5,7 @@ import { exigirIdentificador, identificadorValido } from "./identificadores.js";
 export type TipoCampo = "texto" | "entero" | "decimal" | "booleano" | "fecha" | "fecha_hora" | "uuid";
 export type OrigenCampo = "api" | "back";
 
-export type OpcionCampo = { valor: string; color: string };
+export type OpcionCampo = { valor: string; color: string; tipo?: string };
 
 export type CampoEntidad = {
   nombre_tecnico: string;

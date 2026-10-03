@@ -5,6 +5,7 @@ import { getSupabase } from "../lib/supabase.js";
 import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../middleware/auth.js";
 import { emitirBroadcast } from "../lib/realtime.js";
 import { restringidoDe, exigirUuid } from "../lib/permisos.js";
+import { MAX_MASIVO, borrarVista, ejecutarAccionMasiva, guardarVista, listarVistas, resumenInicio } from "../lib/crmMasivo.js";
 import { estadoSincronizacion, sincronizarCrm, type ResumenSync } from "../lib/sincronizacionCrm.js";
 import {
   CANALES,
@@ -28,7 +29,7 @@ import {
 export const crmProcesoRouter = Router();
 
 crmProcesoRouter.use(requireAuth);
-exigirUuid(crmProcesoRouter, "oid", "etapaId");
+exigirUuid(crmProcesoRouter, "oid", "etapaId", "vid");
 crmProcesoRouter.use("/sucursales/:id/crm", requireAccesoSucursal);
 
 const restringidoA = restringidoDe;
@@ -322,6 +323,115 @@ crmProcesoRouter.post("/sucursales/:id/crm/sincronizacion", requireAdminSucursal
       res.status(409).json({ error: err instanceof Error ? err.message : "Sincronización abortada.", resumen });
       return;
     }
+    next(err);
+  }
+});
+
+/* ============================================================
+   Inicio: resumen del día
+   ============================================================ */
+
+crmProcesoRouter.get("/sucursales/:id/crm/resumen", async (req, res, next) => {
+  try {
+    res.json(await resumenInicio(req.params.id, restringidoA(req)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ============================================================
+   Acciones masivas sobre las filas elegidas en la tabla
+   ============================================================ */
+
+const masivoSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(MAX_MASIVO),
+  accion: z.discriminatedUnion("accion", [
+    z.object({ accion: z.literal("etapa"), etapa: z.string().trim().min(1).max(80), motivo: z.string().trim().max(80).nullable().optional() }),
+    z.object({ accion: z.literal("ejecutivo"), ejecutivo: z.string().trim().min(1).max(80) }),
+    z.object({
+      accion: z.literal("tarea"),
+      titulo: z.string().trim().min(1, "La tarea necesita un título.").max(160),
+      descripcion: z.string().trim().max(1000).nullable().optional(),
+      vence_horas: z.number().int().min(0).max(24 * 365).nullable().optional(),
+    }),
+  ]),
+});
+
+crmProcesoRouter.post("/sucursales/:id/crm/masivo", async (req, res, next) => {
+  const parsed = masivoSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." });
+    return;
+  }
+  try {
+    const r = await ejecutarAccionMasiva({
+      sucursalId: req.params.id,
+      ids: parsed.data.ids,
+      restringidoA: restringidoA(req),
+      usuarioId: req.usuario?.id,
+      accion: parsed.data.accion,
+    });
+    if ("error" in r) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    emitirBroadcast(`datos:${req.params.id}`, "refresh", {});
+    if (parsed.data.accion.accion !== "etapa") emitirBroadcast(`datos:${req.params.id}`, "tareas", {});
+    res.json(r);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ============================================================
+   Vistas guardadas
+   ============================================================ */
+
+crmProcesoRouter.get("/sucursales/:id/crm/vistas", async (req, res, next) => {
+  try {
+    if (!req.usuario) return;
+    res.json({ vistas: await listarVistas(req.params.id, req.usuario.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const vistaSchema = z.object({
+  nombre: z.string().trim().min(1, "Ponle un nombre a la vista.").max(60),
+  compartida: z.boolean().default(false),
+  config: z.record(z.string(), z.unknown()).refine((c) => JSON.stringify(c).length < 20000, "La vista es demasiado grande."),
+});
+
+crmProcesoRouter.post("/sucursales/:id/crm/vistas", async (req, res, next) => {
+  const parsed = vistaSchema.safeParse(req.body);
+  if (!parsed.success || !req.usuario) {
+    res.status(400).json({ error: parsed.success ? "Sesión requerida." : (parsed.error.issues[0]?.message ?? "Datos inválidos.") });
+    return;
+  }
+  try {
+    // Solo el admin comparte vistas con toda la sucursal.
+    const compartida = parsed.data.compartida && req.perfil?.rol === "admin";
+    const r = await guardarVista({ sucursalId: req.params.id, usuarioId: req.usuario.id, nombre: parsed.data.nombre, config: parsed.data.config, compartida });
+    if ("error" in r) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    res.status(201).json(r);
+  } catch (err) {
+    next(err);
+  }
+});
+
+crmProcesoRouter.delete("/sucursales/:id/crm/vistas/:vid", async (req, res, next) => {
+  try {
+    if (!req.usuario) return;
+    const ok = await borrarVista(req.params.id, req.params.vid, req.usuario.id, req.perfil?.rol === "admin");
+    if (!ok) {
+      res.status(404).json({ error: "Vista no encontrada." });
+      return;
+    }
+    res.json({ eliminada: true });
+  } catch (err) {
     next(err);
   }
 });

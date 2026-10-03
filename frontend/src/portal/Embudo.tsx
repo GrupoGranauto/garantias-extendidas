@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { DragDropContext, Draggable, Droppable, type DropResult } from "@hello-pangea/dnd";
 import Cargador from "../componentes/Cargador";
+import { IconoLlamada } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 
 type Tarjeta = Record<string, unknown> & { id: string };
@@ -31,6 +32,26 @@ type Props = {
 };
 
 const POR_PAGINA = 30;
+
+/** Qué datos muestra la tarjeta; cada persona elige los suyos y se recuerdan en su navegador. */
+type Mostrar = { telefono: boolean; vehiculo: boolean; campana: boolean; contacto: boolean; ejecutivo: boolean };
+const MOSTRAR_INICIAL: Mostrar = { telefono: true, vehiculo: true, campana: true, contacto: true, ejecutivo: true };
+const ETIQUETAS_MOSTRAR: [keyof Mostrar, string][] = [
+  ["telefono", "Teléfono"],
+  ["vehiculo", "Vehículo"],
+  ["campana", "Campaña y fase"],
+  ["contacto", "Estado de contacto"],
+  ["ejecutivo", "Ejecutivo"],
+];
+
+function leerMostrar(sucursalId: string): Mostrar {
+  try {
+    const crudo = localStorage.getItem(`portal.tarjeta.${sucursalId}`);
+    return crudo ? { ...MOSTRAR_INICIAL, ...(JSON.parse(crudo) as Partial<Mostrar>) } : MOSTRAR_INICIAL;
+  } catch {
+    return MOSTRAR_INICIAL;
+  }
+}
 
 /** "5 min", "3 h", "2 d"… desde un instante hasta ahora. */
 function hace(valor: unknown): string | null {
@@ -63,6 +84,7 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
   const [cargandoMas, setCargandoMas] = useState<string | null>(null);
   const [pendientePerdido, setPendientePerdido] = useState<Movimiento | null>(null);
   const [motivo, setMotivo] = useState("");
+  const [mostrar, setMostrar] = useState<Mostrar>(() => leerMostrar(sucursalId));
   const solicitud = useRef(0);
   const datosRef = useRef(datos);
   datosRef.current = datos;
@@ -186,8 +208,29 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
 
   const tiene = (n: string) => datos.campos.some((c) => c.nombre_tecnico === n);
 
+  function cambiarMostrar(clave: keyof Mostrar, valor: boolean) {
+    const nuevo = { ...mostrar, [clave]: valor };
+    setMostrar(nuevo);
+    try {
+      localStorage.setItem(`portal.tarjeta.${sucursalId}`, JSON.stringify(nuevo));
+    } catch {
+      // sin persistencia; no afecta el funcionamiento
+    }
+  }
+
   return (
     <>
+      <details className="embudo-config">
+        <summary>Datos de la tarjeta</summary>
+        <div className="embudo-config-lista">
+          {ETIQUETAS_MOSTRAR.map(([clave, texto]) => (
+            <label key={clave}>
+              <input type="checkbox" checked={mostrar[clave]} onChange={(e) => cambiarMostrar(clave, e.target.checked)} /> {texto}
+            </label>
+          ))}
+        </div>
+      </details>
+
       <DragDropContext onDragEnd={alSoltar}>
         <div className="embudo">
           {datos.etapas.map((col) => (
@@ -225,16 +268,16 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
                             onClick={() => onAbrir(t.id)}
                           >
                             <strong className="embudo-tarjeta-titulo">{String(t.cliente ?? "Sin nombre")}</strong>
-                            {(t.linea || t.anio_vin) && (tiene("linea") || tiene("anio_vin")) ? (
+                            {mostrar.vehiculo && (t.linea || t.anio_vin) && (tiene("linea") || tiene("anio_vin")) ? (
                               <span className="embudo-tarjeta-linea">{[t.linea, t.anio_vin].filter(Boolean).join(" · ")}</span>
                             ) : null}
-                            {tiene("telefono_principal") && t.telefono_principal ? (
+                            {mostrar.telefono && tiene("telefono_principal") && t.telefono_principal ? (
                               <span className="embudo-tarjeta-dato">{String(t.telefono_principal)}</span>
                             ) : null}
                             <div className="embudo-tarjeta-chips">
-                              {tiene("campana") && t.campana ? <span className="embudo-mini">{String(t.campana)}</span> : null}
-                              {tiene("fase_campana") && t.fase_campana ? <span className="embudo-mini">{String(t.fase_campana)}</span> : null}
-                              {tiene("estado_contacto") && t.estado_contacto && t.estado_contacto !== "Sin intentar" ? (
+                              {mostrar.campana && tiene("campana") && t.campana ? <span className="embudo-mini">{String(t.campana)}</span> : null}
+                              {mostrar.campana && tiene("fase_campana") && t.fase_campana ? <span className="embudo-mini">{String(t.fase_campana)}</span> : null}
+                              {mostrar.contacto && tiene("estado_contacto") && t.estado_contacto && t.estado_contacto !== "Sin intentar" ? (
                                 <span className="embudo-mini embudo-mini-contacto">{String(t.estado_contacto)}</span>
                               ) : null}
                               {col.tipo === "perdida" && tiene("motivo_perdida") && t.motivo_perdida ? (
@@ -242,8 +285,24 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
                               ) : null}
                             </div>
                             {tarde && <span className="embudo-mini embudo-mini-perdida">Fuera de SLA</span>}
+                            {Number(t.tareas_pendientes) > 0 && (
+                              <span className={`embudo-mini${Number(t.tareas_vencidas) > 0 ? " embudo-mini-perdida" : " embudo-mini-contacto"}`}>
+                                {Number(t.tareas_pendientes)} {Number(t.tareas_pendientes) === 1 ? "tarea" : "tareas"}
+                                {Number(t.tareas_vencidas) > 0 ? ` (${Number(t.tareas_vencidas)} vencida${Number(t.tareas_vencidas) === 1 ? "" : "s"})` : ""}
+                              </span>
+                            )}
                             <footer className="embudo-tarjeta-pie">
-                              <span title="Ejecutivo">{tiene("ejecutivo") && t.ejecutivo ? String(t.ejecutivo) : "Sin asignar"}</span>
+                              <span title="Ejecutivo">{mostrar.ejecutivo ? (tiene("ejecutivo") && t.ejecutivo ? String(t.ejecutivo) : "Sin asignar") : ""}</span>
+                              {mostrar.telefono && tiene("telefono_principal") && String(t.telefono_principal ?? "").replace(/\D/g, "").length >= 10 && (
+                                <a
+                                  className="embudo-llamar"
+                                  href={`tel:${String(t.telefono_principal).replace(/[^\d+]/g, "")}`}
+                                  aria-label={`Llamar a ${String(t.cliente ?? "")}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <IconoLlamada className="icono-inline" />
+                                </a>
+                              )}
                               <span
                                 title={
                                   tiene("fecha_ultimo_contacto") && fechaCorta(t.fecha_ultimo_contacto)

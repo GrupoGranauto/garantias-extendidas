@@ -66,10 +66,10 @@ const COLUMNAS_DIRECTAS = new Set(["comentarios", "fecha_ultimo_contacto", "fech
  * vivos (ejecutivos): se inyectan en los campos para que lo que ve y valida el
  * portal sea siempre lo vigente, no una copia guardada en la configuración.
  */
-export async function opcionesDinamicas(sucursalId: string): Promise<Record<string, { valor: string; color: string }[]>> {
+export async function opcionesDinamicas(sucursalId: string): Promise<Record<string, { valor: string; color: string; tipo?: string }[]>> {
   const pool = getPool();
   const [etapas, motivos, ejecutivos] = await Promise.all([
-    pool.query(`SELECT nombre, color FROM crm_etapas WHERE sucursal_id = $1 AND activa ORDER BY orden`, [sucursalId]),
+    pool.query(`SELECT nombre, color, tipo FROM crm_etapas WHERE sucursal_id = $1 AND activa ORDER BY orden`, [sucursalId]),
     pool.query(`SELECT nombre FROM crm_motivos_perdida WHERE sucursal_id = $1 AND activo ORDER BY orden`, [sucursalId]),
     pool.query(
       `SELECT DISTINCT ejecutivo FROM crm_oportunidades WHERE sucursal_id = $1 AND ejecutivo IS NOT NULL AND ejecutivo <> '' ORDER BY 1`,
@@ -77,7 +77,7 @@ export async function opcionesDinamicas(sucursalId: string): Promise<Record<stri
     ),
   ]);
   return {
-    etapa_embudo: etapas.rows.map((r) => ({ valor: r.nombre as string, color: r.color as string })),
+    etapa_embudo: etapas.rows.map((r) => ({ valor: r.nombre as string, color: r.color as string, tipo: r.tipo as string })),
     motivo_perdida: motivos.rows.map((r) => ({ valor: r.nombre as string, color: "#6b7280" })),
     estado_contacto: Object.keys(ESTADOS_CONTACTO).map((valor) => ({ valor, color: COLOR_ESTADO_CONTACTO[valor] })),
     ejecutivo: ejecutivos.rows.map((r) => ({ valor: r.ejecutivo as string, color: COLOR_EJECUTIVO })),
@@ -87,7 +87,7 @@ export async function opcionesDinamicas(sucursalId: string): Promise<Record<stri
 /** Pone las opciones vigentes en los campos que son lista del CRM. */
 export function conOpcionesDinamicas(
   campos: CampoEntidad[],
-  opciones: Record<string, { valor: string; color: string }[]>,
+  opciones: Record<string, { valor: string; color: string; tipo?: string }[]>,
 ): CampoEntidad[] {
   return campos.map((c) =>
     opciones[c.nombre_tecnico] && c.origen === "back" ? { ...c, editor_tipo: "lista", opciones: opciones[c.nombre_tecnico] } : c,

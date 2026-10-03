@@ -1,32 +1,35 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "../portal/PortalProvider";
 import Cargador from "../componentes/Cargador";
 import PortalSucursalMarcador from "../paginas/PortalSucursalMarcador";
-import PlantillasListado from "../portal/PlantillasListado";
-import PlantillaFormulario from "../portal/PlantillaFormulario";
-import BaseDatos from "../portal/BaseDatos";
-import Chat from "../portal/Chat";
-import Tareas from "../portal/Tareas";
-import Automatizaciones from "../portal/Automatizaciones";
-import Reportes from "../portal/Reportes";
-import Equipo from "../portal/Equipo";
 import LayoutPanel from "../componentes/LayoutPanel";
 import { NAVEGACION_PORTAL, RUTAS_DEL_MENU } from "../navegacion";
 import Inicio from "../paginas/Inicio";
 import EnConstruccion from "../paginas/EnConstruccion";
-import SucursalNueva from "../paginas/SucursalNueva";
-import SucursalesListado from "../paginas/SucursalesListado";
 import SucursalEditLayout from "../paginas/SucursalEditLayout";
-import SucursalGeneral from "../paginas/SucursalGeneral";
-import SucursalWhatsapp from "../paginas/SucursalWhatsapp";
-import SucursalBaseDatos from "../paginas/SucursalBaseDatos";
-import SucursalCamposEditables from "../paginas/SucursalCamposEditables";
-import SucursalPanel from "../paginas/SucursalPanel";
-import UsuariosNuevo from "../paginas/UsuariosNuevo";
-import UsuariosListado from "../paginas/UsuariosListado";
-import UsuarioEditar from "../paginas/UsuarioEditar";
+
+/* Cada pantalla se descarga solo cuando se entra a ella: el primer arranque pesa mucho menos. */
+const PlantillasListado = lazy(() => import("../portal/PlantillasListado"));
+const PlantillaFormulario = lazy(() => import("../portal/PlantillaFormulario"));
+const BaseDatos = lazy(() => import("../portal/BaseDatos"));
+const Chat = lazy(() => import("../portal/Chat"));
+const Tareas = lazy(() => import("../portal/Tareas"));
+const InicioPortal = lazy(() => import("../portal/InicioPortal"));
+const Automatizaciones = lazy(() => import("../portal/Automatizaciones"));
+const Reportes = lazy(() => import("../portal/Reportes"));
+const Equipo = lazy(() => import("../portal/Equipo"));
+const SucursalNueva = lazy(() => import("../paginas/SucursalNueva"));
+const SucursalesListado = lazy(() => import("../paginas/SucursalesListado"));
+const SucursalGeneral = lazy(() => import("../paginas/SucursalGeneral"));
+const SucursalWhatsapp = lazy(() => import("../paginas/SucursalWhatsapp"));
+const SucursalBaseDatos = lazy(() => import("../paginas/SucursalBaseDatos"));
+const SucursalCamposEditables = lazy(() => import("../paginas/SucursalCamposEditables"));
+const SucursalPanel = lazy(() => import("../paginas/SucursalPanel"));
+const UsuariosNuevo = lazy(() => import("../paginas/UsuariosNuevo"));
+const UsuariosListado = lazy(() => import("../paginas/UsuariosListado"));
+const UsuarioEditar = lazy(() => import("../paginas/UsuarioEditar"));
 
 /** Pantallas ya construidas del panel de plataforma. El resto del menú cae en el marcador. */
 const PANTALLAS: Record<string, ReactNode> = {
@@ -102,6 +105,7 @@ export default function GuardiaSucursal() {
         }));
 
     return (
+      <Suspense fallback={<Cargador pantalla />}>
       <Routes>
         <Route
           element={
@@ -113,7 +117,7 @@ export default function GuardiaSucursal() {
             />
           }
         >
-          <Route path="/" element={<EnConstruccion titulo="Inicio" />} />
+          <Route path="/" element={<InicioPortal />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/base-datos" element={<BaseDatos />} />
           <Route path="/tareas" element={<Tareas />} />
@@ -126,6 +130,7 @@ export default function GuardiaSucursal() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
+      </Suspense>
     );
   }
 
@@ -138,6 +143,7 @@ export default function GuardiaSucursal() {
 
   // Panel de plataforma: su propio árbol de rutas.
   return (
+    <Suspense fallback={<Cargador pantalla />}>
     <Routes>
       <Route element={<LayoutPanel perfil={perfil} />}>
         <Route path="/" element={<Inicio />} />
@@ -164,5 +170,6 @@ export default function GuardiaSucursal() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
+    </Suspense>
   );
 }
