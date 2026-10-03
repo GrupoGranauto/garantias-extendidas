@@ -2054,3 +2054,37 @@ textarea.auto-input { resize: vertical; }
   .pf-acciones { justify-content: flex-start; }
   .inicio-titulo { font-size: 19px; }
 }
+
+/* ---------- Campañas de WhatsApp ---------- */
+.auto-apartados { align-self: flex-start; margin-bottom: 12px; }
+.camp-item { align-items: center; }
+.camp-item-texto { flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.camp-item-texto small { font-weight: 400; color: var(--gris-500); }
+.camp-chip { padding: 1px 8px; font-size: 11px; font-weight: 700; border-radius: 999px; }
+.camp-chip-apagada { color: var(--gris-600); background: var(--gris-100); }
+.camp-chip-simulacion { color: #b54708; background: #fffaeb; }
+.camp-chip-real { color: #067647; background: #ecfdf3; }
+.camp-bloque { display: flex; flex-direction: column; gap: 10px; padding: 14px 0; border-top: 1px solid var(--gris-100); }
+.camp-bloque h3 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--gris-500); }
+.camp-modos { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.camp-modo { display: flex; gap: 10px; padding: 10px 12px; background: #fff; border: 1px solid var(--gris-200); border-radius: 10px; cursor: pointer; }
+.camp-modo input { margin-top: 3px; accent-color: var(--marca); }
+.camp-modo span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.camp-modo small { color: var(--gris-500); }
+.camp-modo-activo { border-color: var(--marca); background: color-mix(in srgb, var(--marca) 5%, #fff); }
+.camp-modo-real.camp-modo-activo { border-color: #067647; background: #f6fef9; }
+.camp-dias { display: flex; gap: 6px; }
+.camp-dia { width: 34px; height: 34px; font: inherit; font-size: 13px; font-weight: 700; color: var(--gris-600); background: #fff; border: 1px solid var(--gris-300); border-radius: 50%; cursor: pointer; }
+.camp-dia-activo { color: #fff; background: var(--marca); border-color: var(--marca); }
+.camp-plantilla { flex: 1; }
+.camp-condiciones { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.camp-etapas { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--gris-600); }
+.camp-etapa { padding: 3px 10px; font: inherit; font-size: 12px; font-weight: 600; color: var(--gris-600); background: #fff; border: 1px solid var(--gris-300); border-radius: 999px; cursor: pointer; }
+.camp-etapa-activa { color: #fff; background: var(--marca); border-color: var(--marca); }
+.camp-previa { display: flex; flex-direction: column; gap: 10px; }
+.camp-cifras { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--gris-600); }
+.camp-cifras strong { color: var(--gris-900); }
+.camp-cifra-alerta strong { color: #b42318; }
+.camp-previa-paso { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--gris-50); border: 1px solid var(--gris-200); border-radius: 8px; font-size: 13px; }
+.camp-previa-paso ul { margin: 0; padding-left: 18px; color: var(--gris-700); }
+.camp-vencido { color: var(--gris-400); text-decoration: line-through; }

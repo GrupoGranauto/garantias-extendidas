@@ -6,6 +6,7 @@ import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../mid
 import { emitirBroadcast } from "../lib/realtime.js";
 import { restringidoDe, exigirUuid } from "../lib/permisos.js";
 import { MAX_MASIVO, borrarVista, ejecutarAccionMasiva, guardarVista, listarVistas, resumenInicio } from "../lib/crmMasivo.js";
+import { registrarConsentimiento } from "../lib/campanasEnvio.js";
 import { estadoSincronizacion, sincronizarCrm, type ResumenSync } from "../lib/sincronizacionCrm.js";
 import {
   CANALES,
@@ -89,12 +90,18 @@ crmProcesoRouter.get("/sucursales/:id/crm/oportunidades/:oid", async (req, res, 
       [req.params.oid, req.params.id],
     );
     const { rows: cfg } = await getPool().query(`SELECT exigir_evidencia_venta FROM crm_config WHERE sucursal_id = $1`, [req.params.id]);
+    const { rows: cons } = await getPool().query(
+      `SELECT c.whatsapp_consentimiento AS valor, c.whatsapp_consentimiento_fuente AS fuente, c.whatsapp_consentimiento_en AS en, c.whatsapp_baja AS baja
+         FROM crm_oportunidades o JOIN crm_contactos c ON c.id = o.contacto_id WHERE o.id = $1 AND o.sucursal_id = $2`,
+      [req.params.oid, req.params.id],
+    );
 
     res.json({
       oportunidad: rows[0],
       etiquetas: Object.fromEntries((meta ?? []).map((c) => [c.nombre_tecnico, c.nombre_visible])),
       contrato: await leerContrato(req.params.id, req.params.oid),
       exigir_evidencia_venta: cfg[0]?.exigir_evidencia_venta === true,
+      consentimiento: cons[0] ?? { valor: null, fuente: null, en: null, baja: false },
       tareas,
       linea_tiempo: await lineaDeTiempo(req.params.id, req.params.oid),
       estados_contrato: ESTADOS_CONTRATO,
@@ -349,6 +356,11 @@ const masivoSchema = z.object({
     z.object({ accion: z.literal("etapa"), etapa: z.string().trim().min(1).max(80), motivo: z.string().trim().max(80).nullable().optional() }),
     z.object({ accion: z.literal("ejecutivo"), ejecutivo: z.string().trim().min(1).max(80) }),
     z.object({
+      accion: z.literal("consentimiento"),
+      valor: z.boolean(),
+      fuente: z.string().trim().min(3, "Indica de dónde viene el consentimiento.").max(120),
+    }),
+    z.object({
       accion: z.literal("tarea"),
       titulo: z.string().trim().min(1, "La tarea necesita un título.").max(160),
       descripcion: z.string().trim().max(1000).nullable().optional(),
@@ -364,12 +376,31 @@ crmProcesoRouter.post("/sucursales/:id/crm/masivo", async (req, res, next) => {
     return;
   }
   try {
+    const accion = parsed.data.accion;
+    if (accion.accion === "consentimiento") {
+      // Solo las oportunidades que el usuario puede tocar; el resto se cuenta como omitida.
+      const r = restringidoA(req);
+      const { rows: tocables } = await getPool().query(
+        `SELECT id FROM crm_oportunidades WHERE sucursal_id = $1 AND id = ANY($2::uuid[])${r ? " AND ejecutivo = $3" : ""}`,
+        r ? [req.params.id, parsed.data.ids, r] : [req.params.id, parsed.data.ids],
+      );
+      const { rows: autor } = req.usuario ? await getPool().query(`SELECT id FROM usuarios WHERE id = $1`, [req.usuario.id]) : { rows: [] };
+      const n = await registrarConsentimiento({
+        sucursalId: req.params.id,
+        oportunidadIds: tocables.map((t) => t.id as string),
+        valor: accion.valor,
+        fuente: accion.fuente,
+        autorId: (autor[0]?.id as string | undefined) ?? null,
+      });
+      res.json({ afectadas: n, omitidas: parsed.data.ids.length - tocables.length });
+      return;
+    }
     const r = await ejecutarAccionMasiva({
       sucursalId: req.params.id,
       ids: parsed.data.ids,
       restringidoA: restringidoA(req),
       usuarioId: req.usuario?.id,
-      accion: parsed.data.accion,
+      accion,
     });
     if ("error" in r) {
       res.status(400).json({ error: r.error });
@@ -431,6 +462,34 @@ crmProcesoRouter.delete("/sucursales/:id/crm/vistas/:vid", async (req, res, next
       return;
     }
     res.json({ eliminada: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ============================================================
+   Consentimiento de WhatsApp de una oportunidad (de su contacto)
+   ============================================================ */
+
+crmProcesoRouter.put("/sucursales/:id/crm/oportunidades/:oid/consentimiento", async (req, res, next) => {
+  const parsed = z
+    .object({ valor: z.boolean(), fuente: z.string().trim().min(3, "Indica de dónde viene el consentimiento.").max(120) })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." });
+    return;
+  }
+  try {
+    if (!(await oportunidadAccesible(req, res))) return;
+    const { rows: autor } = req.usuario ? await getPool().query(`SELECT id FROM usuarios WHERE id = $1`, [req.usuario.id]) : { rows: [] };
+    await registrarConsentimiento({
+      sucursalId: req.params.id,
+      oportunidadIds: [req.params.oid],
+      valor: parsed.data.valor,
+      fuente: parsed.data.fuente,
+      autorId: (autor[0]?.id as string | undefined) ?? null,
+    });
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

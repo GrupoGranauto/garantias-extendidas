@@ -8,6 +8,8 @@ import {
   type ConfigSucursal,
 } from "../lib/whatsapp.js";
 import { emitirEventoChat } from "../lib/eventosChat.js";
+import { procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
+import { esPeticionDeBaja, telefono10 } from "../lib/campanasLogica.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
 
 export const webhookWhatsappRouter = Router();
@@ -338,6 +340,18 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
   const { error } = await getSupabase().from("whatsapp_mensajes").insert(fila);
   if (error) throw new Error(error.message);
 
+  // "BAJA", "STOP"…: el contacto pidió no recibir más. Se respeta de inmediato y para siempre.
+  if (msg.type === "text" && esPeticionDeBaja(String(fila.texto ?? ""))) {
+    const tel = telefono10(msg.from);
+    if (tel) {
+      try {
+        await procesarBaja(config.sucursal_id, tel);
+      } catch {
+        console.error("[campanas] no se pudo registrar una baja");
+      }
+    }
+  }
+
   emitirEventoChat(config.sucursal_id, { tipo: "mensaje_entrante", conversacionId });
 }
 
@@ -345,6 +359,17 @@ async function procesarActualizacionEstado(estado: EstadoMensaje) {
   const cambios: Record<string, unknown> = { estado: MAPA_ESTADO[estado.status] };
   if (estado.status === "failed" && estado.errors?.[0]) {
     cambios.error_detalle = estado.errors[0].message ?? estado.errors[0].title;
+  }
+
+  // Si el mensaje era de una campaña, su envío también pasa a entregado / leído / fallido.
+  try {
+    await registrarEstadoEnvio(
+      estado.id,
+      MAPA_ESTADO[estado.status] as "enviado" | "entregado" | "leido" | "fallido",
+      estado.status === "failed" ? ((estado.errors?.[0]?.message ?? estado.errors?.[0]?.title ?? null) as string | null) : null,
+    );
+  } catch {
+    console.error("[campanas] no se pudo actualizar el estado del envío");
   }
 
   // No hay fila que actualizar si el mensaje no es nuestro (ajeno a esta sucursal)

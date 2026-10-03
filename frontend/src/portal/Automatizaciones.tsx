@@ -4,6 +4,7 @@ import Cargador from "../componentes/Cargador";
 import Interruptor from "../componentes/Interruptor";
 import { IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
+import CampanasEnvio from "./CampanasEnvio";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -88,6 +89,32 @@ export default function Automatizaciones() {
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
+  // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
+  const [apartado, setApartado] = useState<"etapas" | "campanas">(() => {
+    try {
+      return sessionStorage.getItem("portal.automatizaciones.apartado") === "campanas" ? "campanas" : "etapas";
+    } catch {
+      return "etapas";
+    }
+  });
+  const elegirApartado = (a: "etapas" | "campanas") => {
+    setApartado(a);
+    try {
+      sessionStorage.setItem("portal.automatizaciones.apartado", a);
+    } catch {
+      // sin persistencia; no afecta el funcionamiento
+    }
+  };
+  const apartados = (
+    <div className="vista-selector auto-apartados" role="tablist" aria-label="Apartado de automatizaciones">
+      <button type="button" role="tab" aria-selected={apartado === "etapas"} className={`vista-opcion${apartado === "etapas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("etapas")}>
+        Por etapa
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "campanas"} className={`vista-opcion${apartado === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("campanas")}>
+        Campañas de WhatsApp
+      </button>
+    </div>
+  );
 
   async function guardarSla(e: EtapaApi) {
     const texto = (sla[e.id] ?? String(e.tiempo_max_horas ?? "")).trim();
@@ -162,6 +189,15 @@ export default function Automatizaciones() {
     }
   }
 
+  if (apartado === "campanas") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <CampanasEnvio />
+      </div>
+    );
+  }
+
   if (error) return <Alerta tipo="error">{error}</Alerta>;
   if (!datos) return <Cargador />;
 
@@ -170,6 +206,7 @@ export default function Automatizaciones() {
 
   return (
     <div className="pagina-formulario">
+      {apartados}
       <p className="pestana-descripcion">
         Define qué pasa cuando una oportunidad entra a cada etapa del embudo. Las tareas y preguntas se asignan solas al ejecutivo
         encargado de esa oportunidad.

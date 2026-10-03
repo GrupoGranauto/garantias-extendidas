@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getPool } from "./db.js";
 import { emitirBroadcast } from "./realtime.js";
 import { validarFechaCoherente } from "./entidades.js";
+import { despacharEnvios, planificarEnvios } from "./campanasEnvio.js";
 
 /**
  * Motor de automatizaciones del CRM: "cuando una oportunidad entra a una etapa -> entonces
@@ -367,6 +368,11 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
     procesarEventosCrm()
       .then(async (r) => {
         const extra = porTiempo ? await procesarReglasPorTiempo() : 0;
+        // Envíos de campaña: solo en el servidor que los tenga encendidos (CRM_ENVIOS=on), nunca en una copia de desarrollo.
+        if (porTiempo && process.env.CRM_ENVIOS === "on") {
+          await planificarEnvios();
+          await despacharEnvios();
+        }
         if (r.tareas + extra > 0) console.log(`[motor-crm] ${r.tareas + extra} tarea(s) creada(s)`);
       })
       .catch(() => console.error("[motor-crm] fallo la revisión de la bandeja"))

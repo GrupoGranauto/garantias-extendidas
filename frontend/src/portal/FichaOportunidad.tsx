@@ -11,6 +11,7 @@ type Ficha = {
   etiquetas: Record<string, string>;
   contrato: { estado: string; folio: string | null };
   exigir_evidencia_venta: boolean;
+  consentimiento: { valor: boolean | null; fuente: string | null; en: string | null; baja: boolean };
   tareas: TareaPendiente[];
   linea_tiempo: Entrada[];
   estados_contrato: string[];
@@ -101,6 +102,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
   const [textoNota, setTextoNota] = useState("");
   const [estadoContrato, setEstadoContrato] = useState("sin_contrato");
   const [folio, setFolio] = useState("");
+  const [fuenteConsentimiento, setFuenteConsentimiento] = useState("");
 
   const base = `/api/admin/sucursales/${sucursalId}/crm/oportunidades/${oportunidadId}`;
 
@@ -276,6 +278,51 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
               >
                 Guardar contrato
               </button>
+            </section>
+
+            <section className="ficha-sec">
+              <h3>Consentimiento de WhatsApp</h3>
+              <p className="ficha-ayuda">
+                {ficha.consentimiento.baja
+                  ? "Pidió no recibir más mensajes: no se le escribe por campañas."
+                  : ficha.consentimiento.valor === true
+                    ? `Consentimiento registrado${ficha.consentimiento.fuente ? ` (${ficha.consentimiento.fuente})` : ""}${ficha.consentimiento.en ? `, ${cuando(ficha.consentimiento.en)}` : ""}.`
+                    : ficha.consentimiento.valor === false
+                      ? "Consentimiento retirado."
+                      : "Sin consentimiento registrado: las campañas automáticas no le escriben."}
+              </p>
+              {!ficha.consentimiento.baja && (
+                <>
+                  <input
+                    type="text"
+                    className="auto-input"
+                    placeholder="Fuente (ej. formulario de venta, llamada grabada)"
+                    maxLength={120}
+                    value={fuenteConsentimiento}
+                    onChange={(e) => setFuenteConsentimiento(e.target.value)}
+                  />
+                  <div className="ficha-fila">
+                    <button
+                      type="button"
+                      className="boton-secundario-claro"
+                      disabled={enviando || fuenteConsentimiento.trim().length < 3}
+                      onClick={() => accion("consentimiento", "PUT", { valor: true, fuente: fuenteConsentimiento.trim() }, "Consentimiento registrado.", () => setFuenteConsentimiento(""))}
+                    >
+                      Registrar consentimiento
+                    </button>
+                    {ficha.consentimiento.valor === true && (
+                      <button
+                        type="button"
+                        className="boton-tenue"
+                        disabled={enviando || fuenteConsentimiento.trim().length < 3}
+                        onClick={() => accion("consentimiento", "PUT", { valor: false, fuente: fuenteConsentimiento.trim() }, "Consentimiento retirado.", () => setFuenteConsentimiento(""))}
+                      >
+                        Retirar
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="ficha-sec">
