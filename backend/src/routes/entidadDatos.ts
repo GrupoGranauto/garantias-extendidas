@@ -303,7 +303,12 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros/embudo", async (req, r
         const opciones = { ...base, etapaId: etapa.id };
         const r = await listarRegistros(sucursal.subdominio, definicion.nombre_tecnico, camposTarjeta, limite, soloEtapa ? desplazamiento : 0, opciones);
         if ("error" in r) throw new Error(r.error);
-        return { ...etapa, total: r.total, tarjetas: r.filas };
+        let fueraSla = 0;
+        if (etapa.tipo === "abierta" && etapa.tiempo_max_horas) {
+          const c = await contarRegistros(sucursal.subdominio, definicion.nombre_tecnico, campos, { ...opciones, enEtapaMasDeHoras: etapa.tiempo_max_horas });
+          fueraSla = "error" in c ? 0 : c.total;
+        }
+        return { ...etapa, total: r.total, tarjetas: r.filas, fuera_sla: fueraSla };
       }),
     );
 

@@ -9,6 +9,8 @@ type Columna = {
   nombre: string;
   color: string;
   tipo: "abierta" | "ganada" | "perdida";
+  tiempo_max_horas: number | null;
+  fuera_sla: number;
   total: number;
   tarjetas: Tarjeta[];
 };
@@ -24,6 +26,8 @@ type Props = {
   /** Cambia cuando los filtros o los datos cambian (incluye el tiempo real). */
   version: string;
   onAviso: (tipo: "ok" | "error", texto: string) => void;
+  /** Abre la ficha de una oportunidad (clic en su tarjeta). */
+  onAbrir: (id: string) => void;
 };
 
 const POR_PAGINA = 30;
@@ -53,7 +57,7 @@ type Movimiento = { origen: DropResult["source"]; destino: NonNullable<DropResul
  * cambia su etapa en el servidor (con historial); la vista se actualiza al instante y
  * vuelve a como estaba si el servidor lo rechaza.
  */
-export default function Embudo({ sucursalId, parametros, version, onAviso }: Props) {
+export default function Embudo({ sucursalId, parametros, version, onAviso, onAbrir }: Props) {
   const [datos, setDatos] = useState<Respuesta | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cargandoMas, setCargandoMas] = useState<string | null>(null);
@@ -190,6 +194,11 @@ export default function Embudo({ sucursalId, parametros, version, onAviso }: Pro
             <section key={col.id} className="embudo-col" style={{ "--etapa": col.color } as CSSProperties}>
               <header className="embudo-col-cab">
                 <span className="embudo-col-nombre">{col.nombre}</span>
+                {col.fuera_sla > 0 && (
+                  <span className="embudo-col-sla" title={`Llevan más de ${col.tiempo_max_horas} h en esta etapa`}>
+                    {col.fuera_sla} fuera de SLA
+                  </span>
+                )}
                 <span className="embudo-col-total">{col.total.toLocaleString("es-MX")}</span>
               </header>
               <Droppable droppableId={col.id}>
@@ -199,14 +208,21 @@ export default function Embudo({ sucursalId, parametros, version, onAviso }: Pro
                     {...prov.droppableProps}
                     className={`embudo-lista${snap.isDraggingOver ? " embudo-lista-sobre" : ""}`}
                   >
-                    {col.tarjetas.map((t, i) => (
+                    {col.tarjetas.map((t, i) => {
+                      const tarde =
+                        col.tipo === "abierta" &&
+                        col.tiempo_max_horas !== null &&
+                        !!t.entro_a_etapa_en &&
+                        Date.now() - new Date(String(t.entro_a_etapa_en)).getTime() > col.tiempo_max_horas * 3600000;
+                      return (
                       <Draggable key={t.id} draggableId={t.id} index={i}>
                         {(p, s) => (
                           <article
                             ref={p.innerRef}
                             {...p.draggableProps}
                             {...p.dragHandleProps}
-                            className={`embudo-tarjeta${s.isDragging ? " embudo-tarjeta-arrastrando" : ""}`}
+                            className={`embudo-tarjeta${s.isDragging ? " embudo-tarjeta-arrastrando" : ""}${tarde ? " embudo-tarjeta-tarde" : ""}`}
+                            onClick={() => onAbrir(t.id)}
                           >
                             <strong className="embudo-tarjeta-titulo">{String(t.cliente ?? "Sin nombre")}</strong>
                             {(t.linea || t.anio_vin) && (tiene("linea") || tiene("anio_vin")) ? (
@@ -225,6 +241,7 @@ export default function Embudo({ sucursalId, parametros, version, onAviso }: Pro
                                 <span className="embudo-mini embudo-mini-perdida">{String(t.motivo_perdida)}</span>
                               ) : null}
                             </div>
+                            {tarde && <span className="embudo-mini embudo-mini-perdida">Fuera de SLA</span>}
                             <footer className="embudo-tarjeta-pie">
                               <span title="Ejecutivo">{tiene("ejecutivo") && t.ejecutivo ? String(t.ejecutivo) : "Sin asignar"}</span>
                               <span
@@ -240,7 +257,8 @@ export default function Embudo({ sucursalId, parametros, version, onAviso }: Pro
                           </article>
                         )}
                       </Draggable>
-                    ))}
+                      );
+                    })}
                     {prov.placeholder}
                     {col.tarjetas.length === 0 && !snap.isDraggingOver && <p className="embudo-col-vacia">Sin oportunidades</p>}
                     {col.tarjetas.length < col.total && (

@@ -22,6 +22,39 @@ const COLOR_ESTADO_CONTACTO: Record<string, string> = {
 
 const COLOR_EJECUTIVO = "#475569";
 
+const ETIQUETA_DE_ESTADO: Record<string, string> = Object.fromEntries(Object.entries(ESTADOS_CONTACTO).map(([etiqueta, clave]) => [clave, etiqueta]));
+const TITULO_CAMPO: Record<string, string> = {
+  comentarios: "Comentarios",
+  fecha_ultimo_contacto: "Fecha último contacto",
+  fecha_compra: "Fecha compra",
+  ejecutivo: "Ejecutivo",
+  estado_contacto: "Estado de contacto",
+};
+
+type Consulta = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }> };
+
+/** El historial y las actividades referencian a public.usuarios: sin fila ahí (ej. admin de plataforma) queda sin autor. */
+export async function autorValido(cliente: Consulta, usuarioId?: string): Promise<string | null> {
+  if (!usuarioId) return null;
+  return (await cliente.query(`SELECT id FROM usuarios WHERE id = $1`, [usuarioId])).rows[0]?.id ?? null;
+}
+
+/** Estados de contrato que prueban una venta: el certificado ya se entregó (implica pago confirmado). */
+export const CONTRATO_CON_EVIDENCIA = ["certificado_entregado", "cobertura_iniciada"];
+
+/**
+ * Si la sucursal exige evidencia para marcar una venta, devuelve el motivo por el que aún no se
+ * puede; null si se puede (o la sucursal no lo exige). Una venta es pago y certificado, no interés.
+ */
+export async function evidenciaFaltante(cliente: Consulta, sucursalId: string, oportunidadId: string): Promise<string | null> {
+  const { rows: cfg } = await cliente.query(`SELECT exigir_evidencia_venta FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
+  if (!cfg[0]?.exigir_evidencia_venta) return null;
+  const { rows } = await cliente.query(`SELECT estado FROM crm_contratos WHERE oportunidad_id = $1`, [oportunidadId]);
+  return rows[0] && CONTRATO_CON_EVIDENCIA.includes(rows[0].estado as string)
+    ? null
+    : "Para marcar una venta se necesita el certificado entregado. Registra el contrato en la ficha de la oportunidad.";
+}
+
 /**
  * Columnas de la vista que se editan desde la tabla, y a dónde van. Cualquier otra
  * columna 'back' que llegue aquí es un error de configuración, no se ignora.
@@ -80,7 +113,9 @@ export async function editarOportunidad(params: {
     await cliente.query("BEGIN");
 
     const { rows: filas } = await cliente.query(
-      `SELECT o.id, o.etapa_id, o.estado, o.motivo_perdida_id, e.tipo AS tipo_etapa
+      `SELECT o.id, o.etapa_id, o.estado, o.motivo_perdida_id, e.tipo AS tipo_etapa, o.comentarios,
+              o.fecha_ultimo_contacto::text AS fecha_ultimo_contacto, o.fecha_compra::text AS fecha_compra,
+              o.ejecutivo, o.estado_contacto
          FROM crm_oportunidades o LEFT JOIN crm_etapas e ON e.id = o.etapa_id
         WHERE o.id = $1 AND o.sucursal_id = $2 FOR UPDATE OF o`,
       [oportunidadId, sucursalId],
@@ -134,6 +169,14 @@ export async function editarOportunidad(params: {
       tipoDestino = etapas[0].tipo as string;
       etapaCambio = etapaDestinoId !== actual.etapa_id;
 
+      if (etapaCambio && tipoDestino === "ganada") {
+        const falta = await evidenciaFaltante(cliente, sucursalId, oportunidadId);
+        if (falta) {
+          await cliente.query("ROLLBACK");
+          return { ok: false, estado: 400, error: falta };
+        }
+      }
+
       if (etapaCambio) {
         const { rows: pos } = await cliente.query(
           `SELECT coalesce(max(posicion), 0) + 1024 AS p FROM crm_oportunidades WHERE etapa_id = $1`,
@@ -182,11 +225,29 @@ export async function editarOportunidad(params: {
       args,
     );
 
+    // Auditoría: cada campo que cambió queda en la línea de tiempo con su valor anterior y el nuevo.
+    const autorEdicion = await autorValido(cliente, usuarioId);
+    const cambios: { campo: string; anterior: unknown; nuevo: unknown }[] = [];
+    for (const campo of ["comentarios", "fecha_ultimo_contacto", "fecha_compra", "ejecutivo"] as const) {
+      if (campo in valores && (valores[campo] ?? null) !== (actual[campo] ?? null)) {
+        cambios.push({ campo, anterior: actual[campo] ?? null, nuevo: valores[campo] ?? null });
+      }
+    }
+    if ("estado_contacto" in valores) {
+      const anterior = ETIQUETA_DE_ESTADO[actual.estado_contacto as string] ?? null;
+      if (anterior !== valores.estado_contacto) cambios.push({ campo: "estado_contacto", anterior, nuevo: valores.estado_contacto });
+    }
+    for (const c of cambios) {
+      await cliente.query(
+        `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle, usuario_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [sucursalId, oportunidadId, c.campo === "ejecutivo" ? "reasignacion" : "edicion", TITULO_CAMPO[c.campo] ?? c.campo, c, autorEdicion],
+      );
+    }
+
     if (etapaCambio) {
       // El historial referencia a public.usuarios: quien no tenga fila ahí (ej. un admin de plataforma) queda sin autor.
-      const autor = usuarioId
-        ? (await cliente.query(`SELECT id FROM usuarios WHERE id = $1`, [usuarioId])).rows[0]?.id ?? null
-        : null;
+      const autor = autorEdicion;
       await cliente.query(
         `INSERT INTO crm_historial_etapas
            (sucursal_id, oportunidad_id, etapa_origen_id, etapa_destino_id, motivo_perdida_id, usuario_id, origen)
@@ -257,6 +318,13 @@ export async function moverOportunidad(params: {
     }
     const tipo = etapas[0].tipo as string;
     const cambioEtapa = etapaId !== actual.etapa_id;
+    if (cambioEtapa && tipo === "ganada") {
+      const falta = await evidenciaFaltante(cliente, sucursalId, oportunidadId);
+      if (falta) {
+        await cliente.query("ROLLBACK");
+        return { ok: false, estado: 400, error: falta };
+      }
+    }
 
     // Posición entre las vecinas de la columna destino (sin contar la propia tarjeta).
     let posicion: number;

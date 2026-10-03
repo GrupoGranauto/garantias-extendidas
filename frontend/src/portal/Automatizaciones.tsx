@@ -9,13 +9,15 @@ import { usePortal } from "./PortalProvider";
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
 type Cfg = Record<string, unknown>;
 
-type Automatizacion = { id?: string; clave: string; tipo: TipoAuto; nombre: string; activa: boolean; config: Cfg };
+type Evento = "entra_etapa" | "tiempo_en_etapa";
+type Automatizacion = { id?: string; clave: string; evento: Evento; tipo: TipoAuto; nombre: string; activa: boolean; config: Cfg };
 type EtapaApi = {
   id: string;
   nombre: string;
   color: string;
   tipo: "abierta" | "ganada" | "perdida";
-  automatizaciones: { id: string; tipo: TipoAuto; nombre: string; activa: boolean; config: Cfg }[];
+  tiempo_max_horas: number | null;
+  automatizaciones: { id: string; evento: Evento; tipo: TipoAuto; nombre: string; activa: boolean; config: Cfg }[];
 };
 type Respuesta = {
   etapas: EtapaApi[];
@@ -57,9 +59,9 @@ let contador = 0;
 const nuevaClave = () => `n${++contador}`;
 
 function configInicial(tipo: TipoAuto): Cfg {
-  if (tipo === "tarea") return { titulo: "", descripcion: "", vence_horas: 24 };
+  if (tipo === "tarea") return { titulo: "", descripcion: "", vence_horas: 24, horas: null, solo_sin_contacto: false, aplicar_a_existentes: false };
   if (tipo === "pregunta")
-    return { texto: "", tipo_respuesta: "texto", opciones: [], campo_destino: null, obligatoria: false, vence_horas: null };
+    return { texto: "", tipo_respuesta: "texto", opciones: [], campo_destino: null, obligatoria: false, vence_horas: null, horas: null, solo_sin_contacto: false, aplicar_a_existentes: false };
   return { plantilla_id: null, retraso_horas: 0 };
 }
 
@@ -85,6 +87,28 @@ export default function Automatizaciones() {
   const [sucias, setSucias] = useState<Set<string>>(new Set());
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
+  const [sla, setSla] = useState<Record<string, string>>({});
+
+  async function guardarSla(e: EtapaApi) {
+    const texto = (sla[e.id] ?? String(e.tiempo_max_horas ?? "")).trim();
+    const horas = texto === "" ? null : Number(texto);
+    if (horas !== null && (!Number.isInteger(horas) || horas < 1)) {
+      setAviso({ tipo: "error", texto: "El tiempo máximo debe ser un número entero de horas, o vacío para no tener límite." });
+      return;
+    }
+    try {
+      await apiFetch(`/api/admin/sucursales/${sucursalId}/crm/etapas/${e.id}/sla`, { method: "PUT", body: JSON.stringify({ tiempo_max_horas: horas }) });
+      setDatos((d) => (d ? { ...d, etapas: d.etapas.map((x) => (x.id === e.id ? { ...x, tiempo_max_horas: horas } : x)) } : d));
+      setSla((s) => {
+        const copia = { ...s };
+        delete copia[e.id];
+        return copia;
+      });
+      setAviso({ tipo: "ok", texto: horas === null ? "Sin tiempo máximo en esta etapa." : `Tiempo máximo: ${horas} h.` });
+    } catch (err) {
+      setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo guardar el tiempo máximo." });
+    }
+  }
 
   function cargar() {
     apiFetch<Respuesta>(`/api/admin/sucursales/${sucursalId}/crm/automatizaciones`)
@@ -115,7 +139,7 @@ export default function Automatizaciones() {
     cambiar((prev) => prev.map((i) => (i.clave === clave ? { ...i, config: { ...i.config, ...cambios } } : i)));
 
   function agregar() {
-    cambiar((prev) => [...prev, { clave: nuevaClave(), tipo: pestana, nombre: "", activa: false, config: configInicial(pestana) }]);
+    cambiar((prev) => [...prev, { clave: nuevaClave(), evento: "entra_etapa", tipo: pestana, nombre: "", activa: false, config: configInicial(pestana) }]);
   }
 
   async function guardar() {
@@ -126,7 +150,7 @@ export default function Automatizaciones() {
       await apiFetch(`/api/admin/sucursales/${sucursalId}/crm/automatizaciones/${etapaId}`, {
         method: "PUT",
         body: JSON.stringify({
-          items: items.map((i) => ({ ...(i.id ? { id: i.id } : {}), tipo: i.tipo, nombre: i.nombre, activa: i.activa, config: i.config })),
+          items: items.map((i) => ({ ...(i.id ? { id: i.id } : {}), evento: i.evento, tipo: i.tipo, nombre: i.nombre, activa: i.activa, config: i.config })),
         }),
       });
       cargar();
@@ -185,6 +209,26 @@ export default function Automatizaciones() {
 
             {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
+            {etapa.tipo === "abierta" && (
+              <div className="auto-sla">
+                <label className="auto-campo">
+                  <span>Tiempo máximo en esta etapa (horas)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    className="auto-input"
+                    placeholder="Sin límite"
+                    value={sla[etapa.id] ?? (etapa.tiempo_max_horas ?? "")}
+                    onChange={(e) => setSla((s) => ({ ...s, [etapa.id]: e.target.value }))}
+                  />
+                </label>
+                <button type="button" className="boton-secundario-claro" onClick={() => guardarSla(etapa)}>
+                  Guardar tiempo
+                </button>
+                <small>Pasado ese tiempo, la oportunidad aparece como fuera de SLA en el embudo y en el reporte.</small>
+              </div>
+            )}
+
             <div className="auto-pestanas" role="tablist">
               {PESTANAS.map((p) => {
                 const n = items.filter((i) => i.tipo === p.tipo).length;
@@ -234,6 +278,15 @@ export default function Automatizaciones() {
                     <IconoXMarca className="icono-inline" />
                   </button>
                 </div>
+
+                {a.tipo !== "whatsapp" && (
+                  <Disparo
+                    evento={a.evento}
+                    cfg={a.config}
+                    onEvento={(evento) => actualizar(a.clave, { evento })}
+                    onCfg={(c) => actualizarCfg(a.clave, c)}
+                  />
+                )}
 
                 {a.tipo === "tarea" && <EditorTarea cfg={a.config} onCambio={(c) => actualizarCfg(a.clave, c)} />}
                 {a.tipo === "pregunta" && (
@@ -410,6 +463,55 @@ function EditorWhatsapp({
         </select>
       </label>
       <CampoHoras etiqueta="Enviar después de (horas)" valor={cfg.retraso_horas} onChange={(v) => onCambio({ retraso_horas: v ?? 0 })} />
+    </div>
+  );
+}
+
+/** Cuándo se dispara: al entrar a la etapa, o después de un tiempo en ella (recontacto, seguimiento). */
+function Disparo({
+  evento,
+  cfg,
+  onEvento,
+  onCfg,
+}: {
+  evento: Evento;
+  cfg: Cfg;
+  onEvento: (e: Evento) => void;
+  onCfg: (c: Cfg) => void;
+}) {
+  return (
+    <div className="auto-cuerpo auto-disparo">
+      <label className="auto-campo">
+        <span>Cuándo se dispara</span>
+        <select className="auto-input" value={evento} onChange={(e) => onEvento(e.target.value as Evento)}>
+          <option value="entra_etapa">Al entrar a la etapa</option>
+          <option value="tiempo_en_etapa">Después de un tiempo en la etapa</option>
+        </select>
+      </label>
+      {evento === "tiempo_en_etapa" && (
+        <>
+          <label className="auto-campo">
+            <span>Horas en la etapa</span>
+            <input
+              type="number"
+              min={1}
+              className="auto-input"
+              placeholder="Ej. 24"
+              value={typeof cfg.horas === "number" ? cfg.horas : ""}
+              onChange={(e) => onCfg({ horas: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value))) })}
+            />
+          </label>
+          <div className="auto-campo auto-campo-casilla">
+            <Interruptor etiqueta="Solo si nadie ha contactado al cliente desde que entró" activo={cfg.solo_sin_contacto === true} onChange={(v) => onCfg({ solo_sin_contacto: v })} />
+          </div>
+          <div className="auto-campo auto-campo-casilla">
+            <Interruptor etiqueta="Aplicar también a las que ya están en la etapa" activo={cfg.aplicar_a_existentes === true} onChange={(v) => onCfg({ aplicar_a_existentes: v })} />
+          </div>
+          {cfg.aplicar_a_existentes === true && (
+            <p className="auto-campo-ancho rep-ayuda">Cuidado: se creará una tarea por cada oportunidad que ya esté en la etapa y lleve ese tiempo.</p>
+          )}
+        </>
+      )}
     </div>
   );
 }

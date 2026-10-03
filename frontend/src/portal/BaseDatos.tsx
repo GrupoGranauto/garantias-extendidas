@@ -7,6 +7,7 @@ import { apiFetch } from "../lib/api";
 import { SECCIONES, type CampoPanel, type ItemPanel } from "../lib/panel";
 import { supabase } from "../lib/supabase";
 import Embudo from "./Embudo";
+import FichaOportunidad from "./FichaOportunidad";
 import PanelFiltros, { type ValorKpi, type Visibilidad } from "./PanelFiltros";
 import {
   alternarBoton,
@@ -411,6 +412,8 @@ export default function BaseDatos() {
     }
   });
   const [refrescos, setRefrescos] = useState(0);
+  // Ficha de oportunidad abierta (clic en un cliente de la tabla o en una tarjeta del embudo).
+  const [fichaId, setFichaId] = useState<string | null>(null);
   function elegirVista(v: "tabla" | "embudo") {
     setVista(v);
     try {
@@ -905,6 +908,7 @@ export default function BaseDatos() {
           parametros={parametrosFiltro}
           version={`${parametrosFiltro().toString()}|${refrescos}`}
           onAviso={mostrarAviso}
+          onAbrir={setFichaId}
         />
       )}
 
@@ -938,7 +942,11 @@ export default function BaseDatos() {
                     <tr key={id}>
                       {datos.campos.map((c) => (
                         <td key={c.nombre_tecnico} className={c.origen === "back" ? "col-editable" : undefined}>
-                          {c.origen === "back"
+                          {c.nombre_tecnico === "cliente" && datos.embudo ? (
+                            <button type="button" className="celda-enlace" onClick={() => setFichaId(id)}>
+                              {formatearValor(fila.cliente, "texto")}
+                            </button>
+                          ) : c.origen === "back"
                             ? celdaEditable(fila, c)
                             : c.tipo === "texto" && c.editor_tipo === "lista"
                               ? (() => {
@@ -980,6 +988,18 @@ export default function BaseDatos() {
             </div>
           </footer>
         </>
+      )}
+
+      {fichaId && (
+        <FichaOportunidad
+          sucursalId={sucursalId}
+          oportunidadId={fichaId}
+          onCerrar={() => setFichaId(null)}
+          onCambio={() => {
+            cargarRef.current();
+            setRefrescos((n) => n + 1);
+          }}
+        />
       )}
 
       {aviso && (

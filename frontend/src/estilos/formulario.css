@@ -1927,3 +1927,71 @@ textarea.auto-input { resize: vertical; }
   .tarea { flex-direction: column; }
   .tarea-lado { align-items: stretch; min-width: 0; }
 }
+
+/* ---------- Ficha de oportunidad ---------- */
+.ficha-fondo { position: fixed; inset: 0; z-index: 55; display: flex; justify-content: flex-end; background: rgba(17, 17, 24, 0.35); animation: modal-fondo-entra 0.15s ease-out; }
+.ficha { width: min(480px, 100%); height: 100%; display: flex; flex-direction: column; background: #fff; box-shadow: -12px 0 32px -8px rgba(16, 24, 40, 0.25); animation: ficha-entra 0.18s ease-out; }
+@keyframes ficha-entra { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ficha-cab { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--gris-200); }
+.ficha-cab h2 { margin: 0 0 4px; font-size: 17px; color: var(--gris-900); }
+.ficha-sub { margin: 0; font-size: 12px; color: var(--gris-500); }
+.ficha-cerrar { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; color: var(--gris-500); background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+.ficha-cerrar:hover { background: var(--gris-100); color: var(--gris-800); }
+.ficha-cuerpo { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 20px 28px; }
+.ficha-sec { display: flex; flex-direction: column; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--gris-100); }
+.ficha-sec h3 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--gris-500); }
+.ficha-fila { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ficha-sec .boton-guardar, .ficha-sec .boton-secundario-claro { align-self: flex-start; }
+.ficha-ayuda { margin: 0; font-size: 12px; color: var(--gris-500); }
+.ficha-datos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 0; }
+.ficha-datos dt { font-size: 11px; color: var(--gris-500); }
+.ficha-datos dd { margin: 2px 0 0; font-size: 13px; color: var(--gris-900); overflow-wrap: anywhere; }
+.ficha-tarea { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; background: var(--gris-50); border: 1px solid var(--gris-200); border-radius: 8px; font-size: 13px; }
+.ficha-tarea p { margin: 2px 0 0; color: var(--gris-600); }
+.ficha-tarea small { color: var(--gris-500); }
+.ficha-linea { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.ficha-evento { display: flex; gap: 10px; font-size: 13px; }
+.ficha-evento p { margin: 2px 0 0; color: var(--gris-600); }
+.ficha-evento small { color: var(--gris-400); }
+.ficha-evento-punto { flex: none; width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: var(--gris-300); }
+.ficha-evento-etapa .ficha-evento-punto { background: var(--marca); }
+.ficha-evento-llamada .ficha-evento-punto, .ficha-evento-whatsapp .ficha-evento-punto { background: #614dff; }
+.ficha-evento-contrato .ficha-evento-punto { background: #21c700; }
+.celda-enlace { padding: 0; font: inherit; font-weight: 600; text-align: left; color: var(--gris-900); background: transparent; border: 0; cursor: pointer; }
+.celda-enlace:hover { color: var(--marca); text-decoration: underline; }
+
+/* ---------- SLA en el embudo ---------- */
+.embudo-col-sla { margin-left: auto; padding: 1px 8px; font-size: 11px; font-weight: 700; color: #b42318; background: #fef3f2; border-radius: 999px; }
+.embudo-tarjeta-tarde { border-left-color: #dc2626; }
+.auto-sla { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 12px; background: var(--gris-50); border: 1px solid var(--gris-200); border-radius: 10px; }
+.auto-sla small { flex-basis: 100%; color: var(--gris-500); }
+.auto-disparo { padding-bottom: 4px; border-bottom: 1px dashed var(--gris-200); }
+
+/* ---------- Reportes y equipo ---------- */
+.rep { display: flex; flex-direction: column; gap: 14px; }
+.rep-rango { display: flex; flex-wrap: wrap; gap: 12px; }
+.rep-rango label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--gris-600); }
+.rep-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.rep-kpi { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; background: #fff; border: 1px solid var(--gris-200); border-radius: 10px; }
+.rep-kpi span { font-size: 12px; color: var(--gris-500); }
+.rep-kpi strong { font-size: 24px; color: var(--gris-900); }
+.rep-kpi-alerta { border-color: #fecdca; background: #fffbfa; }
+.rep-kpi-alerta strong { color: #b42318; }
+.rep-rejilla { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.rep-tarjeta { display: flex; flex-direction: column; gap: 10px; padding: 16px; background: #fff; border: 1px solid var(--gris-200); border-radius: 10px; }
+.rep-tarjeta h3 { margin: 0; font-size: 14px; color: var(--gris-900); }
+.rep-ayuda { margin: 0; font-size: 12px; color: var(--gris-500); }
+.rep-barras { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: auto 1fr auto; gap: 8px 10px; align-items: center; }
+.rep-barras li { display: contents; }
+.rep-barra-etiqueta { font-size: 13px; color: var(--gris-700); }
+.rep-barra-pista { height: 10px; background: var(--gris-100); border-radius: 999px; overflow: hidden; }
+.rep-barra { display: block; height: 100%; border-radius: 999px; }
+.rep-barra-valor { font-size: 13px; font-weight: 700; color: var(--gris-900); text-align: right; }
+.rep-barra-nota { grid-column: 2 / -1; margin-top: -4px; font-size: 11px; color: var(--gris-500); }
+.rep-celda-alerta { font-weight: 700; color: #b42318; }
+.equipo-roster { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.equipo-roster li { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: var(--gris-50); border: 1px solid var(--gris-200); border-radius: 8px; font-size: 13px; }
+.equipo-reasignar { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; padding: 14px; background: var(--gris-50); border: 1px solid var(--gris-200); border-radius: 10px; }
+.equipo-simulacion { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--gris-300); font-size: 13px; }
+.equipo-simulacion ul { margin: 0; padding-left: 18px; }
+.equipo-simulacion .boton-guardar { align-self: flex-start; }

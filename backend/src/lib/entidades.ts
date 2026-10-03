@@ -232,6 +232,8 @@ export type OpcionesListado = {
   etapaId?: string;
   /** Orden del embudo: por posición dentro de la etapa, en vez de por una columna. */
   porPosicion?: boolean;
+  /** Solo oportunidades abiertas y activas que llevan más de N horas en su etapa (fuera de SLA). */
+  enEtapaMasDeHoras?: number;
   /** Restricción obligatoria por una columna (ej. el Ejecutivo de un asesor). Puede ser una columna no visible. */
   restriccion?: { columna: string; valor: string };
   filtros?: FiltroColumna[];
@@ -271,6 +273,11 @@ function construirDonde(
 
   if (opciones.sucursalId) condiciones.push(`"sucursal_id" = ${marcador(opciones.sucursalId)}::uuid`);
   if (opciones.etapaId) condiciones.push(`"etapa_id" = ${marcador(opciones.etapaId)}::uuid`);
+  if (opciones.enEtapaMasDeHoras) {
+    condiciones.push(
+      `"estado_oportunidad" = 'abierta' AND "estado_fuente" = 'ACTIVA' AND "entro_a_etapa_en" < now() - make_interval(hours => ${marcador(opciones.enEtapaMasDeHoras)}::int)`,
+    );
+  }
 
   if (opciones.restriccion) {
     const col = exigirIdentificador(opciones.restriccion.columna, "Columna de restricción");

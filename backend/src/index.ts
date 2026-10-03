@@ -12,6 +12,7 @@ import { adminPlantillasRouter } from "./routes/adminPlantillas.js";
 import { adminEntidadesRouter } from "./routes/adminEntidades.js";
 import { adminCrmRouter } from "./routes/adminCrm.js";
 import { crmPortalRouter } from "./routes/crmPortal.js";
+import { crmProcesoRouter } from "./routes/crmProceso.js";
 import { iniciarMotorCrm } from "./lib/motorCrm.js";
 import { iniciarSyncProgramadoCrm } from "./lib/sincronizacionCrm.js";
 import { entidadDatosRouter } from "./routes/entidadDatos.js";
@@ -53,6 +54,7 @@ app.use("/api/garantias", garantiasRouter);
 app.use("/api/admin", entidadDatosRouter);
 app.use("/api/admin", whatsappChatRouter);
 app.use("/api/admin", crmPortalRouter);
+app.use("/api/admin", crmProcesoRouter);
 // Routers solo-admin (adminRouter gatea con requireAdmin todo lo que le llegue).
 app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);

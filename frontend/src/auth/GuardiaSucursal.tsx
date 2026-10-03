@@ -10,6 +10,8 @@ import BaseDatos from "../portal/BaseDatos";
 import Chat from "../portal/Chat";
 import Tareas from "../portal/Tareas";
 import Automatizaciones from "../portal/Automatizaciones";
+import Reportes from "../portal/Reportes";
+import Equipo from "../portal/Equipo";
 import LayoutPanel from "../componentes/LayoutPanel";
 import { NAVEGACION_PORTAL, RUTAS_DEL_MENU } from "../navegacion";
 import Inicio from "../paginas/Inicio";
@@ -96,7 +98,7 @@ export default function GuardiaSucursal() {
       ? NAVEGACION_PORTAL
       : NAVEGACION_PORTAL.map((g) => ({
           ...g,
-          secciones: g.secciones.filter((s) => s.ruta !== "/plantillas" && s.ruta !== "/automatizaciones"),
+          secciones: g.secciones.filter((s) => s.ruta !== "/plantillas" && s.ruta !== "/automatizaciones" && s.ruta !== "/equipo"),
         }));
 
     return (
@@ -115,6 +117,8 @@ export default function GuardiaSucursal() {
           <Route path="/chat" element={<Chat />} />
           <Route path="/base-datos" element={<BaseDatos />} />
           <Route path="/tareas" element={<Tareas />} />
+          <Route path="/reportes" element={<Reportes />} />
+          {esAdmin && <Route path="/equipo" element={<Equipo />} />}
           {esAdmin && <Route path="/automatizaciones" element={<Automatizaciones />} />}
           {esAdmin && <Route path="/plantillas" element={<PlantillasListado />} />}
           {esAdmin && <Route path="/plantillas/nueva" element={<PlantillaFormulario />} />}

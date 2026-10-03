@@ -24,6 +24,7 @@ export type OportunidadExistente = {
   campana: string | null;
   estado_cartera: string;
   ejecutivo: string | null;
+  estado: string;
 };
 
 export type EstadoCartera = "ACTIVA" | "YA_TIENE_GE" | "NO_CONTACTABLE_FUENTE" | "FUERA_DE_VENTANA" | "NO_EN_MAESTRA";
@@ -167,7 +168,6 @@ export function planificar(
   maestra: FilaMaestra[],
   existentes: OportunidadExistente[],
   roster: string[],
-  cargaInicial: Map<string, number>,
 ): Plan {
   const conflictos: string[] = [];
   const porVin = new Map<string, FilaMaestra>();
@@ -244,7 +244,12 @@ export function planificar(
   }
 
   // Nuevas: activas que ninguna fila existente cubre. Se asignan al ejecutivo menos cargado.
-  const carga = new Map(cargaInicial);
+  // La carga es la que quedará DESPUÉS de esta corrida (sin contar lo que se cierra hoy).
+  const carga = new Map<string, number>();
+  const idsQueSeguiranActivos = new Set([...actualizadas, ...migradas].map((x) => x.id));
+  for (const e of existentes) {
+    if (e.ejecutivo && e.estado === "abierta" && idsQueSeguiranActivos.has(e.id)) carga.set(e.ejecutivo, (carga.get(e.ejecutivo) ?? 0) + 1);
+  }
   const nuevas: Plan["nuevas"] = [];
   for (const [clave, a] of activas) {
     if (usadas.has(clave)) continue;
@@ -306,22 +311,16 @@ export async function leerMaestra(): Promise<FilaMaestra[]> {
 async function cargarEstadoActual(sucursalId: string) {
   const pool = getPool();
   const { rows: existentes } = await pool.query(
-    `SELECT o.id, o.clave, v.vin, o.campana, o.estado_cartera, o.ejecutivo
+    `SELECT o.id, o.clave, v.vin, o.campana, o.estado_cartera, o.ejecutivo, o.estado
        FROM crm_oportunidades o JOIN crm_vehiculos v ON v.id = o.vehiculo_id
       WHERE o.sucursal_id = $1`,
     [sucursalId],
   );
   const { rows: cfg } = await pool.query(`SELECT roster_ejecutivos FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
   const roster = (cfg[0]?.roster_ejecutivos as string[] | undefined) ?? [];
-  const { rows: carga } = await pool.query(
-    `SELECT ejecutivo, count(*)::int AS n FROM crm_oportunidades
-      WHERE sucursal_id = $1 AND estado_cartera = 'ACTIVA' AND estado = 'abierta' AND ejecutivo IS NOT NULL GROUP BY 1`,
-    [sucursalId],
-  );
   return {
     existentes: existentes as OportunidadExistente[],
     roster,
-    carga: new Map<string, number>(carga.map((r) => [r.ejecutivo as string, r.n as number])),
   };
 }
 
@@ -385,8 +384,8 @@ async function registrarCorrida(sucursalId: string, resumen: ResumenSync, estado
 export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Promise<ResumenSync> {
   const modo = aplicar ? "real" : "simulacion";
   const maestra = await leerMaestra();
-  const { existentes, roster, carga } = await cargarEstadoActual(sucursalId);
-  const plan = planificar(maestra, existentes, roster, carga);
+  const { existentes, roster } = await cargarEstadoActual(sucursalId);
+  const plan = planificar(maestra, existentes, roster);
   const resumen = resumenDe(modo, plan);
 
   const problema =

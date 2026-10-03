@@ -29,7 +29,7 @@ crmPortalRouter.get("/sucursales/:id/crm/automatizaciones", requireAdminSucursal
   try {
     const etapas = await listarEtapas(req.params.id);
     const { rows } = await getPool().query(
-      `SELECT id, etapa_id, tipo, nombre, config, orden, activa FROM crm_automatizaciones
+      `SELECT id, etapa_id, evento, tipo, nombre, config, orden, activa FROM crm_automatizaciones
         WHERE sucursal_id = $1 ORDER BY orden, creado_en`,
       [req.params.id],
     );
@@ -86,24 +86,28 @@ crmPortalRouter.put("/sucursales/:id/crm/automatizaciones/:etapaId", requireAdmi
 
     await cliente.query("BEGIN");
     const { rows: existentes } = await cliente.query(
-      `SELECT id FROM crm_automatizaciones WHERE etapa_id = $1 AND sucursal_id = $2`,
+      `SELECT id, activa FROM crm_automatizaciones WHERE etapa_id = $1 AND sucursal_id = $2`,
       [req.params.etapaId, req.params.id],
     );
     const idsExistentes = new Set(existentes.map((r) => r.id as string));
+    const estabaActiva = new Map(existentes.map((r) => [r.id as string, r.activa === true]));
     const conservados = new Set<string>();
 
     for (const [orden, item] of parsed.data.items.entries()) {
       if (item.id && idsExistentes.has(item.id)) {
         conservados.add(item.id);
         await cliente.query(
-          `UPDATE crm_automatizaciones SET tipo = $2, nombre = $3, config = $4, orden = $5, activa = $6 WHERE id = $1`,
-          [item.id, item.tipo, item.nombre, item.config, orden, item.activa],
+          `UPDATE crm_automatizaciones
+              SET tipo = $2, nombre = $3, config = $4, orden = $5, activa = $6, evento = $7,
+                  activa_desde = CASE WHEN NOT $6 THEN NULL WHEN $8 THEN activa_desde ELSE now() END
+            WHERE id = $1`,
+          [item.id, item.tipo, item.nombre, item.config, orden, item.activa, item.evento, estabaActiva.get(item.id) === true],
         );
       } else {
         await cliente.query(
-          `INSERT INTO crm_automatizaciones (sucursal_id, etapa_id, tipo, nombre, config, orden, activa)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [req.params.id, req.params.etapaId, item.tipo, item.nombre, item.config, orden, item.activa],
+          `INSERT INTO crm_automatizaciones (sucursal_id, etapa_id, tipo, nombre, config, orden, activa, evento, activa_desde)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $7 THEN now() END)`,
+          [req.params.id, req.params.etapaId, item.tipo, item.nombre, item.config, orden, item.activa, item.evento],
         );
       }
     }

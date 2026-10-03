@@ -377,3 +377,25 @@ export function IconoAutomatizaciones({ className }: IconoProps) {
     </svg>
   );
 }
+
+export function IconoReportes({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <path d="M4 20V4" />
+      <path d="M4 20h16" />
+      <rect x="7.5" y="11" width="3" height="6" rx="0.5" />
+      <rect x="13" y="7" width="3" height="10" rx="0.5" />
+    </svg>
+  );
+}
+
+export function IconoEquipo({ className }: IconoProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" {...trazo}>
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" />
+      <circle cx="17.5" cy="9" r="2.4" />
+      <path d="M17 13.6c2.4 0 4 1.7 4 4.4" />
+    </svg>
+  );
+}
