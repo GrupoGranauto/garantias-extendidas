@@ -6,10 +6,8 @@ import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../mid
 import { configPorSucursalId } from "../lib/whatsapp.js";
 import { aMinutos } from "../lib/campanasLogica.js";
 import {
-  configurarConsentimientoAutomatico,
   guardarCampana,
   leerCampanas,
-  leerConsentimientoAutomatico,
   registroEnvios,
   vistaPrevia,
 } from "../lib/campanasEnvio.js";
@@ -23,7 +21,6 @@ export const crmCampanasRouter = Router();
 crmCampanasRouter.use(requireAuth);
 crmCampanasRouter.use("/sucursales/:id/crm/campanas", requireAccesoSucursal, requireAdminSucursal);
 crmCampanasRouter.use("/sucursales/:id/crm/envios", requireAccesoSucursal, requireAdminSucursal);
-crmCampanasRouter.use("/sucursales/:id/crm/consentimiento-automatico", requireAccesoSucursal, requireAdminSucursal);
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (usa HH:MM).");
 
@@ -101,7 +98,6 @@ crmCampanasRouter.get("/sucursales/:id/crm/campanas", async (req, res, next) => 
     res.json({
       campanas,
       plantillas,
-      consentimiento: await leerConsentimientoAutomatico(req.params.id),
       etapas: etapas.map((e) => e.nombre as string),
       whatsapp_listo: Boolean(whatsapp && whatsapp.activo),
       // Si el servidor no tiene encendido el motor de envíos, nada sale aunque la campaña esté activa.
@@ -164,37 +160,6 @@ crmCampanasRouter.get("/sucursales/:id/crm/envios", async (req, res, next) => {
   try {
     const campana = nombreCampana.safeParse(req.query.campana);
     res.json(await registroEnvios(req.params.id, campana.success ? campana.data : null));
-  } catch (err) {
-    next(err);
-  }
-});
-
-/** Enciende o apaga el consentimiento por contrato de venta (solo el admin de la sucursal; queda registrado quién y cuándo). */
-const consentimientoSchema = z.discriminatedUnion("activo", [
-  z.object({
-    activo: z.literal(true),
-    fuente: z.string().trim().min(3, "Indica la fuente (por ejemplo, Contrato de venta).").max(80),
-    confirmo: z.literal(true, { errorMap: () => ({ message: "Debes confirmar que el contrato de venta incluye la autorización del cliente." }) }),
-  }),
-  z.object({ activo: z.literal(false), retirar_registrado: z.boolean().default(false) }),
-]);
-
-crmCampanasRouter.put("/sucursales/:id/crm/consentimiento-automatico", async (req, res, next) => {
-  const parsed = consentimientoSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." });
-    return;
-  }
-  try {
-    const actual = await leerConsentimientoAutomatico(req.params.id);
-    const r = await configurarConsentimientoAutomatico({
-      sucursalId: req.params.id,
-      activo: parsed.data.activo,
-      fuente: parsed.data.activo ? parsed.data.fuente : (actual.fuente ?? "Contrato de venta"),
-      usuarioId: req.usuario?.id ?? null,
-      retirarRegistrado: parsed.data.activo ? false : parsed.data.retirar_registrado,
-    });
-    res.json({ ok: true, contactos: r.contactos });
   } catch (err) {
     next(err);
   }

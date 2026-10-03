@@ -43,7 +43,6 @@ type Conversacion = {
     etapa: string | null;
     ejecutivo: string | null;
     baja: boolean;
-    consentimiento: boolean | null;
   } | null;
 };
 

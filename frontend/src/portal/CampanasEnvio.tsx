@@ -32,11 +32,9 @@ type Campana = {
   pasos: Omit<Paso, "clave">[];
 };
 type Plantilla = { id: string; nombre: string | null; nombre_tecnico: string; estado: string; variables: number; mapeadas: number };
-type Consentimiento = { automatico: boolean; fuente: string | null; confirmado_en: string | null; confirmado_por: string | null; registrados: number };
 type Respuesta = {
   campanas: Campana[];
   plantillas: Plantilla[];
-  consentimiento: Consentimiento;
   etapas: string[];
   whatsapp_listo: boolean;
   motor_encendido: boolean;
@@ -48,8 +46,6 @@ type VistaPrevia = {
   bajas: number;
   sin_telefono: number;
   alcanzables: number;
-  con_consentimiento: number;
-  sin_consentimiento: number;
   pasos: { orden: number; plantilla_id: string | null; programacion: { fecha: string; hora: string; oportunidades: number; vigente: boolean }[] }[];
 };
 type Registro = {
@@ -76,7 +72,6 @@ const DIAS = [
 ];
 
 const MOTIVOS: Record<string, string> = {
-  sin_consentimiento: "Sin consentimiento registrado",
   baja: "Pidió la baja",
   sin_telefono: "Sin teléfono",
   sin_celular: "El número no es celular",
@@ -131,11 +126,6 @@ export default function CampanasEnvio() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [previa, setPrevia] = useState<VistaPrevia | null>(null);
   const [registro, setRegistro] = useState<Registro | null>(null);
-  const [fuente, setFuente] = useState("Contrato de venta");
-  const [confirmo, setConfirmo] = useState(false);
-  const [retirar, setRetirar] = useState(false);
-  const [guardandoConsentimiento, setGuardandoConsentimiento] = useState(false);
-  const [avisoConsentimiento, setAvisoConsentimiento] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
 
   const cargar = useCallback(() => {
     apiFetch<Respuesta>(`${base}/campanas`)
@@ -208,33 +198,6 @@ export default function CampanasEnvio() {
     }
   }
 
-  async function cambiarConsentimiento(activo: boolean) {
-    setGuardandoConsentimiento(true);
-    setAvisoConsentimiento(null);
-    try {
-      const r = await apiFetch<{ contactos: number }>(`${base}/consentimiento-automatico`, {
-        method: "PUT",
-        body: JSON.stringify(activo ? { activo: true, fuente: fuente.trim(), confirmo } : { activo: false, retirar_registrado: retirar }),
-      });
-      setAvisoConsentimiento({
-        tipo: "ok",
-        texto: activo
-          ? `Listo: ${r.contactos.toLocaleString("es-MX")} contactos quedaron con consentimiento («${fuente.trim()}»). Los que lleguen después también.`
-          : retirar
-            ? `Regla apagada y se retiró el consentimiento de ${r.contactos.toLocaleString("es-MX")} contactos.`
-            : "Regla apagada. Lo ya registrado se conserva; los contactos nuevos ya no se registran solos.",
-      });
-      setConfirmo(false);
-      setRetirar(false);
-      setPrevia(null);
-      cargar();
-    } catch (err) {
-      setAvisoConsentimiento({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo guardar." });
-    } finally {
-      setGuardandoConsentimiento(false);
-    }
-  }
-
   async function verPrevia() {
     if (!sel) return;
     setAviso(null);
@@ -257,8 +220,8 @@ export default function CampanasEnvio() {
   return (
     <>
       <p className="pestana-descripcion">
-        Define qué mensaje de WhatsApp recibe cada campaña, en qué día y hora, y bajo qué condiciones. Solo se escribe a quien tiene
-        consentimiento registrado, y quien pide la baja deja de recibir mensajes para siempre.
+        Define qué mensaje de WhatsApp recibe cada campaña, en qué día y hora, y bajo qué condiciones. Quien pide la baja deja de
+        recibir mensajes para siempre.
       </p>
       {!datos.motor_encendido && (
         <Alerta tipo="info">
@@ -267,48 +230,6 @@ export default function CampanasEnvio() {
         </Alerta>
       )}
       {!datos.whatsapp_listo && <Alerta tipo="error">WhatsApp no está configurado o activo en esta sucursal: no se podrá enviar.</Alerta>}
-
-      <section className="rep-tarjeta camp-consentimiento">
-        <h3>Consentimiento de los clientes</h3>
-        {datos.consentimiento.automatico ? (
-          <>
-            <Alerta tipo="ok">
-              Activo: los clientes aceptan ser contactados en su <strong>{datos.consentimiento.fuente}</strong>. Cada lead que llega a la base queda con
-              consentimiento registrado
-              {datos.consentimiento.confirmado_en
-                ? ` (confirmado${datos.consentimiento.confirmado_por ? ` por ${datos.consentimiento.confirmado_por}` : ""} el ${new Date(datos.consentimiento.confirmado_en).toLocaleDateString("es-MX")})`
-                : ""}
-              . Registrados por esta regla: {datos.consentimiento.registrados.toLocaleString("es-MX")}.
-            </Alerta>
-            <p className="rep-ayuda">Quien pida la baja, o a quien se le retire el consentimiento a mano, no recibe mensajes aunque esta regla esté activa.</p>
-            <label className="vistas-compartir">
-              <input type="checkbox" checked={retirar} onChange={(e) => setRetirar(e.target.checked)} /> Al apagarla, retirar también el consentimiento que esta regla registró
-            </label>
-            <button type="button" className="boton-secundario-claro" disabled={guardandoConsentimiento} onClick={() => cambiarConsentimiento(false)}>
-              Apagar regla
-            </button>
-          </>
-        ) : (
-          <>
-            <p className="rep-ayuda">
-              Para escribirle a un cliente por primera vez, Meta exige que haya aceptado recibir mensajes. Si ese permiso lo da en su contrato de venta,
-              actívalo aquí y todos los leads de la base quedarán con consentimiento registrado, con su fuente y fecha. Sin esto, cada persona necesita
-              su consentimiento registrado a mano.
-            </p>
-            <label className="auto-campo">
-              <span>Fuente del consentimiento</span>
-              <input type="text" className="auto-input" maxLength={80} value={fuente} onChange={(e) => setFuente(e.target.value)} />
-            </label>
-            <label className="vistas-compartir">
-              <input type="checkbox" checked={confirmo} onChange={(e) => setConfirmo(e.target.checked)} /> Confirmo que el contrato de venta incluye la autorización del cliente para ser contactado por WhatsApp
-            </label>
-            <button type="button" className="boton-guardar" disabled={guardandoConsentimiento || !confirmo || fuente.trim().length < 3} onClick={() => cambiarConsentimiento(true)}>
-              {guardandoConsentimiento ? "Registrando…" : "Activar consentimiento por contrato de venta"}
-            </button>
-          </>
-        )}
-        {avisoConsentimiento && <Alerta tipo={avisoConsentimiento.tipo}>{avisoConsentimiento.texto}</Alerta>}
-      </section>
 
       <div className="auto">
         <nav className="auto-etapas" aria-label="Campañas">
@@ -373,7 +294,7 @@ export default function CampanasEnvio() {
                   />
                   <span>
                     <strong>Real</strong>
-                    <small>Envía las plantillas por WhatsApp a quien tenga consentimiento.</small>
+                    <small>Envía las plantillas por WhatsApp a los clientes de la campaña.</small>
                   </span>
                 </label>
               </div>
@@ -550,17 +471,9 @@ export default function CampanasEnvio() {
                   <ul className="camp-cifras">
                     <li><strong>{previa.oportunidades}</strong> oportunidades activas</li>
                     <li><strong>{previa.alcanzables}</strong> con celular y sin baja</li>
-                    <li className={previa.con_consentimiento === 0 ? "camp-cifra-alerta" : undefined}><strong>{previa.con_consentimiento}</strong> con consentimiento registrado</li>
-                    <li><strong>{previa.sin_consentimiento}</strong> sin consentimiento (no recibirían nada)</li>
                     <li><strong>{previa.sin_telefono}</strong> sin celular válido</li>
                     <li><strong>{previa.bajas}</strong> en baja</li>
                   </ul>
-                  {previa.con_consentimiento === 0 && (
-                    <Alerta tipo="info">
-                      Hoy nadie tiene consentimiento registrado, así que no saldría ningún mensaje. Se registra desde la tabla (elige filas y usa
-                      «Consentimiento de WhatsApp») o desde la ficha de cada oportunidad.
-                    </Alerta>
-                  )}
                   {previa.pasos.map((p) => (
                     <div key={p.orden} className="camp-previa-paso">
                       <strong>

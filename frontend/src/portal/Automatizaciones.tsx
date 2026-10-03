@@ -73,8 +73,8 @@ function aLocal(a: EtapaApi["automatizaciones"][number]): Automatizacion {
 /**
  * Automatizaciones por etapa: "Cuando una oportunidad entra a esta etapa → entonces…".
  * Lo que se guarda aquí lo ejecuta el motor del servidor: tareas y preguntas para el
- * ejecutivo encargado. Los envíos de WhatsApp se configuran, pero el motor aún no los
- * manda: falta definir de dónde sale el consentimiento del cliente.
+ * ejecutivo encargado. Los envíos de WhatsApp por campaña viven en el otro apartado
+ * (Campañas de WhatsApp); la pestaña de WhatsApp por etapa solo deja configurado el envío.
  */
 export default function Automatizaciones() {
   const { portal } = usePortal();
@@ -287,8 +287,7 @@ export default function Automatizaciones() {
 
             {pestana === "whatsapp" && (
               <Alerta tipo="info">
-                Aquí solo se deja configurado el envío. El motor todavía no manda mensajes: antes hay que definir de dónde sale el
-                consentimiento del cliente y el control de frecuencia.
+                Aquí solo se deja configurado el envío por etapa; el motor todavía no lo manda. Los envíos automáticos de cada campaña (48 horas, 5 meses, 12 meses y 28 meses) se configuran en el apartado «Campañas de WhatsApp».
               </Alerta>
             )}
 

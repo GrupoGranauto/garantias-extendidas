@@ -482,13 +482,8 @@ async function aplicarPlan(sucursalId: string, plan: Plan): Promise<void> {
     );
 
     await cliente.query(
-      `INSERT INTO crm_contactos (sucursal_id, clave, nombre, telefono, telefono_origen, tiene_celular, correo, es_contactable, motivo_no_contactable,
-                                  whatsapp_consentimiento, whatsapp_consentimiento_fuente, whatsapp_consentimiento_en, whatsapp_consentimiento_origen)
-       SELECT $1, r.clave, r.nombre, r.telefono, r.telefono_origen, r.tiene_celular, r.correo, r.es_contactable, r.motivo_no_contactable,
-              (SELECT CASE WHEN k.consentimiento_automatico THEN true END FROM crm_config k WHERE k.sucursal_id = $1),
-              (SELECT CASE WHEN k.consentimiento_automatico THEN k.consentimiento_fuente END FROM crm_config k WHERE k.sucursal_id = $1),
-              (SELECT CASE WHEN k.consentimiento_automatico THEN now() END FROM crm_config k WHERE k.sucursal_id = $1),
-              (SELECT CASE WHEN k.consentimiento_automatico THEN 'automatico' END FROM crm_config k WHERE k.sucursal_id = $1)
+      `INSERT INTO crm_contactos (sucursal_id, clave, nombre, telefono, telefono_origen, tiene_celular, correo, es_contactable, motivo_no_contactable)
+       SELECT $1, r.clave, r.nombre, r.telefono, r.telefono_origen, r.tiene_celular, r.correo, r.es_contactable, r.motivo_no_contactable
          FROM jsonb_to_recordset($2::jsonb) AS r(clave text, nombre text, telefono text, telefono_origen text, tiene_celular boolean,
               correo text, es_contactable boolean, motivo_no_contactable text)
        ON CONFLICT (sucursal_id, clave) DO UPDATE SET

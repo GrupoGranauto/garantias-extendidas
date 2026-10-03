@@ -86,7 +86,7 @@ const base = (extra: Partial<ContextoEnvio> = {}): ContextoEnvio => ({
   maxPorDia: 100,
   enviadosHoy: 0,
   oportunidad: { campana: "5M", campanaEsperada: "5M", estadoCartera: "ACTIVA", estado: "abierta", etapa: "Por contactar" },
-  contacto: { consentimiento: true, baja: false, telefono10: "6621234567", tieneCelular: true },
+  contacto: { baja: false, telefono10: "6621234567", tieneCelular: true },
   paso: { etapas: [], soloSinRespuesta: false, soloSinContacto: false },
   respondio: false,
   yaContactado: false,
@@ -101,17 +101,8 @@ describe("decidirEnvio", () => {
     expect(decidirEnvio(base())).toEqual({ accion: "enviar" });
   });
 
-  it("sin consentimiento registrado NUNCA envía: espera y, al vencer la vigencia, se omite con ese motivo", () => {
-    const espera = decidirEnvio(base({ contacto: { consentimiento: null, baja: false, telefono10: "6621234567", tieneCelular: true } }));
-    expect(espera).toMatchObject({ accion: "posponer", motivo: "sin_consentimiento" });
-    const vencido = decidirEnvio(
-      base({ ahoraMs: Date.parse("2026-10-08T18:00:00Z"), contacto: { consentimiento: false, baja: false, telefono10: "6621234567", tieneCelular: true } }),
-    );
-    expect(vencido).toEqual({ accion: "omitir", motivo: "sin_consentimiento" });
-  });
-
-  it("la baja se respeta siempre, aunque haya consentimiento", () => {
-    const d = decidirEnvio(base({ contacto: { consentimiento: true, baja: true, telefono10: "6621234567", tieneCelular: true } }));
+  it("la baja se respeta siempre", () => {
+    const d = decidirEnvio(base({ contacto: { baja: true, telefono10: "6621234567", tieneCelular: true } }));
     expect(d).toEqual({ accion: "omitir", motivo: "baja" });
   });
 
@@ -122,8 +113,8 @@ describe("decidirEnvio", () => {
   });
 
   it("omite sin teléfono o con número que no es celular", () => {
-    expect(decidirEnvio(base({ contacto: { consentimiento: true, baja: false, telefono10: null, tieneCelular: true } }))).toEqual({ accion: "omitir", motivo: "sin_telefono" });
-    expect(decidirEnvio(base({ contacto: { consentimiento: true, baja: false, telefono10: "6621234567", tieneCelular: false } }))).toEqual({ accion: "omitir", motivo: "sin_celular" });
+    expect(decidirEnvio(base({ contacto: { baja: false, telefono10: null, tieneCelular: true } }))).toEqual({ accion: "omitir", motivo: "sin_telefono" });
+    expect(decidirEnvio(base({ contacto: { baja: false, telefono10: "6621234567", tieneCelular: false } }))).toEqual({ accion: "omitir", motivo: "sin_celular" });
   });
 
   it("condiciones del paso: etapa, respuesta y contacto previo", () => {

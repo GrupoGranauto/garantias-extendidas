@@ -2093,5 +2093,3 @@ textarea.auto-input { resize: vertical; }
 .chat-lead { margin: 2px 0 0; font-size: 11px; font-weight: 600; color: var(--marca); }
 .chat-lead-sin { font-weight: 400; color: var(--gris-400); }
 
-.camp-consentimiento { margin-bottom: 14px; }
-.camp-consentimiento .auto-campo { max-width: 360px; }

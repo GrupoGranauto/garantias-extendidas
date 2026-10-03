@@ -117,7 +117,7 @@ export type ContextoEnvio = {
   maxPorDia: number;
   enviadosHoy: number;
   oportunidad: { campana: string | null; campanaEsperada: string; estadoCartera: string; estado: string; etapa: string | null };
-  contacto: { consentimiento: boolean | null; baja: boolean; telefono10: string | null; tieneCelular: boolean | null };
+  contacto: { baja: boolean; telefono10: string | null; tieneCelular: boolean | null };
   paso: { etapas: string[]; soloSinRespuesta: boolean; soloSinContacto: boolean };
   respondio: boolean;
   yaContactado: boolean;
@@ -138,9 +138,9 @@ const MS_DIA = 86_400_000;
  * Qué hacer con un envío pendiente que ya le toca. Va de lo definitivo a lo temporal:
  *  - se OMITE (queda registrado el motivo) cuando ya no tiene sentido enviarlo: la oportunidad cambió,
  *    el contacto pidió la baja, falta teléfono, ya respondió, etc.;
- *  - se POSPONE cuando solo hay que esperar: sin consentimiento aún, fuera de horario, tope del día,
+ *  - se POSPONE cuando solo hay que esperar: fuera de horario, tope del día,
  *    descanso entre campañas, plantilla no disponible;
- *  - se ENVÍA solo si pasa todo. Sin consentimiento registrado no se envía nunca.
+ *  - se ENVÍA solo si pasa todo. Una baja se respeta siempre.
  * Si algo sigue pospuesto cuando vence la vigencia del paso, se omite con ese motivo.
  */
 export function decidirEnvio(c: ContextoEnvio): Decision {
@@ -163,7 +163,6 @@ export function decidirEnvio(c: ContextoEnvio): Decision {
   const esperar = (motivo: string, hasta: "ventana" | "dia_siguiente" | { minutos: number }): Decision =>
     vencido ? { accion: "omitir", motivo: c.motivoPrevio ?? motivo } : { accion: "posponer", motivo, hasta };
 
-  if (c.contacto.consentimiento !== true) return esperar("sin_consentimiento", { minutos: 60 });
   if (c.enviadoRecienteOtraCampana) return esperar("descanso_entre_campanas", { minutos: 360 });
   if (!dentroDeVentana(c.ahora, c.ventana)) return esperar("fuera_de_ventana", "ventana");
   if (c.enviadosHoy >= c.maxPorDia) return esperar("tope_diario", "dia_siguiente");

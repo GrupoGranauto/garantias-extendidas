@@ -12,7 +12,7 @@ import { vincularConversaciones } from "./vinculoWhatsapp.js";
  *
  * Idempotente: crm_ejecuciones tiene unicidad (automatización, oportunidad, evento), así que un
  * reintento nunca duplica una tarea. Las automatizaciones de WhatsApp solo se configuran: el
- * envío está fuera del motor hasta definir la fuente de consentimiento.
+ * envío lo hace el módulo de campañas (campanasEnvio.ts).
  */
 
 /** Columnas de la tabla donde una pregunta puede dejar la respuesta del cliente. */

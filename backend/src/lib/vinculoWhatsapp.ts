@@ -81,7 +81,7 @@ export async function vincularConversaciones(sucursalId: string | null = null): 
 export async function leadsDeContactos(contactoIds: string[]) {
   if (contactoIds.length === 0) return new Map<string, Record<string, unknown>>();
   const { rows } = await getPool().query(
-    `SELECT c.id AS contacto_id, c.nombre, c.whatsapp_baja AS baja, c.whatsapp_consentimiento AS consentimiento,
+    `SELECT c.id AS contacto_id, c.nombre, c.whatsapp_baja AS baja,
             o.id AS oportunidad_id, o.campana, o.ejecutivo, e.nombre AS etapa
        FROM crm_contactos c
        LEFT JOIN LATERAL (

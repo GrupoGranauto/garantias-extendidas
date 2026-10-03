@@ -15,7 +15,7 @@ type Props = {
   onLimpiar: () => void;
 };
 
-type Panel = "etapa" | "ejecutivo" | "tarea" | "consentimiento" | null;
+type Panel = "etapa" | "ejecutivo" | "tarea" | null;
 
 /**
  * Barra de acciones sobre las filas elegidas: cambiar de etapa, reasignar ejecutivo o crear una tarea
@@ -28,7 +28,6 @@ export default function AccionesMasivas({ sucursalId, ids, etapas, motivos, ejec
   const [ejecutivo, setEjecutivo] = useState(ejecutivos[0]?.valor ?? "");
   const [titulo, setTitulo] = useState("");
   const [horas, setHoras] = useState("24");
-  const [fuente, setFuente] = useState("");
   const [enviando, setEnviando] = useState(false);
 
   const esPerdida = etapas.find((e) => e.valor === etapa)?.tipo === "perdida";
@@ -64,9 +63,6 @@ export default function AccionesMasivas({ sucursalId, ids, etapas, motivos, ejec
         </button>
         <button type="button" className="boton-secundario-claro" onClick={() => setPanel(panel === "tarea" ? null : "tarea")}>
           Crear tarea
-        </button>
-        <button type="button" className="boton-secundario-claro" onClick={() => setPanel(panel === "consentimiento" ? null : "consentimiento")}>
-          Consentimiento de WhatsApp
         </button>
         <button type="button" className="boton-tenue" onClick={onLimpiar}>
           Quitar selección
@@ -114,36 +110,6 @@ export default function AccionesMasivas({ sucursalId, ids, etapas, motivos, ejec
           </select>
           <button type="button" className="boton-guardar" disabled={enviando || !ejecutivo} onClick={() => aplicar({ accion: "ejecutivo", ejecutivo }, "Reasignadas")}>
             Reasignar {ids.length}
-          </button>
-        </div>
-      )}
-
-      {panel === "consentimiento" && (
-        <div className="masivo-fila">
-          <input
-            type="text"
-            className="auto-input masivo-titulo"
-            placeholder="¿De dónde viene el consentimiento? (ej. formulario de venta, llamada grabada)"
-            maxLength={120}
-            value={fuente}
-            onChange={(e) => setFuente(e.target.value)}
-            aria-label="Fuente del consentimiento"
-          />
-          <button
-            type="button"
-            className="boton-guardar"
-            disabled={enviando || fuente.trim().length < 3}
-            onClick={() => aplicar({ accion: "consentimiento", valor: true, fuente: fuente.trim() }, "Consentimiento registrado")}
-          >
-            Registrar para {ids.length}
-          </button>
-          <button
-            type="button"
-            className="boton-secundario-claro"
-            disabled={enviando || fuente.trim().length < 3}
-            onClick={() => aplicar({ accion: "consentimiento", valor: false, fuente: fuente.trim() }, "Consentimiento retirado")}
-          >
-            Retirar
           </button>
         </div>
       )}
