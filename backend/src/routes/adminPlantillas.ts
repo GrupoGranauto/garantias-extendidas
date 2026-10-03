@@ -448,7 +448,47 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/:pid/enviar", async (req,
   }
 });
 
-/** Refresca el estado de todas las plantillas de la sucursal consultando a Meta directamente. */
+/**
+ * Traduce los componentes de Meta a la forma local. Sin cuerpo de texto devuelve null. Los encabezados de
+ * imagen, video o documento se conservan como tales (sin archivo): esas plantillas no se pueden mandar
+ * desde campañas ni desde el chat, pero quedan a la vista.
+ */
+function componentesDesdeMeta(
+  lista: { type: string; format?: string; text?: string; example?: { body_text?: string[][] }; buttons?: Record<string, unknown>[] }[],
+) {
+  const cuerpo = lista.find((c) => c.type === "BODY");
+  if (!cuerpo?.text) return null;
+  const header = lista.find((c) => c.type === "HEADER");
+  const footer = lista.find((c) => c.type === "FOOTER");
+  const botones = lista.find((c) => c.type === "BUTTONS")?.buttons ?? [];
+
+  let h: Record<string, unknown> | null = null;
+  if (header) {
+    if (header.format === "TEXT" && header.text) h = { tipo: "texto", texto: header.text };
+    else if (header.format === "IMAGE") h = { tipo: "imagen", media_handle: "", media_url: null };
+    else if (header.format === "VIDEO") h = { tipo: "video", media_handle: "", media_url: null };
+    else if (header.format === "DOCUMENT") h = { tipo: "documento", media_handle: "", media_url: null, nombre_archivo: null };
+  }
+
+  const traducidos = botones.flatMap((b): Record<string, string>[] => {
+    const tipo = String(b.type ?? "");
+    const texto = String(b.text ?? "");
+    if (tipo === "QUICK_REPLY") return [{ tipo: "respuesta_rapida", texto }];
+    if (tipo === "URL") return [{ tipo: "url", texto, url: String(b.url ?? "") }];
+    if (tipo === "PHONE_NUMBER") return [{ tipo: "telefono", texto, telefono: String(b.phone_number ?? "") }];
+    if (tipo === "COPY_CODE") return [{ tipo: "copiar_codigo", ejemplo: String(b.example ?? "") }];
+    return [];
+  });
+
+  return {
+    header: h,
+    body: { texto: cuerpo.text, ejemplos: cuerpo.example?.body_text?.[0] ?? [] },
+    footer: footer?.text ?? null,
+    botones: traducidos,
+  };
+}
+
+/** Refresca el estado de las plantillas de la sucursal consultando a Meta, y trae las que solo existen allá. */
 adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, next) => {
   try {
     const config = await obtenerConfigWhatsapp(req.params.id);
@@ -468,6 +508,34 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, n
       .neq("estado", "borrador");
     if (error) throw new Error(error.message);
 
+    let importadas = 0;
+    const existentes = new Set((locales ?? []).map((l) => `${l.nombre_tecnico}__${l.idioma}`));
+    // Las plantillas que ya existen en Meta pero no en la web se traen (con su estado y su contenido).
+    const { data: borradores } = await supabase
+      .from("whatsapp_plantillas")
+      .select("nombre_tecnico, idioma")
+      .eq("sucursal_id", req.params.id)
+      .eq("estado", "borrador");
+    for (const b of borradores ?? []) existentes.add(`${b.nombre_tecnico}__${b.idioma}`);
+    for (const remota of remotas) {
+      if (existentes.has(`${remota.name}__${remota.language}`)) continue;
+      const categoria = remota.category?.toLowerCase();
+      if (categoria !== "marketing" && categoria !== "utility" && categoria !== "authentication") continue;
+      const componentes = componentesDesdeMeta(remota.components ?? []);
+      if (!componentes) continue; // sin cuerpo de texto no hay nada que mandar
+      const { error: errorImportar } = await supabase.from("whatsapp_plantillas").insert({
+        sucursal_id: req.params.id,
+        nombre: remota.name,
+        nombre_tecnico: remota.name,
+        idioma: remota.language,
+        categoria,
+        componentes,
+        estado: estadoDesdeMeta(remota.status),
+        meta_template_id: remota.id,
+      });
+      if (!errorImportar) importadas++;
+    }
+
     let actualizadas = 0;
     for (const local of locales ?? []) {
       const remota = porNombreIdioma.get(`${local.nombre_tecnico}__${local.idioma}`);
@@ -481,7 +549,7 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, n
       actualizadas++;
     }
 
-    res.json({ sincronizado: true, actualizadas });
+    res.json({ sincronizado: true, actualizadas, importadas });
   } catch (err) {
     if (err instanceof Error) {
       res.status(400).json({ error: err.message });

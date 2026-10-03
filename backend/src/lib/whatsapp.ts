@@ -264,19 +264,29 @@ export async function crearPlantillaMeta(
   return { id: cuerpo.id, status: cuerpo.status ?? "PENDING" };
 }
 
-/** Consulta el estado real de todas las plantillas de la WABA (para sincronizar). */
+/** Plantilla tal como la devuelve Meta (con sus componentes crudos). */
+export type PlantillaRemota = {
+  id: string;
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+  components?: { type: string; format?: string; text?: string; example?: { body_text?: string[][] }; buttons?: Record<string, unknown>[] }[];
+};
+
+/** Consulta el estado real de todas las plantillas de la WABA (para sincronizar e importar). */
 export async function listarPlantillasMeta(
   wabaId: string,
   accessToken: string,
-): Promise<{ id: string; name: string; language: string; status: string; category: string }[]> {
-  const resultados: { id: string; name: string; language: string; status: string; category: string }[] = [];
+): Promise<PlantillaRemota[]> {
+  const resultados: PlantillaRemota[] = [];
   let url: string | null =
-    `${GRAPH_API}/${wabaId}/message_templates?fields=id,name,language,status,category&limit=200`;
+    `${GRAPH_API}/${wabaId}/message_templates?fields=id,name,language,status,category,components&limit=200`;
 
   while (url) {
     const res: Response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     const cuerpo = (await res.json()) as RespuestaErrorMeta & {
-      data?: { id: string; name: string; language: string; status: string; category: string }[];
+      data?: PlantillaRemota[];
       paging?: { next?: string };
     };
 

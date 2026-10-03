@@ -694,7 +694,8 @@ export async function registrarConsentimiento(p: {
   try {
     await cliente.query("BEGIN");
     const { rows } = await cliente.query(
-      `UPDATE crm_contactos c SET whatsapp_consentimiento = $3, whatsapp_consentimiento_fuente = $4, whatsapp_consentimiento_en = now()
+      `UPDATE crm_contactos c SET whatsapp_consentimiento = $3, whatsapp_consentimiento_fuente = $4, whatsapp_consentimiento_en = now(),
+              whatsapp_consentimiento_origen = 'manual'
          FROM crm_oportunidades o WHERE o.contacto_id = c.id AND o.sucursal_id = $1 AND o.id = ANY($2::uuid[]) RETURNING o.id AS oportunidad_id`,
       [p.sucursalId, p.oportunidadIds, p.valor, p.fuente.trim()],
     );
@@ -723,3 +724,82 @@ export async function registrarConsentimiento(p: {
   }
 }
 
+
+/* ============================================================
+   Consentimiento por contrato de venta
+   ============================================================ */
+
+export async function leerConsentimientoAutomatico(sucursalId: string) {
+  const { rows } = await getPool().query(
+    `SELECT k.consentimiento_automatico AS automatico, k.consentimiento_fuente AS fuente, k.consentimiento_confirmado_en AS confirmado_en,
+            u.nombre AS confirmado_por,
+            (SELECT count(*)::int FROM crm_contactos c WHERE c.sucursal_id = k.sucursal_id AND c.whatsapp_consentimiento_origen = 'automatico' AND c.whatsapp_consentimiento IS TRUE) AS registrados
+       FROM crm_config k LEFT JOIN usuarios u ON u.id = k.consentimiento_confirmado_por
+      WHERE k.sucursal_id = $1`,
+    [sucursalId],
+  );
+  return (rows[0] as { automatico: boolean; fuente: string | null; confirmado_en: string | null; confirmado_por: string | null; registrados: number } | undefined) ?? {
+    automatico: false,
+    fuente: null,
+    confirmado_en: null,
+    confirmado_por: null,
+    registrados: 0,
+  };
+}
+
+/**
+ * Enciende o apaga la regla "el cliente acepta ser contactado en su contrato de venta". Al encenderla, queda
+ * registrado quién lo confirmó y cuándo, y todos los contactos sin consentimiento (y sin baja) pasan a tenerlo
+ * con esa fuente; los que lleguen después también. Un consentimiento retirado a mano o una baja no se tocan.
+ * Al apagarla se puede, además, retirar lo que esta regla había registrado.
+ */
+export async function configurarConsentimientoAutomatico(p: {
+  sucursalId: string;
+  activo: boolean;
+  fuente: string;
+  usuarioId: string | null;
+  retirarRegistrado: boolean;
+}): Promise<{ contactos: number }> {
+  const cliente = await getPool().connect();
+  try {
+    await cliente.query("BEGIN");
+    const { rows: autor } = p.usuarioId ? await cliente.query(`SELECT id FROM usuarios WHERE id = $1`, [p.usuarioId]) : { rows: [] };
+    await cliente.query(
+      `INSERT INTO crm_config (sucursal_id, consentimiento_automatico, consentimiento_fuente, consentimiento_confirmado_por, consentimiento_confirmado_en)
+       VALUES ($1, $2, $3, $4, CASE WHEN $2 THEN now() END)
+       ON CONFLICT (sucursal_id) DO UPDATE SET
+         consentimiento_automatico = EXCLUDED.consentimiento_automatico,
+         consentimiento_fuente = CASE WHEN EXCLUDED.consentimiento_automatico THEN EXCLUDED.consentimiento_fuente ELSE crm_config.consentimiento_fuente END,
+         consentimiento_confirmado_por = CASE WHEN EXCLUDED.consentimiento_automatico THEN EXCLUDED.consentimiento_confirmado_por ELSE crm_config.consentimiento_confirmado_por END,
+         consentimiento_confirmado_en = CASE WHEN EXCLUDED.consentimiento_automatico THEN now() ELSE crm_config.consentimiento_confirmado_en END,
+         actualizado_en = now()`,
+      [p.sucursalId, p.activo, p.fuente.trim(), (autor[0]?.id as string | undefined) ?? null],
+    );
+
+    let contactos = 0;
+    if (p.activo) {
+      const r = await cliente.query(
+        `UPDATE crm_contactos SET whatsapp_consentimiento = true, whatsapp_consentimiento_fuente = $2, whatsapp_consentimiento_en = now(),
+                whatsapp_consentimiento_origen = 'automatico'
+          WHERE sucursal_id = $1 AND whatsapp_consentimiento IS NULL AND whatsapp_baja = false`,
+        [p.sucursalId, p.fuente.trim()],
+      );
+      contactos = r.rowCount ?? 0;
+    } else if (p.retirarRegistrado) {
+      const r = await cliente.query(
+        `UPDATE crm_contactos SET whatsapp_consentimiento = NULL, whatsapp_consentimiento_fuente = NULL, whatsapp_consentimiento_en = NULL,
+                whatsapp_consentimiento_origen = NULL
+          WHERE sucursal_id = $1 AND whatsapp_consentimiento_origen = 'automatico'`,
+        [p.sucursalId],
+      );
+      contactos = r.rowCount ?? 0;
+    }
+    await cliente.query("COMMIT");
+    return { contactos };
+  } catch (err) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    cliente.release();
+  }
+}

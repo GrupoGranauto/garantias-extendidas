@@ -31,8 +31,16 @@ type Campana = {
   fin: string | null;
   pasos: Omit<Paso, "clave">[];
 };
-type Plantilla = { id: string; nombre: string | null; nombre_tecnico: string; estado: string };
-type Respuesta = { campanas: Campana[]; plantillas: Plantilla[]; etapas: string[]; whatsapp_listo: boolean; motor_encendido: boolean };
+type Plantilla = { id: string; nombre: string | null; nombre_tecnico: string; estado: string; variables: number; mapeadas: number };
+type Consentimiento = { automatico: boolean; fuente: string | null; confirmado_en: string | null; confirmado_por: string | null; registrados: number };
+type Respuesta = {
+  campanas: Campana[];
+  plantillas: Plantilla[];
+  consentimiento: Consentimiento;
+  etapas: string[];
+  whatsapp_listo: boolean;
+  motor_encendido: boolean;
+};
 type Borrador = Omit<Campana, "pasos"> & { pasos: Paso[] };
 
 type VistaPrevia = {
@@ -123,6 +131,11 @@ export default function CampanasEnvio() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [previa, setPrevia] = useState<VistaPrevia | null>(null);
   const [registro, setRegistro] = useState<Registro | null>(null);
+  const [fuente, setFuente] = useState("Contrato de venta");
+  const [confirmo, setConfirmo] = useState(false);
+  const [retirar, setRetirar] = useState(false);
+  const [guardandoConsentimiento, setGuardandoConsentimiento] = useState(false);
+  const [avisoConsentimiento, setAvisoConsentimiento] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
 
   const cargar = useCallback(() => {
     apiFetch<Respuesta>(`${base}/campanas`)
@@ -195,6 +208,33 @@ export default function CampanasEnvio() {
     }
   }
 
+  async function cambiarConsentimiento(activo: boolean) {
+    setGuardandoConsentimiento(true);
+    setAvisoConsentimiento(null);
+    try {
+      const r = await apiFetch<{ contactos: number }>(`${base}/consentimiento-automatico`, {
+        method: "PUT",
+        body: JSON.stringify(activo ? { activo: true, fuente: fuente.trim(), confirmo } : { activo: false, retirar_registrado: retirar }),
+      });
+      setAvisoConsentimiento({
+        tipo: "ok",
+        texto: activo
+          ? `Listo: ${r.contactos.toLocaleString("es-MX")} contactos quedaron con consentimiento («${fuente.trim()}»). Los que lleguen después también.`
+          : retirar
+            ? `Regla apagada y se retiró el consentimiento de ${r.contactos.toLocaleString("es-MX")} contactos.`
+            : "Regla apagada. Lo ya registrado se conserva; los contactos nuevos ya no se registran solos.",
+      });
+      setConfirmo(false);
+      setRetirar(false);
+      setPrevia(null);
+      cargar();
+    } catch (err) {
+      setAvisoConsentimiento({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo guardar." });
+    } finally {
+      setGuardandoConsentimiento(false);
+    }
+  }
+
   async function verPrevia() {
     if (!sel) return;
     setAviso(null);
@@ -227,6 +267,48 @@ export default function CampanasEnvio() {
         </Alerta>
       )}
       {!datos.whatsapp_listo && <Alerta tipo="error">WhatsApp no está configurado o activo en esta sucursal: no se podrá enviar.</Alerta>}
+
+      <section className="rep-tarjeta camp-consentimiento">
+        <h3>Consentimiento de los clientes</h3>
+        {datos.consentimiento.automatico ? (
+          <>
+            <Alerta tipo="ok">
+              Activo: los clientes aceptan ser contactados en su <strong>{datos.consentimiento.fuente}</strong>. Cada lead que llega a la base queda con
+              consentimiento registrado
+              {datos.consentimiento.confirmado_en
+                ? ` (confirmado${datos.consentimiento.confirmado_por ? ` por ${datos.consentimiento.confirmado_por}` : ""} el ${new Date(datos.consentimiento.confirmado_en).toLocaleDateString("es-MX")})`
+                : ""}
+              . Registrados por esta regla: {datos.consentimiento.registrados.toLocaleString("es-MX")}.
+            </Alerta>
+            <p className="rep-ayuda">Quien pida la baja, o a quien se le retire el consentimiento a mano, no recibe mensajes aunque esta regla esté activa.</p>
+            <label className="vistas-compartir">
+              <input type="checkbox" checked={retirar} onChange={(e) => setRetirar(e.target.checked)} /> Al apagarla, retirar también el consentimiento que esta regla registró
+            </label>
+            <button type="button" className="boton-secundario-claro" disabled={guardandoConsentimiento} onClick={() => cambiarConsentimiento(false)}>
+              Apagar regla
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="rep-ayuda">
+              Para escribirle a un cliente por primera vez, Meta exige que haya aceptado recibir mensajes. Si ese permiso lo da en su contrato de venta,
+              actívalo aquí y todos los leads de la base quedarán con consentimiento registrado, con su fuente y fecha. Sin esto, cada persona necesita
+              su consentimiento registrado a mano.
+            </p>
+            <label className="auto-campo">
+              <span>Fuente del consentimiento</span>
+              <input type="text" className="auto-input" maxLength={80} value={fuente} onChange={(e) => setFuente(e.target.value)} />
+            </label>
+            <label className="vistas-compartir">
+              <input type="checkbox" checked={confirmo} onChange={(e) => setConfirmo(e.target.checked)} /> Confirmo que el contrato de venta incluye la autorización del cliente para ser contactado por WhatsApp
+            </label>
+            <button type="button" className="boton-guardar" disabled={guardandoConsentimiento || !confirmo || fuente.trim().length < 3} onClick={() => cambiarConsentimiento(true)}>
+              {guardandoConsentimiento ? "Registrando…" : "Activar consentimiento por contrato de venta"}
+            </button>
+          </>
+        )}
+        {avisoConsentimiento && <Alerta tipo={avisoConsentimiento.tipo}>{avisoConsentimiento.texto}</Alerta>}
+      </section>
 
       <div className="auto">
         <nav className="auto-etapas" aria-label="Campañas">
@@ -368,7 +450,7 @@ export default function CampanasEnvio() {
                       {datos.plantillas.map((t) => (
                         <option key={t.id} value={t.id} disabled={t.estado !== "aprobada"}>
                           {t.nombre ?? t.nombre_tecnico}
-                          {t.estado !== "aprobada" ? ` (${t.estado})` : ""}
+                          {t.estado !== "aprobada" ? ` (${t.estado})` : t.mapeadas < t.variables ? ` (faltan ${t.variables - t.mapeadas} variable(s) por ligar)` : ""}
                         </option>
                       ))}
                     </select>

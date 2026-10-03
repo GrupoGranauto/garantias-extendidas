@@ -63,11 +63,21 @@ export default function PlantillasListado() {
 
   useEffect(cargar, [sucursalId]);
 
+  const [avisoSync, setAvisoSync] = useState<string | null>(null);
+
   async function sincronizar() {
+    setAvisoSync(null);
     setSincronizando(true);
     setError(null);
     try {
-      await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/sync`, { method: "POST" });
+      const r = await apiFetch<{ actualizadas: number; importadas: number }>(`/api/admin/sucursales/${sucursalId}/plantillas/sync`, { method: "POST" });
+      setAvisoSync(
+        r.importadas > 0
+          ? `Se importaron ${r.importadas} plantilla(s) que ya existían en Meta. Liga sus variables a datos de la base para poder usarlas en campañas.`
+          : r.actualizadas > 0
+            ? `Se actualizó el estado de ${r.actualizadas} plantilla(s).`
+            : "Todo está al día con Meta.",
+      );
       cargar();
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo sincronizar con Meta.");
@@ -120,6 +130,12 @@ export default function PlantillasListado() {
           </Link>
         </div>
       </header>
+
+      {avisoSync && (
+        <div className="aviso-formulario">
+          <Alerta tipo="ok">{avisoSync}</Alerta>
+        </div>
+      )}
 
       {error && (
         <div className="aviso-formulario">
