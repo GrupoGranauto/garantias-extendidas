@@ -6,6 +6,7 @@ import { IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import CampanasEnvio from "./CampanasEnvio";
 import EtapasVehiculo from "./EtapasVehiculo";
+import DefinirCampanas from "./DefinirCampanas";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -91,11 +92,11 @@ export default function Automatizaciones() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
   // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
-  type Apartado = "etapas" | "campanas" | "vehiculo";
+  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir";
   const [apartado, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "campanas" || guardado === "vehiculo" ? guardado : "etapas";
+      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" ? guardado : "etapas";
     } catch {
       return "etapas";
     }
@@ -113,11 +114,14 @@ export default function Automatizaciones() {
       <button type="button" role="tab" aria-selected={apartado === "etapas"} className={`vista-opcion${apartado === "etapas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("etapas")}>
         Por etapa
       </button>
-      <button type="button" role="tab" aria-selected={apartado === "campanas"} className={`vista-opcion${apartado === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("campanas")}>
-        Campañas de WhatsApp
-      </button>
       <button type="button" role="tab" aria-selected={apartado === "vehiculo"} className={`vista-opcion${apartado === "vehiculo" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("vehiculo")}>
         Etapas del vehículo
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "definir"} className={`vista-opcion${apartado === "definir" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("definir")}>
+        Definir campañas
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "campanas"} className={`vista-opcion${apartado === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("campanas")}>
+        Campañas de WhatsApp
       </button>
     </div>
   );
@@ -193,6 +197,15 @@ export default function Automatizaciones() {
     } finally {
       setGuardando(false);
     }
+  }
+
+  if (apartado === "definir") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <DefinirCampanas />
+      </div>
+    );
   }
 
   if (apartado === "vehiculo") {

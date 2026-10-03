@@ -5,6 +5,7 @@ import { validarFechaCoherente } from "./entidades.js";
 import { despacharEnvios, planificarEnvios } from "./campanasEnvio.js";
 import { vincularConversaciones } from "./vinculoWhatsapp.js";
 import { recalcularSiToca } from "./cicloVehiculo.js";
+import { calcularSiToca as calcularCampanasSiToca } from "./campanasDefinidas.js";
 
 /**
  * Motor de automatizaciones del CRM: "cuando una oportunidad entra a una etapa -> entonces
@@ -374,6 +375,8 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
         if (porTiempo) await vincularConversaciones().catch(() => 0);
         // Con el paso de los meses los vehículos cambian de etapa solos: se recalcula una vez al día.
         if (porTiempo) await recalcularSiToca().catch(() => 0);
+        // Las campañas que define el usuario se calculan una vez al día, a la hora que eligió (modo sombra).
+        if (porTiempo) await calcularCampanasSiToca().catch(() => 0);
         // Envíos de campaña: solo en el servidor que los tenga encendidos (CRM_ENVIOS=on), nunca en una copia de desarrollo.
         if (porTiempo && process.env.CRM_ENVIOS === "on") {
           await planificarEnvios();

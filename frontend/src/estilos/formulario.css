@@ -2100,3 +2100,17 @@ textarea.auto-input { resize: vertical; }
 .ciclo-tabla td:first-child .auto-input { min-width: 160px; }
 
 .ficha-datos .ficha-km { max-width: 160px; padding: 4px 8px; }
+
+/* ---------- Definir campañas ---------- */
+.camp-def { border: 1px solid var(--borde, #e5e7eb); border-radius: 10px; padding: 12px; margin-top: 12px; display: grid; gap: 8px; }
+.camp-def-apagada { opacity: 0.6; }
+.camp-def-cab { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.camp-def-cab > .auto-input:first-of-type { flex: 1 1 180px; min-width: 140px; }
+.camp-def-orden { font-weight: 600; min-width: 20px; text-align: center; }
+.camp-def-activa { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.camp-def-campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.camp-def-agregar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.camp-def-dif { font-weight: 600; color: #b45309; }
+.camp-def-sub { margin: 14px 0 6px; font-size: 0.95rem; }
+.camp-def-cruces { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.camp-def-ejemplos { margin-top: 10px; }
