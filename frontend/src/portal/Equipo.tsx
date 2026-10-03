@@ -11,6 +11,143 @@ type Estado = {
   exigir_evidencia_venta: boolean;
   carga: { ejecutivo: string; abiertas: number; tareas_pendientes: number }[];
 };
+type Corrida = {
+  modo: "simulacion" | "real";
+  estado: "ok" | "error";
+  filas_fuente: number;
+  activas_fuente: number;
+  nuevas: number;
+  actualizadas: number;
+  migradas: number;
+  cerradas: number;
+  conflictos: number;
+  mensaje: string | null;
+  creado_en: string;
+};
+type EstadoSync = {
+  habilitada: boolean;
+  corridas: Corrida[];
+  ultima_real: string | null;
+  corrio_hoy: boolean;
+  alerta: string | null;
+  fuente_actualizada_en: string | null;
+};
+type ResumenSync = {
+  modo: "simulacion" | "real";
+  activasFuente: number;
+  nuevas: number;
+  actualizadas: number;
+  migradas: number;
+  cerradas: number;
+  sinCambio: number;
+  conflictos: string[];
+};
+
+const cuando = (v: string | null) => {
+  if (!v) return "—";
+  const d = new Date(v.includes("T") || v.endsWith("Z") ? v : v.replace(" ", "T") + "Z");
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+
+/**
+ * Sincronización con BigQuery: cuándo corrió por última vez, si la fuente está al día y botones para
+ * simular (no escribe nada) o aplicar. Solo muestra conteos: nunca datos de clientes.
+ */
+function TarjetaSincronizacion({ sucursalId }: { sucursalId: string }) {
+  const base = `/api/admin/sucursales/${sucursalId}/crm/sincronizacion`;
+  const [estado, setEstado] = useState<EstadoSync | null>(null);
+  const [resumen, setResumen] = useState<ResumenSync | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [trabajando, setTrabajando] = useState(false);
+
+  function cargar() {
+    apiFetch<EstadoSync>(base)
+      .then(setEstado)
+      .catch((err) => setError(err instanceof Error ? err.message : "No se pudo leer el estado."));
+  }
+  useEffect(cargar, [sucursalId]);
+
+  async function correr(aplicar: boolean) {
+    setTrabajando(true);
+    setError(null);
+    setResumen(null);
+    try {
+      setResumen(await apiFetch<ResumenSync>(base, { method: "POST", body: JSON.stringify({ aplicar }) }));
+      if (aplicar) cargar();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo sincronizar.");
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
+  if (!estado || !estado.habilitada) return null;
+
+  return (
+    <section className="rep-tarjeta">
+      <h3>Sincronización con BigQuery</h3>
+      {estado.alerta && <Alerta tipo="error">{estado.alerta}</Alerta>}
+      <p className="rep-ayuda">
+        Última sincronización completa: <strong>{cuando(estado.ultima_real)}</strong>
+        {estado.corrio_hoy ? " (hoy)" : ""}. La fuente se refrescó: <strong>{cuando(estado.fuente_actualizada_en)}</strong>. Corre sola cada
+        día a las 10:00 (hora de Hermosillo) cuando está activada en el servidor.
+      </p>
+      <div className="ficha-fila">
+        <button type="button" className="boton-secundario-claro" disabled={trabajando} onClick={() => correr(false)}>
+          {trabajando ? "Calculando…" : "Simular (no cambia nada)"}
+        </button>
+        <button
+          type="button"
+          className="boton-guardar"
+          disabled={trabajando}
+          onClick={() => {
+            if (window.confirm("Se aplicarán los cambios de la fuente: oportunidades nuevas, cierres y actualizaciones. ¿Continuar?")) void correr(true);
+          }}
+        >
+          Sincronizar ahora
+        </button>
+      </div>
+      {error && <Alerta tipo="error">{error}</Alerta>}
+      {resumen && (
+        <Alerta tipo={resumen.conflictos.length > 0 ? "error" : "ok"}>
+          {resumen.modo === "real" ? "Sincronizado" : "Simulación"}: {resumen.activasFuente} activas en la fuente, {resumen.nuevas} nuevas,{" "}
+          {resumen.actualizadas} actualizadas, {resumen.migradas} migradas y {resumen.cerradas} cerradas.
+        </Alerta>
+      )}
+      {estado.corridas.length > 0 && (
+        <div className="tabla-envoltura">
+          <table className="tabla">
+            <thead>
+              <tr>
+                <th>Cuándo</th>
+                <th>Tipo</th>
+                <th>Resultado</th>
+                <th>Nuevas</th>
+                <th>Actualizadas</th>
+                <th>Migradas</th>
+                <th>Cerradas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {estado.corridas.map((c, i) => (
+                <tr key={i} title={c.mensaje ?? undefined}>
+                  <td>{cuando(c.creado_en)}</td>
+                  <td>{c.modo === "real" ? "Real" : "Simulación"}</td>
+                  <td className={c.estado === "error" ? "rep-celda-alerta" : undefined}>{c.estado === "ok" ? "Correcta" : "Abortada"}</td>
+                  <td>{c.nuevas ?? 0}</td>
+                  <td>{c.actualizadas ?? 0}</td>
+                  <td>{c.migradas ?? 0}</td>
+                  <td>{c.cerradas ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 type Simulacion = { total: number; destinos: { ejecutivo: string; cantidad: number }[]; aplicado: boolean };
 
 /**
@@ -95,6 +232,8 @@ export default function Equipo() {
         Define quién recibe las oportunidades nuevas, reparte la cartera cuando alguien se ausenta y fija las reglas del embudo.
       </p>
       {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
+
+      <TarjetaSincronizacion sucursalId={sucursalId} />
 
       <div className="rep-rejilla">
         <section className="rep-tarjeta">

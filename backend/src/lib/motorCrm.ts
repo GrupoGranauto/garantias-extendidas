@@ -127,6 +127,41 @@ function rellenar(plantilla: string, datos: Record<string, unknown>): string {
 type AccionTarea = { id: string; tipo: "tarea" | "pregunta"; config: Record<string, unknown> };
 type DatosOportunidad = Record<string, unknown> & { ejecutivo: string | null };
 
+type FilaTarea = {
+  sucursal_id: string;
+  oportunidad_id: string;
+  automatizacion_id: string;
+  tipo: "tarea" | "pregunta";
+  titulo: string;
+  descripcion: string | null;
+  config: Record<string, unknown>;
+  asignado_a: string | null;
+  vence_horas: number | null;
+};
+
+/** Calcula la fila de tarea que produce una automatización para una oportunidad. */
+function armarTarea(sucursalId: string, oportunidadId: string, a: AccionTarea, op: DatosOportunidad): FilaTarea {
+  const cfg = a.config;
+  const esPregunta = a.tipo === "pregunta";
+  return {
+    sucursal_id: sucursalId,
+    oportunidad_id: oportunidadId,
+    automatizacion_id: a.id,
+    tipo: a.tipo,
+    titulo: rellenar(String(esPregunta ? cfg.texto : cfg.titulo), op),
+    descripcion: !esPregunta && cfg.descripcion ? rellenar(String(cfg.descripcion), op) : null,
+    config: esPregunta ? cfg : {},
+    asignado_a: op.ejecutivo,
+    vence_horas: typeof cfg.vence_horas === "number" ? cfg.vence_horas : null,
+  };
+}
+
+const INSERTAR_TAREAS = `INSERT INTO crm_tareas (sucursal_id, oportunidad_id, automatizacion_id, tipo, titulo, descripcion, config, asignado_a, vence_en)
+  SELECT r.sucursal_id, r.oportunidad_id, r.automatizacion_id, r.tipo, r.titulo, r.descripcion, r.config, r.asignado_a,
+         CASE WHEN r.vence_horas IS NULL THEN NULL ELSE now() + make_interval(hours => r.vence_horas) END
+    FROM jsonb_to_recordset($1::jsonb) AS r(sucursal_id uuid, oportunidad_id uuid, automatizacion_id uuid, tipo text,
+         titulo text, descripcion text, config jsonb, asignado_a text, vence_horas int)`;
+
 /** Crea la tarea o pregunta de una automatización para el ejecutivo de la oportunidad. */
 async function crearTarea(
   cliente: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
@@ -135,100 +170,133 @@ async function crearTarea(
   a: AccionTarea,
   op: DatosOportunidad,
 ): Promise<void> {
-  const cfg = a.config;
-  const esPregunta = a.tipo === "pregunta";
-  const titulo = rellenar(String(esPregunta ? cfg.texto : cfg.titulo), op);
-  const descripcion = !esPregunta && cfg.descripcion ? rellenar(String(cfg.descripcion), op) : null;
-  const venceHoras = typeof cfg.vence_horas === "number" ? cfg.vence_horas : null;
-  await cliente.query(
-    `INSERT INTO crm_tareas (sucursal_id, oportunidad_id, automatizacion_id, tipo, titulo, descripcion, config, asignado_a, vence_en)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $9::int IS NULL THEN NULL ELSE now() + make_interval(hours => $9::int) END)`,
-    [sucursalId, oportunidadId, a.id, a.tipo, titulo, descripcion, esPregunta ? cfg : {}, op.ejecutivo, venceHoras],
-  );
+  await cliente.query(INSERTAR_TAREAS, [JSON.stringify([armarTarea(sucursalId, oportunidadId, a, op)])]);
 }
 
 const MAX_INTENTOS = 5;
 
 /**
- * Procesa hasta `maximo` eventos pendientes. Cada evento va en su propia transacción: si uno
- * falla se anota el error y los demás siguen. SKIP LOCKED permite varios procesos sin pisarse.
+ * Procesa hasta `maximo` eventos pendientes, en lotes: cada lote es UNA transacción que reclama sus
+ * eventos con SKIP LOCKED (varios procesos no se pisan) y trata cada evento dentro de un savepoint,
+ * así uno que falle se anota y no tumba a los demás del lote. Antes era una transacción por evento.
  */
-export async function procesarEventosCrm(maximo = 100): Promise<{ procesados: number; tareas: number }> {
+export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise<{ procesados: number; tareas: number }> {
   const pool = getPool();
   let procesados = 0;
   let tareas = 0;
   const sucursalesAfectadas = new Set<string>();
-  const terminar = () => {
-    for (const s of sucursalesAfectadas) emitirBroadcast(`datos:${s}`, "tareas", {});
-    return { procesados, tareas };
-  };
 
-  for (let i = 0; i < maximo; i++) {
+  while (procesados < maximo) {
     const cliente = await pool.connect();
-    let eventoId: string | null = null;
+    let atendidos = 0;
     try {
       await cliente.query("BEGIN");
-      const { rows } = await cliente.query(
+      const { rows: eventos } = await cliente.query(
         `SELECT id, sucursal_id, oportunidad_id, datos FROM crm_eventos
           WHERE procesado_en IS NULL AND intentos < $1
-          ORDER BY creado_en LIMIT 1 FOR UPDATE SKIP LOCKED`,
-        [MAX_INTENTOS],
+          ORDER BY creado_en LIMIT $2 FOR UPDATE SKIP LOCKED`,
+        [MAX_INTENTOS, tamanoLote],
       );
-      const evento = rows[0];
-      if (!evento) {
+      if (eventos.length === 0) {
         await cliente.query("ROLLBACK");
-        return terminar();
+        break;
       }
-      eventoId = evento.id as string;
 
-      const destino = (evento.datos as { etapa_destino?: string }).etapa_destino;
-      const { rows: oportunidades } = await cliente.query(
-        `SELECT cliente, vin, campana, agencia, ejecutivo, etapa_id, estado_fuente FROM crm_v_oportunidades WHERE id = $1`,
-        [evento.oportunidad_id],
+      // Una sola lectura de las oportunidades del lote y de las automatizaciones de sus etapas destino.
+      const ids = [...new Set(eventos.map((e) => e.oportunidad_id as string))];
+      const { rows: ops } = await cliente.query(
+        `SELECT id, cliente, vin, campana, agencia, ejecutivo, etapa_id, estado_fuente FROM crm_v_oportunidades WHERE id = ANY($1::uuid[])`,
+        [ids],
       );
-      const op = oportunidades[0];
+      const opPorId = new Map(ops.map((o) => [o.id as string, o]));
+      const destinos = [...new Set(eventos.map((e) => (e.datos as { etapa_destino?: string }).etapa_destino).filter(Boolean))] as string[];
+      const { rows: acciones } = await cliente.query(
+        `SELECT id, etapa_id, tipo, config FROM crm_automatizaciones
+          WHERE etapa_id = ANY($1::uuid[]) AND evento = 'entra_etapa' AND activa AND tipo IN ('tarea', 'pregunta')
+          ORDER BY orden, creado_en`,
+        [destinos],
+      );
 
-      // Solo cuenta si la oportunidad sigue activa y aún está en esa etapa (no se crean tareas viejas).
-      if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA") {
-        const { rows: acciones } = await cliente.query(
-          `SELECT id, tipo, nombre, config FROM crm_automatizaciones
-            WHERE etapa_id = $1 AND evento = 'entra_etapa' AND activa AND tipo IN ('tarea', 'pregunta') ORDER BY orden, creado_en`,
-          [destino],
-        );
-        for (const a of acciones) {
-          const { rowCount } = await cliente.query(
-            `INSERT INTO crm_ejecuciones (automatizacion_id, oportunidad_id, evento_id) VALUES ($1, $2, $3)
-             ON CONFLICT DO NOTHING`,
-            [a.id, evento.oportunidad_id, evento.id],
+      // Camino rápido: todo el lote en 3 sentencias (ejecuciones, tareas, eventos).
+      await cliente.query("SAVEPOINT lote");
+      try {
+        const candidatos: { a: (typeof acciones)[number]; evento: (typeof eventos)[number]; op: (typeof ops)[number] }[] = [];
+        for (const evento of eventos) {
+          const destino = (evento.datos as { etapa_destino?: string }).etapa_destino;
+          const op = opPorId.get(evento.oportunidad_id as string);
+          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA") {
+            for (const a of acciones.filter((x) => x.etapa_id === destino)) candidatos.push({ a, evento, op });
+          }
+        }
+        if (candidatos.length > 0) {
+          const { rows: nuevas } = await cliente.query(
+            `INSERT INTO crm_ejecuciones (automatizacion_id, oportunidad_id, evento_id)
+             SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[]) ON CONFLICT DO NOTHING RETURNING automatizacion_id, evento_id`,
+            [candidatos.map((c) => c.a.id), candidatos.map((c) => c.evento.oportunidad_id), candidatos.map((c) => c.evento.id)],
           );
-          if (!rowCount) continue; // ya se ejecutó para este evento
+          const claves = new Set(nuevas.map((r) => `${r.automatizacion_id}|${r.evento_id}`));
+          const filas = candidatos
+            .filter((c) => claves.has(`${c.a.id}|${c.evento.id}`))
+            .map((c) => armarTarea(c.evento.sucursal_id as string, c.evento.oportunidad_id as string, c.a, c.op));
+          if (filas.length > 0) await cliente.query(INSERTAR_TAREAS, [JSON.stringify(filas)]);
+          tareas += filas.length;
+          for (const f of filas) sucursalesAfectadas.add(f.sucursal_id);
+        }
+        await cliente.query(`UPDATE crm_eventos SET procesado_en = now(), error = NULL WHERE id = ANY($1::uuid[])`, [eventos.map((e) => e.id)]);
+        await cliente.query("RELEASE SAVEPOINT lote");
+        atendidos = eventos.length;
+        await cliente.query("COMMIT");
+        procesados += atendidos;
+        continue;
+      } catch {
+        // Algo del lote falló: se deshace y se reintenta evento por evento para aislar al que falla.
+        await cliente.query("ROLLBACK TO SAVEPOINT lote");
+      }
 
-          await crearTarea(cliente, evento.sucursal_id as string, evento.oportunidad_id as string, a, op);
-          tareas++;
-          sucursalesAfectadas.add(evento.sucursal_id as string);
+      for (const evento of eventos) {
+        await cliente.query("SAVEPOINT evento");
+        try {
+          const destino = (evento.datos as { etapa_destino?: string }).etapa_destino;
+          const op = opPorId.get(evento.oportunidad_id as string);
+          // Solo cuenta si la oportunidad sigue activa y aún está en esa etapa (no se crean tareas viejas).
+          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA") {
+            for (const a of acciones.filter((x) => x.etapa_id === destino)) {
+              const { rowCount } = await cliente.query(
+                `INSERT INTO crm_ejecuciones (automatizacion_id, oportunidad_id, evento_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+                [a.id, evento.oportunidad_id, evento.id],
+              );
+              if (!rowCount) continue; // ya se ejecutó para este evento
+              await crearTarea(cliente, evento.sucursal_id as string, evento.oportunidad_id as string, a, op);
+              tareas++;
+              sucursalesAfectadas.add(evento.sucursal_id as string);
+            }
+          }
+          await cliente.query(`UPDATE crm_eventos SET procesado_en = now(), error = NULL WHERE id = $1`, [evento.id]);
+          await cliente.query("RELEASE SAVEPOINT evento");
+          atendidos++;
+        } catch (err) {
+          await cliente.query("ROLLBACK TO SAVEPOINT evento");
+          // Solo el mensaje técnico, recortado: nunca datos de clientes.
+          const mensaje = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+          await cliente.query(`UPDATE crm_eventos SET intentos = intentos + 1, error = $2 WHERE id = $1`, [evento.id, mensaje]);
+          console.error("[motor-crm] error procesando un evento");
         }
       }
-
-      await cliente.query(`UPDATE crm_eventos SET procesado_en = now(), error = NULL WHERE id = $1`, [evento.id]);
       await cliente.query("COMMIT");
-      procesados++;
-    } catch (err) {
+      procesados += atendidos;
+    } catch {
       await cliente.query("ROLLBACK").catch(() => {});
-      if (eventoId) {
-        // Sin el texto del error de datos: solo el mensaje técnico, recortado.
-        const mensaje = (err instanceof Error ? err.message : String(err)).slice(0, 300);
-        await pool
-          .query(`UPDATE crm_eventos SET intentos = intentos + 1, error = $2 WHERE id = $1`, [eventoId, mensaje])
-          .catch(() => {});
-      }
-      console.error("[motor-crm] error procesando un evento");
-      return terminar();
+      console.error("[motor-crm] fallo un lote de eventos");
+      break;
     } finally {
       cliente.release();
     }
+    // Un lote donde todo falló no se repite en caliente: queda para la siguiente vuelta.
+    if (atendidos === 0) break;
   }
 
-  return terminar();
+  for (const s of sucursalesAfectadas) emitirBroadcast(`datos:${s}`, "tareas", {});
+  return { procesados, tareas };
 }
 
 /**

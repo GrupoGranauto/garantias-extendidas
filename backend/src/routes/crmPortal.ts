@@ -6,6 +6,7 @@ import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../mid
 import { listarEtapas, editarOportunidad } from "../lib/crm.js";
 import { DESTINOS_PREGUNTA, TIPOS_RESPUESTA, automatizacionSchema, validarRespuesta } from "../lib/motorCrm.js";
 import { emitirBroadcast } from "../lib/realtime.js";
+import { ejecutivoRestringido, exigirUuid } from "../lib/permisos.js";
 
 /**
  * Rutas del CRM para el portal de la sucursal: configuración de automatizaciones por etapa
@@ -14,12 +15,10 @@ import { emitirBroadcast } from "../lib/realtime.js";
 export const crmPortalRouter = Router();
 
 crmPortalRouter.use(requireAuth);
+exigirUuid(crmPortalRouter, "etapaId", "tid");
 crmPortalRouter.use("/sucursales/:id/crm", requireAccesoSucursal);
 
 /** Un asesor con ejecutivo asignado solo ve lo suyo; el admin y un asesor sin ejecutivo, todo. */
-function ejecutivoRestringido(perfil: { rol: string; ejecutivo_asignado: string | null } | undefined): string | null {
-  return perfil && perfil.rol !== "admin" && perfil.ejecutivo_asignado ? perfil.ejecutivo_asignado : null;
-}
 
 /* ============================================================
    Automatizaciones (admin de la sucursal)

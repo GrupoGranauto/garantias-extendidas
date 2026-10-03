@@ -4,6 +4,8 @@ import { getPool } from "../lib/db.js";
 import { getSupabase } from "../lib/supabase.js";
 import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../middleware/auth.js";
 import { emitirBroadcast } from "../lib/realtime.js";
+import { restringidoDe, exigirUuid } from "../lib/permisos.js";
+import { estadoSincronizacion, sincronizarCrm, type ResumenSync } from "../lib/sincronizacionCrm.js";
 import {
   CANALES,
   ESTADOS_CONTRATO,
@@ -26,12 +28,10 @@ import {
 export const crmProcesoRouter = Router();
 
 crmProcesoRouter.use(requireAuth);
+exigirUuid(crmProcesoRouter, "oid", "etapaId");
 crmProcesoRouter.use("/sucursales/:id/crm", requireAccesoSucursal);
 
-function restringidoA(req: Request): string | null {
-  const p = req.perfil;
-  return p && p.rol !== "admin" && p.ejecutivo_asignado ? p.ejecutivo_asignado : null;
-}
+const restringidoA = restringidoDe;
 
 /** Verifica que la oportunidad sea de la sucursal y que el usuario pueda tocarla (un asesor, solo las de su ejecutivo). */
 async function oportunidadAccesible(req: Request, res: Response): Promise<boolean> {
@@ -286,6 +286,42 @@ crmProcesoRouter.put("/sucursales/:id/crm/etapas/:etapaId/sla", requireAdminSucu
     emitirBroadcast(`datos:${req.params.id}`, "refresh", {});
     res.json({ guardado: true });
   } catch (err) {
+    next(err);
+  }
+});
+
+/* ============================================================
+   Sincronización con BigQuery (admin de la sucursal)
+   ============================================================ */
+
+crmProcesoRouter.get("/sucursales/:id/crm/sincronizacion", requireAdminSucursal, async (req, res, next) => {
+  try {
+    res.json(await estadoSincronizacion(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Simula (sin `aplicar`) o aplica la sincronización. Devuelve solo conteos. */
+crmProcesoRouter.post("/sucursales/:id/crm/sincronizacion", requireAdminSucursal, async (req, res, next) => {
+  const parsed = z.object({ aplicar: z.boolean().default(false) }).safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos." });
+    return;
+  }
+  try {
+    const resumen = await sincronizarCrm(req.params.id, parsed.data.aplicar);
+    if (parsed.data.aplicar) {
+      emitirBroadcast(`datos:${req.params.id}`, "refresh", {});
+      emitirBroadcast(`datos:${req.params.id}`, "tareas", {});
+    }
+    res.json(resumen);
+  } catch (err) {
+    const resumen = (err as { resumen?: ResumenSync }).resumen;
+    if (resumen) {
+      res.status(409).json({ error: err instanceof Error ? err.message : "Sincronización abortada.", resumen });
+      return;
+    }
     next(err);
   }
 });

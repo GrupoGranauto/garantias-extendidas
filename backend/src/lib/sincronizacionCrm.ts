@@ -69,7 +69,7 @@ const texto = (v: unknown): string | null => {
 };
 
 /** Suma meses a 'YYYY-MM-DD' recortando el día al fin de mes (igual que DATE_ADD de BigQuery). */
-function sumarMeses(fecha: string, meses: number): string {
+export function sumarMeses(fecha: string, meses: number): string {
   const [a, m, d] = fecha.split("-").map(Number);
   const total = a * 12 + (m - 1) + meses;
   const anio = Math.floor(total / 12);
@@ -383,6 +383,8 @@ async function registrarCorrida(sucursalId: string, resumen: ResumenSync, estado
  */
 export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Promise<ResumenSync> {
   const modo = aplicar ? "real" : "simulacion";
+  const { rows: habilitada } = await getPool().query(`SELECT sync_bigquery FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
+  if (!habilitada[0]?.sync_bigquery) throw new Error("Esta sucursal no está habilitada para sincronizar con BigQuery.");
   const maestra = await leerMaestra();
   const { existentes, roster } = await cargarEstadoActual(sucursalId);
   const plan = planificar(maestra, existentes, roster);
@@ -593,7 +595,7 @@ async function sincronizarPendientesDeHoy(): Promise<void> {
   if (hora !== HORA_SYNC) return;
   const { rows } = await getPool().query(
     `SELECT c.sucursal_id FROM crm_config c
-      WHERE NOT EXISTS (
+      WHERE c.sync_bigquery AND NOT EXISTS (
         SELECT 1 FROM crm_sync_corridas r
          WHERE r.sucursal_id = c.sucursal_id AND r.modo = 'real' AND r.estado = 'ok'
            AND (r.creado_en AT TIME ZONE '${ZONA_NEGOCIO}')::date = $1::date
@@ -627,4 +629,53 @@ export function iniciarSyncProgramadoCrm(): void {
       });
   }, 10 * 60 * 1000);
   temporizadorSync.unref();
+}
+
+/** Horas sin una sincronización real exitosa a partir de las cuales se avisa. */
+const HORAS_SIN_SYNC_ALERTA = 36;
+
+/**
+ * Estado de la sincronización para la pantalla de Equipo: últimas corridas (solo conteos), si hoy ya
+ * corrió, cuándo se refrescó la fuente y una alerta si lleva demasiado sin sincronizar.
+ */
+export async function estadoSincronizacion(sucursalId: string) {
+  const pool = getPool();
+  const { rows: cfg } = await pool.query(`SELECT sync_bigquery FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
+  const habilitada = cfg[0]?.sync_bigquery === true;
+  if (!habilitada) return { habilitada: false, corridas: [], ultima_real: null, corrio_hoy: false, alerta: null, fuente_actualizada_en: null };
+
+  const { rows: corridas } = await pool.query(
+    `SELECT modo, estado, filas_fuente, activas_fuente, nuevas, actualizadas, migradas, cerradas, conflictos, mensaje, creado_en
+       FROM crm_sync_corridas WHERE sucursal_id = $1 ORDER BY creado_en DESC LIMIT 10`,
+    [sucursalId],
+  );
+  const { rows: ultima } = await pool.query(
+    `SELECT creado_en, (creado_en AT TIME ZONE '${ZONA_NEGOCIO}')::date = (now() AT TIME ZONE '${ZONA_NEGOCIO}')::date AS hoy,
+            extract(epoch FROM now() - creado_en) / 3600 AS horas
+       FROM crm_sync_corridas WHERE sucursal_id = $1 AND modo = 'real' AND estado = 'ok' ORDER BY creado_en DESC LIMIT 1`,
+    [sucursalId],
+  );
+  const real = ultima[0];
+
+  // Cuándo refrescó BigQuery su tabla: si la fuente está vieja, sincronizar no trae nada nuevo.
+  let fuenteActualizada: string | null = null;
+  try {
+    const [r] = await getBigQuery().query({
+      query: "SELECT CAST(MAX(fecha_actualizacion) AS STRING) AS f FROM `base-maestra-gn.garantias_extendidas.nis_ge_cartera_maestra`",
+      location: env.BIGQUERY_LOCATION,
+    });
+    fuenteActualizada = (r as { f: string | null }[])[0]?.f ?? null;
+  } catch {
+    fuenteActualizada = null;
+  }
+
+  const sinSync = !real || (real.horas as number) > HORAS_SIN_SYNC_ALERTA;
+  return {
+    habilitada: true,
+    corridas,
+    ultima_real: real ? real.creado_en : null,
+    corrio_hoy: real?.hoy === true,
+    alerta: sinSync ? `Lleva más de ${HORAS_SIN_SYNC_ALERTA} horas sin una sincronización completa con BigQuery.` : null,
+    fuente_actualizada_en: fuenteActualizada,
+  };
 }

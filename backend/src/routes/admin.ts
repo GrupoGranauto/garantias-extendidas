@@ -2,6 +2,7 @@ import dns from "node:dns/promises";
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
+import { getPool } from "../lib/db.js";
 import { requireAuth, requireAdmin } from "../middleware/auth.js";
 import { env, flags } from "../config/env.js";
 import { subdominioValido } from "../lib/subdominio.js";
@@ -373,6 +374,9 @@ adminRouter.post("/sucursales", async (req, res, next) => {
       res.status(400).json({ error: mensaje });
       return;
     }
+
+    // La sucursal nace lista para el CRM: embudo, etapas, motivos, entidad y panel por omisión.
+    await getPool().query(`SELECT crm_provisionar_sucursal($1)`, [data.id]);
 
     res.status(201).json({
       ...data,

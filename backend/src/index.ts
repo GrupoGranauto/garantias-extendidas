@@ -3,6 +3,8 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { env, flags } from "./config/env.js";
 import { healthRouter } from "./routes/health.js";
 import { garantiasRouter } from "./routes/garantias.js";
@@ -25,6 +27,24 @@ import { origenPermitido } from "./lib/origenes.js";
 
 const app = express();
 
+// Railway pone un proxy delante: sin esto todas las peticiones parecerían venir de la misma IP.
+app.set("trust proxy", 1);
+
+// Cabeceras de seguridad (nosniff, HSTS, referrer…). CSP y las políticas de origen cruzado quedan fuera:
+// romperían el inicio de sesión con Google y los recursos de Supabase.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginOpenerPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: false }));
+
+const limite = (maximo: number, ventanaMs: number, mensaje: string) =>
+  rateLimit({
+    windowMs: ventanaMs,
+    limit: maximo,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      res.status(429).json({ error: mensaje });
+    },
+  });
+
 app.use(
   cors({
     origin(origen, callback) {
@@ -42,6 +62,12 @@ app.use("/api/webhooks/whatsapp", express.raw({ type: "application/json" }), web
 
 // 20mb: alcanza para el base64 de video/documento de muestra en plantillas de WhatsApp.
 app.use(express.json({ limit: "20mb" }));
+
+// Límites por IP. El de la API es holgado (una oficina entera comparte IP); el de sincronización, estricto.
+app.use("/api", limite(1200, 60_000, "Demasiadas peticiones. Espera un momento."));
+const limiteSync = limite(10, 60 * 60_000, "Ya se pidieron varias sincronizaciones en la última hora.");
+app.post("/api/admin/sucursales/:id/crm/sincronizacion", limiteSync);
+app.post("/api/admin/sucursales/:id/crm/sincronizar", limiteSync);
 
 app.use("/api/health", healthRouter);
 app.use("/api/publico", publicoRouter);

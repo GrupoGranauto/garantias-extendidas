@@ -15,6 +15,7 @@ import {
 } from "../lib/entidades.js";
 import { OPERADORES_FECHA, filtroDeItem, filtrosDeBotones, leerPanelGuardado } from "../lib/panel.js";
 import { esEntidadCrm } from "../lib/entidades.js";
+import { ejecutivoRestringido, exigirUuid } from "../lib/permisos.js";
 import { conOpcionesDinamicas, editarOportunidad, listarEtapas, moverOportunidad, opcionesDinamicas } from "../lib/crm.js";
 import { emitirBroadcast } from "../lib/realtime.js";
 
@@ -90,14 +91,14 @@ function restriccionDe(
   perfil: { rol: string; ejecutivo_asignado: string | null } | undefined,
   columnaEjecutivo: unknown,
 ): { columna: string; valor: string } | undefined {
-  return perfil && perfil.rol !== "admin" && perfil.ejecutivo_asignado && columnaEjecutivo
-    ? { columna: columnaEjecutivo as string, valor: perfil.ejecutivo_asignado }
-    : undefined;
+  const restringido = ejecutivoRestringido(perfil);
+  return restringido && columnaEjecutivo ? { columna: columnaEjecutivo as string, valor: restringido } : undefined;
 }
 
 export const entidadDatosRouter = Router();
 
 entidadDatosRouter.use(requireAuth);
+exigirUuid(entidadDatosRouter, "rowId");
 // Cuelga de /sucursales/:id/entidad/registros: aquí ya hay req.params.id.
 entidadDatosRouter.use("/sucursales/:id/entidad/registros", requireAccesoSucursal);
 

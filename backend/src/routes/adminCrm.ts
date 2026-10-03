@@ -47,3 +47,13 @@ adminCrmRouter.get("/sucursales/:id/crm/corridas", async (req, res, next) => {
     next(err);
   }
 });
+
+/** Deja lista para el CRM una sucursal existente que aún no lo tiene (idempotente: no pisa lo que ya hay). */
+adminCrmRouter.post("/sucursales/:id/crm/provisionar", async (req, res, next) => {
+  try {
+    await getPool().query(`SELECT crm_provisionar_sucursal($1)`, [req.params.id]);
+    res.json({ listo: true });
+  } catch (err) {
+    next(err);
+  }
+});
