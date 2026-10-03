@@ -1,6 +1,7 @@
 import { getBigQuery } from "./bigquery.js";
 import { getPool } from "./db.js";
 import { env } from "../config/env.js";
+import { vincularConversaciones } from "./vinculoWhatsapp.js";
 
 /**
  * Sincronización BigQuery -> modelo relacional del CRM.
@@ -406,6 +407,7 @@ export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Prom
   }
 
   await aplicarPlan(sucursalId, plan);
+  await vincularConversaciones(sucursalId).catch(() => 0);
   await registrarCorrida(sucursalId, resumen, "ok", null);
   return resumen;
 }

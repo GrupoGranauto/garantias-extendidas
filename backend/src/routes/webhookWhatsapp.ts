@@ -9,6 +9,7 @@ import {
 } from "../lib/whatsapp.js";
 import { emitirEventoChat } from "../lib/eventosChat.js";
 import { procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
+import { buscarVinculo, registrarEntrante, type Vinculo } from "../lib/vinculoWhatsapp.js";
 import { esPeticionDeBaja, telefono10 } from "../lib/campanasLogica.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
 
@@ -206,12 +207,13 @@ async function obtenerOCrearConversacion(
   tipoPreview: string,
   textoPreview: string | null,
   asignadoA: string | null,
+  contactoId: string | null,
 ) {
   const supabase = getSupabase();
 
   const { data: existente } = await supabase
     .from("whatsapp_conversaciones")
-    .select("id, no_leidos")
+    .select("id, no_leidos, asignado_a, contacto_id")
     .eq("sucursal_id", sucursalId)
     .eq("wa_id", waId)
     .maybeSingle();
@@ -228,6 +230,9 @@ async function obtenerOCrearConversacion(
       ultimo_mensaje_estado: null,
     };
     if (nombreContacto) cambios.nombre_contacto = nombreContacto;
+    // Si la conversación aún no estaba ligada a la base o no tenía dueño, ahora sí.
+    if (contactoId && !existente.contacto_id) cambios.contacto_id = contactoId;
+    if (asignadoA && !existente.asignado_a) cambios.asignado_a = asignadoA;
 
     await supabase.from("whatsapp_conversaciones").update(cambios).eq("id", existente.id);
     return existente.id as string;
@@ -249,6 +254,7 @@ async function obtenerOCrearConversacion(
       // Dueño inicial: el ejecutivo del lead si el teléfono cruza; si no, queda
       // suelto (null) y lo verán todos los asesores hasta que alguien conteste.
       asignado_a: asignadoA,
+      contacto_id: contactoId,
     })
     .select("id")
     .single();
@@ -325,7 +331,10 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
       fila.texto = JSON.stringify(msg);
   }
 
-  const ejecutivoDeLead = await resolverEjecutivoDeLead(config, msg.from);
+  // Primero se busca a la persona en la base cargada en la web (por teléfono); la columna configurada a mano
+  // queda solo como respaldo para sucursales que aún no usan el CRM.
+  const vinculo: Vinculo | null = await buscarVinculo(config.sucursal_id, msg.from).catch(() => null);
+  const ejecutivoDeLead = vinculo?.ejecutivo ?? (await resolverEjecutivoDeLead(config, msg.from));
   const conversacionId = await obtenerOCrearConversacion(
     config.sucursal_id,
     msg.from,
@@ -334,11 +343,21 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
     fila.tipo as string,
     (fila.texto as string | null | undefined) ?? null,
     ejecutivoDeLead,
+    vinculo?.contacto_id ?? null,
   );
   fila.conversacion_id = conversacionId;
 
   const { error } = await getSupabase().from("whatsapp_mensajes").insert(fila);
   if (error) throw new Error(error.message);
+
+  // Lo que escribió el cliente queda en el historial de su oportunidad (y cuenta como contacto).
+  if (vinculo) {
+    try {
+      await registrarEntrante(config.sucursal_id, vinculo, fila.tipo === "texto" ? String(fila.texto ?? "") : `(${String(fila.tipo)})`);
+    } catch {
+      console.error("[whatsapp] no se pudo registrar el mensaje en el historial");
+    }
+  }
 
   // "BAJA", "STOP"…: el contacto pidió no recibir más. Se respeta de inmediato y para siempre.
   if (msg.type === "text" && esPeticionDeBaja(String(fila.texto ?? ""))) {

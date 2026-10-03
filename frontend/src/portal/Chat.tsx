@@ -20,6 +20,7 @@ import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 import { useEventosChat } from "./useEventosChat";
 import { useRealtimeChat } from "./useRealtimeChat";
+import FichaOportunidad from "./FichaOportunidad";
 
 type Conversacion = {
   id: string;
@@ -34,6 +35,16 @@ type Conversacion = {
   no_leidos: number;
   resuelto: boolean;
   creado_en: string;
+  /** A quién corresponde en la base cargada en la web (por teléfono), si coincide. */
+  lead: {
+    nombre: string | null;
+    oportunidad_id: string | null;
+    campana: string | null;
+    etapa: string | null;
+    ejecutivo: string | null;
+    baja: boolean;
+    consentimiento: boolean | null;
+  } | null;
 };
 
 type Mensaje = {
@@ -55,7 +66,8 @@ type Mensaje = {
 type PlantillaDisponible = { id: string; nombre: string; nombre_tecnico: string; idioma: string; preview: string };
 
 function etiquetaConversacion(c: Conversacion): string {
-  return c.nombre_contacto?.trim() || c.wa_id;
+  // El nombre de la base cargada manda sobre el nombre del perfil de WhatsApp.
+  return c.lead?.nombre?.trim() || c.nombre_contacto?.trim() || c.wa_id;
 }
 
 function iniciales(texto: string): string {
@@ -286,6 +298,8 @@ function contenidoMensaje(m: Mensaje, onMediaLoad: () => void, onAbrirImagen: (u
 export default function Chat() {
   const { portal } = usePortal();
   const sucursalId = portal!.id;
+  // Ficha de la oportunidad a la que corresponde la conversación abierta.
+  const [fichaId, setFichaId] = useState<string | null>(null);
 
   const [conversaciones, setConversaciones] = useState<Conversacion[] | null>(null);
   const [errorLista, setErrorLista] = useState<string | null>(null);
@@ -640,7 +654,20 @@ export default function Chat() {
               <div className="chat-hilo-cabecera-datos">
                 <strong>{etiquetaConversacion(seleccionada)}</strong>
                 <p>{seleccionada.wa_id}</p>
+                {seleccionada.lead ? (
+                  <p className="chat-lead">
+                    {[seleccionada.lead.campana && `Campaña ${seleccionada.lead.campana}`, seleccionada.lead.etapa, seleccionada.lead.ejecutivo].filter(Boolean).join(" · ")}
+                    {seleccionada.lead.baja ? " · En baja" : ""}
+                  </p>
+                ) : (
+                  <p className="chat-lead chat-lead-sin">No coincide con la base cargada</p>
+                )}
               </div>
+              {seleccionada.lead?.oportunidad_id && (
+                <button type="button" className="boton-secundario-claro" onClick={() => setFichaId(seleccionada.lead!.oportunidad_id)}>
+                  Ver ficha
+                </button>
+              )}
               <button type="button" className="boton-tenue" onClick={alternarResuelto} disabled={resolviendo}>
                 {resolviendo ? "Guardando…" : vista === "resueltas" ? "Reabrir" : "Resolver"}
               </button>
@@ -794,6 +821,8 @@ export default function Chat() {
           <img src={imagenVista} alt="" onClick={(e) => e.stopPropagation()} />
         </div>
       )}
+
+      {fichaId && <FichaOportunidad sucursalId={sucursalId} oportunidadId={fichaId} onCerrar={() => setFichaId(null)} onCambio={() => {}} />}
     </div>
   );
 }

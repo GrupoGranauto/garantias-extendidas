@@ -6,6 +6,7 @@ import { requireAuth, requireAccesoSucursal } from "../middleware/auth.js";
 import { configPorSucursalId, enviarMensaje } from "../lib/whatsapp.js";
 import { emitirEventoChat, suscribirEventosChat } from "../lib/eventosChat.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
+import { leadsDeContactos, registrarSalienteChat } from "../lib/vinculoWhatsapp.js";
 
 /** Cuántas variables numeradas ({{1}}, {{2}}…) tiene el cuerpo de una plantilla. */
 function contarVariablesBody(texto: string): number {
@@ -53,7 +54,7 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, re
     let consulta = getSupabase()
       .from("whatsapp_conversaciones")
       .select(
-        "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, ultimo_mensaje_direccion, ultimo_mensaje_estado, ultimo_mensaje_cliente_en, no_leidos, resuelto, asignado_a, creado_en",
+        "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, ultimo_mensaje_direccion, ultimo_mensaje_estado, ultimo_mensaje_cliente_en, no_leidos, resuelto, asignado_a, creado_en, contacto_id",
       )
       .eq("sucursal_id", req.params.id)
       .eq("resuelto", resueltas);
@@ -65,7 +66,10 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, re
     if (req.query.no_leidos === "true") consulta = consulta.gt("no_leidos", 0);
     const { data, error } = await consulta.order("ultimo_mensaje_en", { ascending: false, nullsFirst: false });
     if (error) throw new Error(error.message);
-    res.json(data ?? []);
+    // Cada conversación trae a quién corresponde en la base cargada: nombre, campaña, etapa y ejecutivo.
+    const lista = data ?? [];
+    const leads = await leadsDeContactos([...new Set(lista.map((c) => c.contacto_id as string | null).filter((x): x is string => Boolean(x)))]).catch(() => new Map());
+    res.json(lista.map((c) => ({ ...c, lead: (c.contacto_id && leads.get(c.contacto_id as string)) || null })));
   } catch (err) {
     next(err);
   }
@@ -208,6 +212,10 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
 
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
 
+    // Lo que se manda desde el chat también queda en el historial de la oportunidad.
+
+    void registrarSalienteChat(req.params.id, conversacion.id).catch(() => {});
+
     res.status(201).json(mensaje);
   } catch (err) {
     if (err instanceof Error) {
@@ -305,6 +313,10 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
     await reclamarSiSuelto(req.params.id, conversacion, req.perfil);
 
     emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
+
+    // Lo que se manda desde el chat también queda en el historial de la oportunidad.
+
+    void registrarSalienteChat(req.params.id, conversacion.id).catch(() => {});
 
     res.status(201).json(mensaje);
   } catch (err) {
@@ -544,6 +556,10 @@ whatsappChatRouter.post(
       await reclamarSiSuelto(req.params.id, conversacion, req.perfil);
 
       emitirEventoChat(req.params.id, { tipo: "mensaje_saliente", conversacionId: conversacion.id });
+
+      // Lo que se manda desde el chat también queda en el historial de la oportunidad.
+
+      void registrarSalienteChat(req.params.id, conversacion.id).catch(() => {});
 
       res.status(201).json(mensaje);
     } catch (err) {

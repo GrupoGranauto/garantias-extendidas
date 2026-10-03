@@ -2088,3 +2088,7 @@ textarea.auto-input { resize: vertical; }
 .camp-previa-paso { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--gris-50); border: 1px solid var(--gris-200); border-radius: 8px; font-size: 13px; }
 .camp-previa-paso ul { margin: 0; padding-left: 18px; color: var(--gris-700); }
 .camp-vencido { color: var(--gris-400); text-decoration: line-through; }
+
+/* ---------- Chat: datos de la base ---------- */
+.chat-lead { margin: 2px 0 0; font-size: 11px; font-weight: 600; color: var(--marca); }
+.chat-lead-sin { font-weight: 400; color: var(--gris-400); }
