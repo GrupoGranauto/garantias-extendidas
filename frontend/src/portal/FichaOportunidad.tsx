@@ -50,7 +50,7 @@ const ETIQUETA_CONTRATO: Record<string, string> = {
 const DATOS = [
   "telefono_principal", "correo", "vin", "agencia", "linea", "version_vehiculo", "anio_vin", "campana", "fase_campana",
   "inicio_campana", "fin_campana", "proxima_campania", "fecha_proxima_campania", "estado_fuente", "intentos",
-  "fecha_ultimo_contacto", "fecha_compra", "comentarios", "motivo_perdida",
+  "fecha_ultimo_contacto", "fecha_compra", "kilometraje", "etapa_vehiculo", "comentarios", "motivo_perdida",
 ];
 
 function formato(valor: unknown): string {

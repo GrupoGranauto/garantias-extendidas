@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import { recalcularEtapas } from "./cicloVehiculo.js";
 import type { CampoEntidad } from "./entidades.js";
 
 /** Estado de contacto: la vista lo muestra con etiqueta, la tabla lo guarda con clave. */
@@ -27,6 +28,7 @@ const TITULO_CAMPO: Record<string, string> = {
   comentarios: "Comentarios",
   fecha_ultimo_contacto: "Fecha último contacto",
   fecha_compra: "Fecha compra",
+  kilometraje: "Kilometraje",
   ejecutivo: "Ejecutivo",
   estado_contacto: "Estado de contacto",
 };
@@ -115,7 +117,8 @@ export async function editarOportunidad(params: {
     const { rows: filas } = await cliente.query(
       `SELECT o.id, o.etapa_id, o.estado, o.motivo_perdida_id, e.tipo AS tipo_etapa, o.comentarios,
               o.fecha_ultimo_contacto::text AS fecha_ultimo_contacto, o.fecha_compra::text AS fecha_compra,
-              o.ejecutivo, o.estado_contacto
+              o.ejecutivo, o.estado_contacto, o.vehiculo_id,
+              (SELECT v.kilometraje FROM crm_vehiculos v WHERE v.id = o.vehiculo_id) AS kilometraje
          FROM crm_oportunidades o LEFT JOIN crm_etapas e ON e.id = o.etapa_id
         WHERE o.id = $1 AND o.sucursal_id = $2 FOR UPDATE OF o`,
       [oportunidadId, sucursalId],
@@ -214,16 +217,37 @@ export async function editarOportunidad(params: {
       asignar("motivo_perdida_id", motivoId);
     }
 
-    if (sets.length === 0) {
+    // El kilometraje es del vehículo (lo comparten todas sus oportunidades) y cambia su etapa del vehículo.
+    let kmNuevo: number | null | undefined;
+    if ("kilometraje" in valores) {
+      const v = valores.kilometraje;
+      kmNuevo = v === null || v === undefined || v === "" ? null : Number(v);
+      if (kmNuevo !== null && (!Number.isInteger(kmNuevo) || kmNuevo < 0 || kmNuevo > 5_000_000)) {
+        await cliente.query("ROLLBACK");
+        return { ok: false, estado: 400, error: "El kilometraje debe ser un número entero entre 0 y 5,000,000." };
+      }
+    }
+
+    if (sets.length === 0 && kmNuevo === undefined) {
       await cliente.query("ROLLBACK");
       return { ok: false, estado: 400, error: "No hay nada que actualizar." };
     }
 
-    args.push(oportunidadId, sucursalId);
-    await cliente.query(
-      `UPDATE crm_oportunidades SET ${sets.join(", ")} WHERE id = $${args.length - 1} AND sucursal_id = $${args.length}`,
-      args,
-    );
+    if (sets.length > 0) {
+      args.push(oportunidadId, sucursalId);
+      await cliente.query(
+        `UPDATE crm_oportunidades SET ${sets.join(", ")} WHERE id = $${args.length - 1} AND sucursal_id = $${args.length}`,
+        args,
+      );
+    }
+    if (kmNuevo !== undefined) {
+      await cliente.query(`UPDATE crm_vehiculos SET kilometraje = $3, kilometraje_actualizado_en = now() WHERE id = $1 AND sucursal_id = $2`, [
+        actual.vehiculo_id,
+        sucursalId,
+        kmNuevo,
+      ]);
+      await recalcularEtapas(cliente, sucursalId, actual.vehiculo_id as string);
+    }
 
     // Auditoría: cada campo que cambió queda en la línea de tiempo con su valor anterior y el nuevo.
     const autorEdicion = await autorValido(cliente, usuarioId);
@@ -232,6 +256,9 @@ export async function editarOportunidad(params: {
       if (campo in valores && (valores[campo] ?? null) !== (actual[campo] ?? null)) {
         cambios.push({ campo, anterior: actual[campo] ?? null, nuevo: valores[campo] ?? null });
       }
+    }
+    if (kmNuevo !== undefined && (kmNuevo ?? null) !== (actual.kilometraje ?? null)) {
+      cambios.push({ campo: "kilometraje", anterior: actual.kilometraje ?? null, nuevo: kmNuevo });
     }
     if ("estado_contacto" in valores) {
       const anterior = ETIQUETA_DE_ESTADO[actual.estado_contacto as string] ?? null;

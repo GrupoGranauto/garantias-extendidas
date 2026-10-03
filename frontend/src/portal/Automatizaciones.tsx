@@ -5,6 +5,7 @@ import Interruptor from "../componentes/Interruptor";
 import { IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import CampanasEnvio from "./CampanasEnvio";
+import EtapasVehiculo from "./EtapasVehiculo";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -90,14 +91,16 @@ export default function Automatizaciones() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
   // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
-  const [apartado, setApartado] = useState<"etapas" | "campanas">(() => {
+  type Apartado = "etapas" | "campanas" | "vehiculo";
+  const [apartado, setApartado] = useState<Apartado>(() => {
     try {
-      return sessionStorage.getItem("portal.automatizaciones.apartado") === "campanas" ? "campanas" : "etapas";
+      const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
+      return guardado === "campanas" || guardado === "vehiculo" ? guardado : "etapas";
     } catch {
       return "etapas";
     }
   });
-  const elegirApartado = (a: "etapas" | "campanas") => {
+  const elegirApartado = (a: Apartado) => {
     setApartado(a);
     try {
       sessionStorage.setItem("portal.automatizaciones.apartado", a);
@@ -112,6 +115,9 @@ export default function Automatizaciones() {
       </button>
       <button type="button" role="tab" aria-selected={apartado === "campanas"} className={`vista-opcion${apartado === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("campanas")}>
         Campañas de WhatsApp
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "vehiculo"} className={`vista-opcion${apartado === "vehiculo" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("vehiculo")}>
+        Etapas del vehículo
       </button>
     </div>
   );
@@ -187,6 +193,15 @@ export default function Automatizaciones() {
     } finally {
       setGuardando(false);
     }
+  }
+
+  if (apartado === "vehiculo") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <EtapasVehiculo />
+      </div>
+    );
   }
 
   if (apartado === "campanas") {

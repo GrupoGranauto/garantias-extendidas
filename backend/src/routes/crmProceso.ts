@@ -62,7 +62,7 @@ const COLUMNAS_FICHA = [
   "cliente", "telefono_principal", "correo", "vin", "agencia", "linea", "version_vehiculo", "anio_vin", "campana",
   "fase_campana", "inicio_campana", "fin_campana", "proxima_campania", "fecha_proxima_campania", "estado_fuente",
   "etapa_embudo", "estado_contacto", "intentos", "motivo_perdida", "comentarios", "fecha_ultimo_contacto",
-  "fecha_compra", "ejecutivo", "entro_a_etapa_en",
+  "fecha_compra", "ejecutivo", "entro_a_etapa_en", "kilometraje", "etapa_vehiculo",
 ];
 /** Siempre se muestran: sin ellas la ficha no tiene sentido. */
 const SIEMPRE = new Set(["cliente", "etapa_embudo", "estado_contacto", "ejecutivo", "entro_a_etapa_en", "intentos"]);

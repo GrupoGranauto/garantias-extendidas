@@ -377,6 +377,7 @@ adminRouter.post("/sucursales", async (req, res, next) => {
 
     // La sucursal nace lista para el CRM: embudo, etapas, motivos, entidad y panel por omisión.
     await getPool().query(`SELECT crm_provisionar_sucursal($1)`, [data.id]);
+    await getPool().query(`SELECT crm_asegurar_campos_ciclo($1)`, [data.id]);
 
     res.status(201).json({
       ...data,

@@ -4,6 +4,7 @@ import { emitirBroadcast } from "./realtime.js";
 import { validarFechaCoherente } from "./entidades.js";
 import { despacharEnvios, planificarEnvios } from "./campanasEnvio.js";
 import { vincularConversaciones } from "./vinculoWhatsapp.js";
+import { recalcularSiToca } from "./cicloVehiculo.js";
 
 /**
  * Motor de automatizaciones del CRM: "cuando una oportunidad entra a una etapa -> entonces
@@ -371,6 +372,8 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
         const extra = porTiempo ? await procesarReglasPorTiempo() : 0;
         // Conversaciones que escribieron antes de estar en la base: se ligan en cuanto aparece su contacto.
         if (porTiempo) await vincularConversaciones().catch(() => 0);
+        // Con el paso de los meses los vehículos cambian de etapa solos: se recalcula una vez al día.
+        if (porTiempo) await recalcularSiToca().catch(() => 0);
         // Envíos de campaña: solo en el servidor que los tenga encendidos (CRM_ENVIOS=on), nunca en una copia de desarrollo.
         if (porTiempo && process.env.CRM_ENVIOS === "on") {
           await planificarEnvios();
