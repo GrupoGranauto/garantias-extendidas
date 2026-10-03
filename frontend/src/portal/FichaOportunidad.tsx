@@ -50,7 +50,7 @@ const ETIQUETA_CONTRATO: Record<string, string> = {
 const DATOS = [
   "telefono_principal", "correo", "vin", "agencia", "linea", "version_vehiculo", "anio_vin", "campana", "fase_campana",
   "inicio_campana", "fin_campana", "proxima_campania", "fecha_proxima_campania", "estado_fuente", "intentos",
-  "fecha_ultimo_contacto", "fecha_compra", "kilometraje", "etapa_vehiculo", "comentarios", "motivo_perdida",
+  "fecha_ultimo_contacto", "fecha_factura", "fecha_compra", "kilometraje", "etapa_vehiculo", "comentarios", "motivo_perdida",
 ];
 
 function formato(valor: unknown): string {
@@ -101,6 +101,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
   const [textoNota, setTextoNota] = useState("");
   const [estadoContrato, setEstadoContrato] = useState("sin_contrato");
   const [folio, setFolio] = useState("");
+  const [km, setKm] = useState("");
 
   const base = `/api/admin/sucursales/${sucursalId}/crm/oportunidades/${oportunidadId}`;
 
@@ -110,6 +111,8 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
         setFicha(f);
         setEstadoContrato(f.contrato.estado);
         setFolio(f.contrato.folio ?? "");
+        const kmActual = f.oportunidad.kilometraje;
+        setKm(kmActual === null || kmActual === undefined ? "" : String(kmActual));
         setError(null);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la ficha."));
@@ -134,6 +137,30 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
       onCambio();
     } catch (err) {
       setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo guardar." });
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  /** El kilometraje lo captura el ejecutivo: se guarda al salir del campo (o con Enter) y recalcula la etapa del vehículo. */
+  async function guardarKm() {
+    const anterior = ficha?.oportunidad.kilometraje;
+    const previo = anterior === null || anterior === undefined ? "" : String(anterior);
+    const nuevo = km.replace(/[,\s]/g, "");
+    if (nuevo === previo) return;
+    setEnviando(true);
+    setAviso(null);
+    try {
+      await apiFetch(`/api/admin/sucursales/${sucursalId}/entidad/registros/${oportunidadId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ kilometraje: nuevo }),
+      });
+      setAviso({ tipo: "ok", texto: "Kilometraje guardado." });
+      cargar();
+      onCambio();
+    } catch (err) {
+      setKm(previo);
+      setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo guardar el kilometraje." });
     } finally {
       setEnviando(false);
     }
@@ -247,7 +274,25 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                 {DATOS.filter((c) => c in op).map((c) => (
                   <div key={c}>
                     <dt>{eti[c] ?? c}</dt>
-                    <dd>{formato(op[c])}</dd>
+                    <dd>
+                      {c === "kilometraje" ? (
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className="auto-input ficha-km"
+                          placeholder="Capturar km"
+                          maxLength={9}
+                          value={km}
+                          disabled={enviando}
+                          onChange={(e) => setKm(e.target.value.replace(/[^\d]/g, ""))}
+                          onBlur={guardarKm}
+                          onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                          aria-label="Kilometraje"
+                        />
+                      ) : (
+                        formato(op[c])
+                      )}
+                    </dd>
                   </div>
                 ))}
               </dl>

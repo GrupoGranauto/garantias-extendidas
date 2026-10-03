@@ -27,7 +27,7 @@ const ETIQUETA_DE_ESTADO: Record<string, string> = Object.fromEntries(Object.ent
 const TITULO_CAMPO: Record<string, string> = {
   comentarios: "Comentarios",
   fecha_ultimo_contacto: "Fecha último contacto",
-  fecha_compra: "Fecha compra",
+  fecha_compra: "Fecha de compra de la garantía",
   kilometraje: "Kilometraje",
   ejecutivo: "Ejecutivo",
   estado_contacto: "Estado de contacto",

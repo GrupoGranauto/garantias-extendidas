@@ -43,9 +43,18 @@ type ResumenSync = {
   conflictos: string[];
 };
 
+/** Postgres entrega «2026-10-03 16:30:05.05+00» (sin T y con zona corta); se normaliza a ISO antes de leerla. */
+const aIso = (v: string): string => {
+  if (v.includes("T") || v.endsWith("Z")) return v;
+  const base = v.replace(" ", "T");
+  const zona = base.match(/([+-]\d{2})(:?\d{2})?$/);
+  if (!zona) return base + "Z";
+  return zona[2] ? base : `${base}:00`;
+};
+
 const cuando = (v: string | null) => {
   if (!v) return "—";
-  const d = new Date(v.includes("T") || v.endsWith("Z") ? v : v.replace(" ", "T") + "Z");
+  const d = new Date(aIso(v));
   return Number.isNaN(d.getTime()) ? v : d.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 };
 
@@ -89,7 +98,7 @@ function TarjetaSincronizacion({ sucursalId }: { sucursalId: string }) {
       {estado.alerta && <Alerta tipo="error">{estado.alerta}</Alerta>}
       <p className="rep-ayuda">
         Última sincronización completa: <strong>{cuando(estado.ultima_real)}</strong>
-        {estado.corrio_hoy ? " (hoy)" : ""}. La fuente se refrescó: <strong>{cuando(estado.fuente_actualizada_en)}</strong>. Corre sola cada
+        {estado.corrio_hoy ? " (hoy)" : ""} · La fuente se refrescó: <strong>{cuando(estado.fuente_actualizada_en)}</strong> · Corre sola cada
         día a las 10:00 (hora de Hermosillo) cuando está activada en el servidor.
       </p>
       <div className="ficha-fila">

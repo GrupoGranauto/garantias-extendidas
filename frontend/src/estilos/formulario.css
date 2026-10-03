@@ -2098,3 +2098,5 @@ textarea.auto-input { resize: vertical; }
 .ciclo-columna { max-width: 360px; }
 .ciclo-tabla .auto-input { min-width: 90px; }
 .ciclo-tabla td:first-child .auto-input { min-width: 160px; }
+
+.ficha-datos .ficha-km { max-width: 160px; padding: 4px 8px; }

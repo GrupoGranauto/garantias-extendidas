@@ -462,7 +462,12 @@ export default function CampanasEnvio() {
             {/* ---- Vista previa ---- */}
             <div className="camp-bloque">
               <h3>Vista previa</h3>
-              <p className="rep-ayuda">Lo que pasaría con la configuración guardada. No manda ni cambia nada. {sucia ? "Guarda primero para que refleje tus cambios." : ""}</p>
+              <p className="rep-ayuda">Lo que pasaría con la configuración guardada. No manda ni cambia nada.</p>
+              {(sucia || c.pasos.length === 0) && (
+                <p className="rep-ayuda">
+                  {c.pasos.length === 0 ? "Agrega al menos un mensaje a la campaña para ver la vista previa." : "Guarda la campaña primero para que la vista previa refleje tus cambios."}
+                </p>
+              )}
               <button type="button" className="boton-secundario-claro" onClick={verPrevia} disabled={sucia || c.pasos.length === 0}>
                 Ver qué pasaría
               </button>
