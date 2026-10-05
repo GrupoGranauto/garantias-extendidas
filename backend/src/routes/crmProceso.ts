@@ -22,6 +22,7 @@ import {
   reporteEmbudo,
 } from "../lib/crmProceso.js";
 import { reporteCampanas } from "../lib/campanasReporte.js";
+import { guardarDatosEmision, leerDatosEmision } from "../lib/datosEmision.js";
 
 /**
  * Proceso comercial del CRM en el portal: ficha de oportunidad (contacto, notas, contrato, línea de
@@ -95,6 +96,7 @@ crmProcesoRouter.get("/sucursales/:id/crm/oportunidades/:oid", async (req, res, 
       oportunidad: rows[0],
       etiquetas: Object.fromEntries((meta ?? []).map((c) => [c.nombre_tecnico, c.nombre_visible])),
       contrato: await leerContrato(req.params.id, req.params.oid),
+      emision: await leerDatosEmision(req.params.id, req.params.oid),
       exigir_evidencia_venta: cfg[0]?.exigir_evidencia_venta === true,
       tareas,
       linea_tiempo: await lineaDeTiempo(req.params.id, req.params.oid),
@@ -174,6 +176,37 @@ crmProcesoRouter.put("/sucursales/:id/crm/oportunidades/:oid/contrato", async (r
       return;
     }
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const emisionSchema = z
+  .object({
+    numero_factura: z.union([z.string().max(100), z.null()]),
+    valor_factura: z.union([z.string().max(30), z.number(), z.null()]),
+    numero_motor: z.union([z.string().max(100), z.null()]),
+    estado_circulacion: z.union([z.string().max(200), z.null()]),
+    direccion: z.union([z.string().max(1000), z.null()]),
+  })
+  .partial()
+  .strict();
+
+crmProcesoRouter.put("/sucursales/:id/crm/oportunidades/:oid/datos-emision", async (req, res, next) => {
+  const parsed = emisionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos." });
+    return;
+  }
+  try {
+    if (!(await oportunidadAccesible(req, res))) return;
+    const r = await guardarDatosEmision({ sucursalId: req.params.id, oportunidadId: req.params.oid, entrada: parsed.data, usuarioId: req.usuario?.id });
+    if (!r.ok) {
+      res.status(r.estado).json({ error: r.error });
+      return;
+    }
+    if (r.cambiados.length > 0) avisarCambio(req.params.id, req.params.oid);
+    res.json({ ok: true, emision: r.emision });
   } catch (err) {
     next(err);
   }

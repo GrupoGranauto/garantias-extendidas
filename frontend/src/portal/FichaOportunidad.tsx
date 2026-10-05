@@ -1,15 +1,32 @@
 import { useCallback, useEffect, useState } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
-import { IconoXMarca } from "../componentes/Iconos";
+import { IconoCheck, IconoReloj, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 
 type Entrada = { tipo: string; titulo: string; detalle: Record<string, unknown> | null; autor: string | null; creado_en: string };
 type TareaPendiente = { id: string; tipo: "tarea" | "pregunta"; titulo: string; descripcion: string | null; vence_en: string | null };
+type Emision = {
+  datos: {
+    numero_factura: string | null;
+    valor_factura: number | null;
+    numero_motor: string | null;
+    estado_circulacion: string | null;
+    direccion: string | null;
+  };
+  completitud: {
+    semaforo: "verde" | "ambar" | "rojo";
+    faltan: { campo: string; etiqueta: string; capturable: boolean }[];
+    bloqueos: string[];
+    total: number;
+    completos: number;
+  };
+};
 type Ficha = {
   oportunidad: Record<string, unknown>;
   etiquetas: Record<string, string>;
   contrato: { estado: string; folio: string | null };
+  emision: Emision | null;
   exigir_evidencia_venta: boolean;
   tareas: TareaPendiente[];
   linea_tiempo: Entrada[];
@@ -45,6 +62,20 @@ const ETIQUETA_CONTRATO: Record<string, string> = {
   cobertura_iniciada: "Cobertura iniciada",
   cancelado: "Cancelado",
 };
+
+const SEMAFORO: Record<string, { texto: string; clase: string }> = {
+  verde: { texto: "Listo para emitir", clase: "ficha-semaforo-verde" },
+  ambar: { texto: "Faltan datos", clase: "ficha-semaforo-ambar" },
+  rojo: { texto: "No se puede emitir", clase: "ficha-semaforo-rojo" },
+};
+
+const CAMPOS_EMISION: { campo: "numero_factura" | "valor_factura" | "numero_motor" | "estado_circulacion" | "direccion"; etiqueta: string; ayuda?: string; max: number; ancho?: boolean }[] = [
+  { campo: "numero_factura", etiqueta: "Número de factura", max: 40 },
+  { campo: "valor_factura", etiqueta: "Valor de la factura", ayuda: "Con IVA, en pesos", max: 14 },
+  { campo: "numero_motor", etiqueta: "Número de motor", max: 30 },
+  { campo: "estado_circulacion", etiqueta: "Estado de circulación", max: 60 },
+  { campo: "direccion", etiqueta: "Dirección del cliente", max: 300, ancho: true },
+];
 
 /** Columnas que se muestran como datos, en este orden (solo las que la ficha recibió). */
 const DATOS = [
@@ -82,6 +113,7 @@ function detalleEntrada(e: Entrada): string | null {
   }
   if (e.tipo === "etapa" && d.motivo) return `Motivo: ${String(d.motivo)}`;
   if (e.tipo === "tarea" && d.respuesta) return `Respuesta: ${String(d.respuesta)}`;
+  if (e.tipo === "emision" && Array.isArray(d.campos)) return `Campos: ${d.campos.map(String).join(", ")}`;
   return null;
 }
 
@@ -102,6 +134,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
   const [estadoContrato, setEstadoContrato] = useState("sin_contrato");
   const [folio, setFolio] = useState("");
   const [km, setKm] = useState("");
+  const [emision, setEmision] = useState<Record<string, string>>({});
 
   const base = `/api/admin/sucursales/${sucursalId}/crm/oportunidades/${oportunidadId}`;
 
@@ -113,6 +146,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
         setFolio(f.contrato.folio ?? "");
         const kmActual = f.oportunidad.kilometraje;
         setKm(kmActual === null || kmActual === undefined ? "" : String(kmActual));
+        setEmision(Object.fromEntries(CAMPOS_EMISION.map((c) => [c.campo, f.emision?.datos[c.campo] === null || f.emision?.datos[c.campo] === undefined ? "" : String(f.emision.datos[c.campo])])));
         setError(null);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la ficha."));
@@ -297,6 +331,62 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                 ))}
               </dl>
             </section>
+
+            {ficha.emision && (
+              <section className="ficha-sec">
+                <h3>Datos para emitir</h3>
+                {(() => {
+                  const c = ficha.emision.completitud;
+                  const s = SEMAFORO[c.semaforo];
+                  const faltanAqui = c.faltan.filter((f) => !f.capturable);
+                  return (
+                    <>
+                      <div className={`ficha-semaforo ${s.clase}`} role="status">
+                        {c.semaforo === "verde" ? <IconoCheck className="icono-inline" /> : c.semaforo === "ambar" ? <IconoReloj className="icono-inline" /> : <IconoXMarca className="icono-inline" />}
+                        <strong>{s.texto}</strong>
+                        <span>
+                          {c.completos} de {c.total} datos
+                        </span>
+                      </div>
+                      {c.bloqueos.map((b) => (
+                        <p key={b} className="ficha-ayuda ficha-ayuda-alerta">
+                          {b}
+                        </p>
+                      ))}
+                      {faltanAqui.length > 0 && (
+                        <p className="ficha-ayuda">Faltan en la ficha del cliente: {faltanAqui.map((f) => f.etiqueta.toLowerCase()).join(", ")}.</p>
+                      )}
+                    </>
+                  );
+                })()}
+                <div className="ficha-datos">
+                  {CAMPOS_EMISION.map((c) => (
+                    <label key={c.campo} className={`ficha-campo${c.ancho ? " ficha-campo-ancho" : ""}`}>
+                      <span>{c.etiqueta}</span>
+                      <input
+                        type="text"
+                        className="auto-input"
+                        inputMode={c.campo === "valor_factura" ? "decimal" : undefined}
+                        maxLength={c.max}
+                        placeholder={c.ayuda}
+                        value={emision[c.campo] ?? ""}
+                        disabled={enviando}
+                        onChange={(e) => setEmision((prev) => ({ ...prev, [c.campo]: e.target.value }))}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="boton-secundario-claro"
+                  disabled={enviando}
+                  onClick={() => accion("datos-emision", "PUT", Object.fromEntries(CAMPOS_EMISION.map((c) => [c.campo, (emision[c.campo] ?? "").trim() || null])), "Datos para emitir guardados.")}
+                >
+                  Guardar datos
+                </button>
+                <p className="ficha-ayuda">Son los que pide el portal de Assurant al emitir. La orden de pago le llega al cliente por correo.</p>
+              </section>
+            )}
 
             <section className="ficha-sec">
               <h3>Contrato</h3>

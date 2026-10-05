@@ -1956,7 +1956,17 @@ textarea.auto-input { resize: vertical; }
 .ficha-evento-punto { flex: none; width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: var(--gris-300); }
 .ficha-evento-etapa .ficha-evento-punto { background: var(--marca); }
 .ficha-evento-llamada .ficha-evento-punto, .ficha-evento-whatsapp .ficha-evento-punto { background: #614dff; }
-.ficha-evento-contrato .ficha-evento-punto { background: #21c700; }
+.ficha-evento-contrato .ficha-evento-punto, .ficha-evento-emision .ficha-evento-punto { background: #21c700; }
+.ficha-semaforo { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; font-size: 13px; border-radius: 8px; }
+.ficha-semaforo span { margin-left: auto; font-size: 12px; opacity: 0.85; }
+.ficha-semaforo-verde { color: #05603a; background: #ecfdf3; }
+.ficha-semaforo-ambar { color: #93370d; background: #fffaeb; }
+.ficha-semaforo-rojo { color: #b42318; background: #fef3f2; }
+.ficha-ayuda-alerta { color: #b42318; }
+.ficha-campo { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ficha-campo > span { font-size: 11px; color: var(--gris-500); }
+.ficha-campo-ancho { grid-column: 1 / -1; }
+@media (max-width: 640px) { .ficha-campo-ancho { grid-column: auto; } }
 .celda-enlace { padding: 0; font: inherit; font-weight: 600; text-align: left; color: var(--gris-900); background: transparent; border: 0; cursor: pointer; }
 .celda-enlace:hover { color: var(--marca); text-decoration: underline; }
 
