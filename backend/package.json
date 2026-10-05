@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "verificar:motor": "tsx scripts/verificar-motor.ts",
-    "verificar:webhook": "tsx scripts/verificar-webhook.ts"
+    "verificar:webhook": "tsx scripts/verificar-webhook.ts",
+    "verificar:contrato": "tsx scripts/verificar-contrato.ts"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^7.9.1",

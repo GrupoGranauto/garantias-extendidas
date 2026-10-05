@@ -173,6 +173,8 @@ export async function guardarContrato(p: {
   estado: (typeof ESTADOS_CONTRATO)[number];
   folio?: string | null;
   usuarioId?: string;
+  /** «sistema» cuando el cambio lo hizo una regla automática y no una persona. */
+  origen?: "sistema";
 }): Promise<ResultadoOperacion> {
   const cliente = await getPool().connect();
   try {
@@ -183,7 +185,7 @@ export async function guardarContrato(p: {
       return { ok: false, estado: 404, error: "Registro no encontrado." };
     }
     const autor = await autorValido(cliente, p.usuarioId);
-    const evento = { estado: p.estado, folio: p.folio?.trim() || null, en: new Date().toISOString(), usuario_id: autor };
+    const evento = { estado: p.estado, folio: p.folio?.trim() || null, en: new Date().toISOString(), usuario_id: autor, ...(p.origen ? { origen: p.origen } : {}) };
     await cliente.query(
       `INSERT INTO crm_contratos (sucursal_id, oportunidad_id, estado, folio, eventos)
        VALUES ($1, $2, $3, $4, jsonb_build_array($5::jsonb))
@@ -194,7 +196,13 @@ export async function guardarContrato(p: {
     );
     await cliente.query(
       `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle, usuario_id) VALUES ($1, $2, 'contrato', $3, $4, $5)`,
-      [p.sucursalId, p.oportunidadId, `Contrato: ${p.estado.replace(/_/g, " ")}`, { estado: p.estado, folio: p.folio?.trim() || null }, autor],
+      [
+        p.sucursalId,
+        p.oportunidadId,
+        `Contrato: ${p.estado.replace(/_/g, " ")}${p.origen === "sistema" ? " (automático)" : ""}`,
+        { estado: p.estado, folio: p.folio?.trim() || null, ...(p.origen ? { origen: p.origen } : {}) },
+        autor,
+      ],
     );
     await cliente.query("COMMIT");
     return { ok: true };

@@ -289,6 +289,8 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros/embudo", async (req, r
       busquedas: leerBusquedas(req.query.q),
       zona: sucursal.zona_horaria,
       porPosicion: true,
+      // La tarjeta muestra pocas columnas, pero los filtros (como «Activa», que es de «Estado fuente») y la búsqueda son los de la tabla.
+      camposFiltro: campos,
     };
 
     const visibles = new Set(campos.map((c) => c.nombre_tecnico));

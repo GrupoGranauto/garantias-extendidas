@@ -239,6 +239,11 @@ export type OpcionesListado = {
   filtros?: FiltroColumna[];
   /** Cada texto debe aparecer (sin distinguir mayúsculas) en alguna columna visible. */
   busquedas?: string[];
+  /**
+   * Columnas contra las que se validan los filtros y se busca el texto, cuando son MÁS que las que se piden en el listado
+   * (el embudo pide solo las columnas de la tarjeta, pero filtra y busca igual que la tabla). Por omisión, las pedidas.
+   */
+  camposFiltro?: CampoEntidad[];
   orden?: { columna: string; dir: "asc" | "desc" };
   /** Zona horaria IANA con la que se resuelven "hoy", "esta semana"… Por omisión, Hermosillo. */
   zona?: string;
@@ -251,10 +256,11 @@ const ZONA_POR_OMISION = "America/Hermosillo";
  * campos visibles (o como identificador, en la restricción); los valores siempre
  * van parametrizados, nunca interpolados.
  */
-function construirDonde(
-  campos: CampoEntidad[],
+export function construirDonde(
+  camposPedidos: CampoEntidad[],
   opciones: OpcionesListado,
 ): { sql: string; params: unknown[] } | { error: string } {
+  const campos = opciones.camposFiltro ?? camposPedidos;
   const visibles = new Map(campos.map((c) => [c.nombre_tecnico, c]));
   const params: unknown[] = [];
   const condiciones: string[] = [`"borrado_en" IS NULL`];

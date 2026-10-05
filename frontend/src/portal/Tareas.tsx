@@ -156,7 +156,7 @@ export default function Tareas() {
           return (
             <article key={t.id} className="tarea">
               <div className="tarea-cuerpo">
-                <span className="tarea-tipo">{esPregunta ? "Pregunta" : t.config.llamada === true ? "Llamada" : "Tarea"}</span>
+                <span className="tarea-tipo">{esPregunta ? "Pregunta" : t.config.llamada === true ? "Llamada" : t.config.contrato === true ? "Contrato" : "Tarea"}</span>
                 <strong className="tarea-titulo">{t.titulo}</strong>
                 {t.descripcion && <p className="tarea-desc">{t.descripcion}</p>}
                 <p className="tarea-meta">
