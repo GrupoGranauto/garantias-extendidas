@@ -147,12 +147,13 @@ export async function guardarCampana(sucursalId: string, campana: string, datos:
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
-    const { rows } = await cliente.query(`SELECT id FROM crm_campanas_envio WHERE sucursal_id = $1 AND campana = $2 FOR UPDATE`, [sucursalId, campana]);
+    const { rows } = await cliente.query(`SELECT id, modo FROM crm_campanas_envio WHERE sucursal_id = $1 AND campana = $2 FOR UPDATE`, [sucursalId, campana]);
     if (!rows[0]) {
       await cliente.query("ROLLBACK");
       return { ok: false, error: "La campaña no existe." };
     }
     const configId = rows[0].id as string;
+    const pasaAReal = rows[0].modo === "simulacion" && datos.modo === "real";
 
     // Las plantillas deben ser de esta sucursal.
     const plantillas = [...new Set(datos.pasos.map((p) => p.plantilla_id).filter((x): x is string => Boolean(x)))];
@@ -196,10 +197,46 @@ export async function guardarCampana(sucursalId: string, campana: string, datos:
       }
     }
     const aBorrar = [...ids].filter((id) => !conservados.has(id));
-    if (aBorrar.length > 0) await cliente.query(`DELETE FROM crm_campana_pasos WHERE id = ANY($1::uuid[])`, [aBorrar]);
+    if (aBorrar.length > 0) {
+      // Borrar un paso borra (en cascada) su registro de envíos, y sin registro el planificador volvería a mandar ese mensaje
+      // si el paso se crea de nuevo. Un paso que ya habló con clientes de verdad no se quita.
+      const { rows: conHistorial } = await cliente.query(
+        `SELECT 1 FROM crm_envios WHERE paso_id = ANY($1::uuid[])
+            AND (estado IN ('enviado', 'entregado', 'leido', 'fallido') OR (estado = 'pendiente' AND motivo = 'enviando')) LIMIT 1`,
+        [aBorrar],
+      );
+      if (conHistorial[0]) {
+        await cliente.query("ROLLBACK");
+        return {
+          ok: false,
+          error: "Ese mensaje ya se mandó a clientes y no se puede quitar: se perdería su registro y podría repetirse. Si ya no quieres que salga, apaga la campaña.",
+        };
+      }
+      await cliente.query(`DELETE FROM crm_campana_pasos WHERE id = ANY($1::uuid[])`, [aBorrar]);
+    }
 
-    // Lo pendiente se reprograma con las reglas nuevas (el planificador lo vuelve a crear).
-    await cliente.query(`DELETE FROM crm_envios WHERE estado = 'pendiente' AND paso_id IN (SELECT id FROM crm_campana_pasos WHERE config_id = $1)`, [configId]);
+    // Lo pendiente se reprograma con las reglas nuevas (el planificador lo vuelve a crear). Lo que está saliendo en este
+    // momento («enviando») no se toca: borrarlo dejaría el mensaje sin registro y se volvería a mandar.
+    await cliente.query(
+      `DELETE FROM crm_envios WHERE estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando'
+          AND paso_id IN (SELECT id FROM crm_campana_pasos WHERE config_id = $1)`,
+      [configId],
+    );
+
+    // Al pasar de simulación a real, lo simulado se descarta: cada envío es único por oportunidad y paso, así que un lead que
+    // ya «recibió» la simulación nunca recibiría el mensaje de verdad. El planificador lo vuelve a crear (y si ya pasó su
+    // vigencia, se omite y queda registrado). Lo mismo con sus seguimientos simulados.
+    if (pasaAReal) {
+      await cliente.query(
+        `DELETE FROM crm_envios WHERE estado = 'simulado' AND paso_id IN (SELECT id FROM crm_campana_pasos WHERE config_id = $1)`,
+        [configId],
+      );
+      await cliente.query(
+        `DELETE FROM crm_seguimiento_ejecuciones x USING crm_seguimientos s
+          WHERE x.seguimiento_id = s.id AND s.sucursal_id = $1 AND s.campana = $2 AND x.simulada`,
+        [sucursalId, campana],
+      );
+    }
 
     await cliente.query("COMMIT");
     return { ok: true };
@@ -321,7 +358,11 @@ export async function revisarActivacion(sucursalId: string, campana: string) {
   });
   checks.push({ clave: "variables", ok: ids.length > 0 && sinMapear.length === 0, bloqueante: true, texto: "Las variables de cada plantilla están ligadas a una columna de la base." });
 
-  const { rows: sim } = await pool.query(`SELECT count(*)::int AS n FROM crm_envios WHERE sucursal_id = $1 AND campana = $2 AND estado = 'simulado'`, [sucursalId, campana]);
+  // Al pasar a real lo simulado se descarta: cuenta también lo que ya salió de verdad.
+  const { rows: sim } = await pool.query(
+    `SELECT count(*)::int AS n FROM crm_envios WHERE sucursal_id = $1 AND campana = $2 AND estado IN ('simulado', 'enviado', 'entregado', 'leido')`,
+    [sucursalId, campana],
+  );
   checks.push({ clave: "simulacion", ok: (sim[0]?.n as number) > 0, bloqueante: false, texto: "Ya la probaste en simulación y revisaste a quién le habría llegado." });
   checks.push({
     clave: "gradual",
@@ -775,13 +816,9 @@ async function procesarUnEnvio(listos: Map<string, boolean>): Promise<boolean> {
       // reenvía solo; al encontrarlo así, se da por fallido y se avisa. Es preferible perder un mensaje a mandarlo dos veces.
       await cliente.query(`UPDATE crm_envios SET motivo = 'enviando', programado_para = now() + interval '1 hour' WHERE id = $1`, [e.id]);
       await cliente.query("COMMIT");
+      let r: Awaited<ReturnType<typeof enviarPlantilla>>;
       try {
-        const r = await enviarPlantilla(cliente, e, f, tel!, parametros!);
-        await cliente.query(
-          `UPDATE crm_envios SET estado = 'enviado', motivo = NULL, wa_message_id = $2, enviado_en = now(), intentos = intentos + 1, error = NULL WHERE id = $1`,
-          [e.id, r.waMessageId],
-        );
-        await registrarEnChat(getPool(), e, r.conversacionId, r.waMessageId, r.texto, f.plantilla_nombre);
+        r = await enviarPlantilla(cliente, e, f, tel!, parametros!);
       } catch (err) {
         const mensaje = (err instanceof Error ? err.message : String(err)).slice(0, 300);
         const intentos = (e.intentos as number) + 1;
@@ -801,7 +838,20 @@ async function procesarUnEnvio(listos: Map<string, boolean>): Promise<boolean> {
             [e.id, intentos, mensaje],
           );
         }
+        return true;
       }
+      // Meta ya aceptó el mensaje: desde aquí ningún error puede llevar a un reintento. Si no se logra anotar «enviado», la fila
+      // se queda con la marca «enviando» y el despachador la cierra como fallida sin reenviarla.
+      try {
+        await getPool().query(
+          `UPDATE crm_envios SET estado = 'enviado', motivo = NULL, wa_message_id = $2, enviado_en = now(), intentos = intentos + 1, error = NULL WHERE id = $1`,
+          [e.id, r.waMessageId],
+        );
+      } catch {
+        console.error("[campanas] el mensaje salió pero no se pudo anotar como enviado; queda marcado «enviando» y no se reenvía");
+        return true;
+      }
+      await registrarEnChat(getPool(), e, r.conversacionId, r.waMessageId, r.texto, f.plantilla_nombre);
       return true;
     }
     await cliente.query("COMMIT");

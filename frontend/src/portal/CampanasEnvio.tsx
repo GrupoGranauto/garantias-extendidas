@@ -519,10 +519,10 @@ export default function CampanasEnvio() {
                       <span>Sigue vigente (días)</span>
                       <input
                         type="number"
-                        min={0}
+                        min={1}
                         className="auto-input"
                         value={p.vigencia_dias}
-                        onChange={(e) => cambiarPaso(p.clave, { vigencia_dias: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+                        onChange={(e) => cambiarPaso(p.clave, { vigencia_dias: Math.max(1, Math.floor(Number(e.target.value) || 0)) })}
                       />
                       <small>Si no pudo salir en ese plazo, se descarta en vez de mandarse tarde.</small>
                     </label>

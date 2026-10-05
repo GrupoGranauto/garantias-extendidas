@@ -243,7 +243,11 @@ export async function cambiarFuente(sucursalId: string, fuente: FuenteCampanas, 
               campanas_fuente_cambiada_por = EXCLUDED.campanas_fuente_cambiada_por, actualizado_en = now()`,
       [sucursalId, fuente, usuarioId],
     );
-    const { rowCount } = await cliente.query(`DELETE FROM crm_envios WHERE sucursal_id = $1 AND estado = 'pendiente'`, [sucursalId]);
+    // Lo que está saliendo en este momento («enviando») no se toca: borrarlo dejaría el mensaje sin registro y se volvería a mandar.
+    const { rowCount } = await cliente.query(
+      `DELETE FROM crm_envios WHERE sucursal_id = $1 AND estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando'`,
+      [sucursalId],
+    );
     await cliente.query("COMMIT");
     return { ok: true, fuente, pendientes_cancelados: rowCount ?? 0, calculo };
   } catch (err) {

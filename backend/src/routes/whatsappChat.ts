@@ -7,6 +7,19 @@ import { configPorSucursalId, enviarMensaje } from "../lib/whatsapp.js";
 import { emitirEventoChat, suscribirEventosChat } from "../lib/eventosChat.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
 import { leadsDeContactos, registrarSalienteChat } from "../lib/vinculoWhatsapp.js";
+import { getPool } from "../lib/db.js";
+
+/** El teléfono pidió no recibir más mensajes (escribió «Baja»/STOP): no se le manda ninguna plantilla. */
+async function telefonoDeBaja(sucursalId: string, waId: string): Promise<boolean> {
+  const tel = waId.replace(/\D/g, "").slice(-10);
+  if (tel.length < 10) return false;
+  const { rows } = await getPool().query(
+    `SELECT EXISTS (SELECT 1 FROM crm_contactos WHERE sucursal_id = $1 AND whatsapp_baja
+                     AND right(regexp_replace(coalesce(telefono, ''), '\\D', '', 'g'), 10) = $2) AS v`,
+    [sucursalId, tel],
+  );
+  return rows[0]?.v === true;
+}
 
 /** Cuántas variables numeradas ({{1}}, {{2}}…) tiene el cuerpo de una plantilla. */
 function contarVariablesBody(texto: string): number {
@@ -449,6 +462,10 @@ whatsappChatRouter.post(
       }
       if (!config) {
         res.status(400).json({ error: "Esta sucursal no tiene WhatsApp configurado." });
+        return;
+      }
+      if (await telefonoDeBaja(req.params.id, conversacion.wa_id)) {
+        res.status(400).json({ error: "Este cliente pidió no recibir más mensajes (Baja). No se le pueden mandar plantillas." });
         return;
       }
 

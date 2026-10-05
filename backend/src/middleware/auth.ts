@@ -138,6 +138,41 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 }
 
 /**
+ * Exige al admin de PLATAFORMA (rol admin sin sucursal): usuarios, sucursales, WhatsApp, entidades y sincronización de
+ * cualquier sucursal. Un admin de sucursal no pasa, aunque su rol también sea 'admin'.
+ */
+export async function requireAdminPlataforma(req: Request, res: Response, next: NextFunction) {
+  if (!req.usuario) {
+    res.status(401).json({ error: "Sesión requerida." });
+    return;
+  }
+
+  try {
+    const { data, error } = await getSupabase()
+      .from("usuarios")
+      .select("rol, activo, sucursal_id")
+      .eq("id", req.usuario.id)
+      .single();
+
+    if (error || !data) {
+      res.status(403).json({ error: "Perfil no encontrado." });
+      return;
+    }
+    if (!data.activo) {
+      res.status(403).json({ error: "Cuenta desactivada." });
+      return;
+    }
+    if (data.rol !== "admin" || data.sucursal_id !== null) {
+      res.status(403).json({ error: "Requiere ser administrador de la plataforma." });
+      return;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Exige rol admin, apoyándose en el perfil que ya adjuntó requireAccesoSucursal.
  * Úsalo DESPUÉS de requireAccesoSucursal. Un asesor queda fuera; el admin de la
  * sucursal y el de plataforma pasan. Para acciones que solo el admin maneja

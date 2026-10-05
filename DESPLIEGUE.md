@@ -26,14 +26,23 @@ Variables de entorno del servicio:
 | `DOMINIO_BASE` | `ge.autoinsights.mx` |
 | `SUPABASE_URL` | `https://qpdxtfdwvyntkjvkipki.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | la del dashboard (secreta) |
-| `SUPABASE_DB_URL` | opcional, para consultas directas |
+| `SUPABASE_DB_URL` | necesaria para todo el CRM (conexión directa a Postgres) |
 | `BIGQUERY_PROJECT_ID` | `base-maestra-gn` |
 | `GOOGLE_CREDENTIALS_JSON` | el JSON de la cuenta de servicio, completo, en una línea |
 | `CORS_ORIGIN` | `https://autoinsights.mx` |
 | `NPM_CONFIG_INCLUDE` | `dev` |
 | `NPM_CONFIG_PRODUCTION` | `false` |
 
-Las dos últimas no son decorativas. Con `NODE_ENV=production`, npm omite las
+Interruptores del CRM (todos opcionales; ver `docs/salida-a-produccion.md`):
+
+| Variable | Efecto |
+|---|---|
+| `CRM_MOTOR` | El motor (automatizaciones, reglas, cálculo de campañas, cobertura) arranca solo en producción (`NODE_ENV=production` o dentro de Railway). `off` lo apaga; `on` lo enciende en una copia local, que trabaja sobre la base de producción |
+| `CRM_SYNC_AUTO` | `true` enciende la sincronización diaria con BigQuery (10:00 a 10:59, hora de Hermosillo) |
+| `CRM_ENVIOS` | `on` enciende los envíos de campañas (simulados y reales) y los seguimientos. Un envío real además exige la campaña activa en modo real |
+| `GMAIL_SENDER`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `SMTP_FROM_NAME` | Correo propio (recuperación de contraseña e invitaciones) por la API de Gmail |
+
+`NPM_CONFIG_INCLUDE` y `NPM_CONFIG_PRODUCTION` no son decorativas. Con `NODE_ENV=production`, npm omite las
 devDependencies, y ahí viven `tsc` y `vite`: sin ellas el build muere con
 `sh: 1: tsc: not found` (código 127). Es el error clásico de compilar
 TypeScript en un servidor con esa variable puesta.

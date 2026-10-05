@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, requireAdminPlataforma } from "../middleware/auth.js";
 import { sincronizarCrm, type ResumenSync } from "../lib/sincronizacionCrm.js";
 import { getPool } from "../lib/db.js";
 
 export const adminCrmRouter = Router();
 
 adminCrmRouter.use(requireAuth, requireAdmin);
+adminCrmRouter.all(["/sucursales/:id/crm/sincronizar", "/sucursales/:id/crm/corridas", "/sucursales/:id/crm/provisionar"], requireAdminPlataforma);
 
 const sincronizarSchema = z.object({ aplicar: z.boolean().default(false) });
 

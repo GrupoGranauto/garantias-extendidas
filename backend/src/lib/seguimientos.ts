@@ -197,7 +197,18 @@ export async function guardarSeguimientos(sucursalId: string, lista: (Seguimient
       }
     }
     const aBorrar = existentes.map((r) => r.id as string).filter((id) => !conservados.has(id));
-    if (aBorrar.length > 0) await cliente.query(`DELETE FROM crm_seguimientos WHERE id = ANY($1::uuid[])`, [aBorrar]);
+    if (aBorrar.length > 0) {
+      // Borrarlo borra (en cascada) su historial; si luego se crea otro igual, volvería a actuar sobre los mismos clientes.
+      const { rows: conHistorial } = await cliente.query(
+        `SELECT 1 FROM crm_seguimiento_ejecuciones WHERE seguimiento_id = ANY($1::uuid[]) AND estado = 'hecho' AND NOT simulada LIMIT 1`,
+        [aBorrar],
+      );
+      if (conHistorial[0]) {
+        await cliente.query("ROLLBACK");
+        return { ok: false, error: "Un seguimiento que ya actuó con clientes no se puede borrar (se perdería su historial y podría repetirse). Apágalo en su lugar." };
+      }
+      await cliente.query(`DELETE FROM crm_seguimientos WHERE id = ANY($1::uuid[])`, [aBorrar]);
+    }
 
     await cliente.query("COMMIT");
     return { ok: true };
@@ -212,6 +223,9 @@ export async function guardarSeguimientos(sucursalId: string, lista: (Seguimient
 /* ============================================================
    Planificador
    ============================================================ */
+
+/** Un seguimiento que debió correr hace más de esto ya no corre (seguimiento apagado o motor detenido mucho tiempo). */
+const ATRASO_MAXIMO_HORAS = 24;
 
 /** Programa el seguimiento de cada oportunidad que ya recibió el mensaje de la campaña. */
 export async function planificarSeguimientos(): Promise<number> {
@@ -235,6 +249,10 @@ export async function planificarSeguimientos(): Promise<number> {
        ) r ON r.sucursal_id = s.sucursal_id AND r.campana = s.campana
        JOIN crm_oportunidades o ON o.id = r.oportunidad_id AND o.estado = 'abierta'
       WHERE s.activa AND r.primero IS NOT NULL AND (s.desde = 'primer_envio' OR r.pendientes = 0)
+        -- Un seguimiento que se enciende (o se crea) tarde no actúa sobre todo el historial: solo sobre lo que le toca desde
+        -- hace ${ATRASO_MAXIMO_HORAS} h como máximo.
+        AND CASE s.desde WHEN 'primer_envio' THEN r.primero ELSE r.ultimo END + make_interval(hours => s.espera_horas)
+            >= now() - make_interval(hours => ${ATRASO_MAXIMO_HORAS})
         AND NOT EXISTS (SELECT 1 FROM crm_seguimiento_ejecuciones x WHERE x.seguimiento_id = s.id AND x.oportunidad_id = r.oportunidad_id)
       LIMIT 2000
      ON CONFLICT (seguimiento_id, oportunidad_id) DO NOTHING`,
@@ -302,6 +320,7 @@ async function ejecutarUno(tiposPorSucursal: Map<string, Record<string, TipoCamp
     await cliente.query("BEGIN");
     const { rows } = await cliente.query(
       `SELECT x.id, x.sucursal_id, x.seguimiento_id, x.oportunidad_id, x.referencia_en, x.simulada,
+              x.programado_para < now() - make_interval(hours => ${ATRASO_MAXIMO_HORAS}) AS atrasado,
               s.campana, s.nombre, s.accion, s.condiciones, s.titulo, s.descripcion, s.vence_horas, s.hora::text AS hora, s.plantilla_id
          FROM crm_seguimiento_ejecuciones x JOIN crm_seguimientos s ON s.id = x.seguimiento_id
         WHERE x.estado = 'pendiente' AND x.programado_para <= now() AND s.activa
@@ -311,6 +330,12 @@ async function ejecutarUno(tiposPorSucursal: Map<string, Record<string, TipoCamp
     if (!x) {
       await cliente.query("ROLLBACK");
       return { hubo: false, tarea: null };
+    }
+
+    if (x.atrasado) {
+      await cerrar(cliente, x.id, "omitido", "atrasado");
+      await cliente.query("COMMIT");
+      return { hubo: true, tarea: null };
     }
 
     const datos = await cargarFila(cliente, x as FilaEjecucion);

@@ -148,10 +148,17 @@ app.use(
   },
 );
 
+// El motor (automatizaciones, reglas, cálculo de campañas, cobertura) trabaja sobre la base, y la base es la MISMA para
+// desarrollo y producción: corre solo en el servidor desplegado. En una copia local se enciende a propósito con CRM_MOTOR=on.
+const motorEncendido =
+  process.env.CRM_MOTOR === "on" ||
+  (process.env.CRM_MOTOR !== "off" && (env.NODE_ENV === "production" || Boolean(process.env.RAILWAY_ENVIRONMENT_ID)));
+
 app.listen(env.PORT, () => {
-  if (flags.supabase && process.env.CRM_MOTOR !== "off") iniciarMotorCrm();
+  if (flags.supabase && motorEncendido) iniciarMotorCrm();
   if (flags.supabase && flags.bigquery && process.env.CRM_SYNC_AUTO === "true") iniciarSyncProgramadoCrm();
   console.log(`[backend] http://localhost:${env.PORT}  (${env.NODE_ENV})`);
   console.log(`[backend] sitio: ${fs.existsSync(sitio) ? sitio : "no compilado (modo desarrollo)"}`);
   console.log(`[backend] supabase: ${flags.supabase ? "ok" : "sin configurar"} | bigquery: ${flags.bigquery ? "ok" : "sin configurar"}`);
+  console.log(`[backend] motor CRM: ${flags.supabase && motorEncendido ? "encendido" : "apagado (en local se enciende con CRM_MOTOR=on)"}`);
 });

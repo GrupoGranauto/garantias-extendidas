@@ -37,7 +37,7 @@ const seguimientoSchema = z.object({
   vence_horas: z.number().int().min(0).max(8760).nullable(),
   hora: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
   plantilla_id: z.string().uuid().nullable(),
-  vigencia_horas: z.number().int().min(0).max(1440),
+  vigencia_horas: z.number().int().min(1, "La vigencia debe ser de al menos 1 hora.").max(1440),
 });
 
 const guardarSchema = z.object({ seguimientos: z.array(seguimientoSchema).max(40, "Máximo 40 seguimientos.") });

@@ -3,7 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
 import { getPool } from "../lib/db.js";
-import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, requireAdminPlataforma } from "../middleware/auth.js";
 import { env, flags } from "../config/env.js";
 import { subdominioValido } from "../lib/subdominio.js";
 import { enviarCorreoInvitacion } from "../lib/correo.js";
@@ -12,6 +12,11 @@ export const adminRouter = Router();
 
 // Todo lo de aqui exige sesión con rol admin
 adminRouter.use(requireAuth, requireAdmin);
+// Usuarios y sucursales son de la plataforma: un admin de sucursal no los toca (ni los de otra sucursal).
+adminRouter.all(
+  ["/usuarios", "/usuarios/:id", "/usuarios/:id/activo", "/invitaciones", "/sucursales", "/sucursales/:id", "/sucursales/:id/activa", "/sucursales/:subdominio/diagnostico"],
+  requireAdminPlataforma,
+);
 
 const altaSchema = z
   .object({

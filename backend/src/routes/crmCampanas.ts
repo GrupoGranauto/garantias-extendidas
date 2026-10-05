@@ -31,7 +31,7 @@ const pasoSchema = z.object({
   plantilla_id: z.string().uuid().nullable(),
   dias_despues: z.number().int().min(0).max(365),
   hora: hora.nullable(),
-  vigencia_dias: z.number().int().min(0).max(60),
+  vigencia_dias: z.number().int().min(1, "La vigencia debe ser de al menos 1 día.").max(60),
   solo_sin_respuesta: z.boolean(),
   solo_sin_contacto: z.boolean(),
   etapas: z.array(z.string().trim().min(1).max(80)).max(10),

@@ -80,6 +80,7 @@ const MOTIVOS: Record<string, string> = {
   excluido_etapa: "El vehículo ya no puede contratar (fuera de meses o km)",
   baja: "Pidió la baja",
   no_cumple_condicion: "No cumplió las condiciones",
+  atrasado: "Le tocaba hace más de 24 h (seguimiento apagado o motor detenido)",
 };
 const ACCIONES: Record<Accion, string> = { tarea: "Crear una tarea", llamada: "Agendar una llamada", whatsapp: "Enviar otro WhatsApp" };
 
@@ -420,7 +421,7 @@ export default function Seguimientos() {
                     </label>
                     <label className="auto-campo">
                       <span>Si no puede salir en (horas), se omite</span>
-                      <input type="number" min={0} max={1440} className="auto-input" value={f.vigencia_horas} onChange={(e) => editar(f.clave, { vigencia_horas: entero(e.target.value, 0, 1440) })} />
+                      <input type="number" min={1} max={1440} className="auto-input" value={f.vigencia_horas} onChange={(e) => editar(f.clave, { vigencia_horas: entero(e.target.value, 1, 1440) })} />
                     </label>
                   </>
                 ) : (

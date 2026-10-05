@@ -119,8 +119,9 @@ async function procesarActualizacionPlantilla(valor: ValorPlantilla, cuerpoCrudo
     .eq("sucursal_id", plantilla.sucursal_id)
     .maybeSingle();
 
-  if (config?.app_secret && !firmaValida(cuerpoCrudo, firmaHeader, config.app_secret)) {
-    console.warn(`Firma inválida en webhook de plantilla (sucursal ${plantilla.sucursal_id})`);
+  // Sin secreto de la app no hay forma de saber que el aviso viene de Meta: se ignora.
+  if (!config?.app_secret || !firmaValida(cuerpoCrudo, firmaHeader, config.app_secret)) {
+    console.warn(`Webhook de plantilla sin firma válida (sucursal ${plantilla.sucursal_id}): se ignora`);
     return;
   }
 
@@ -459,8 +460,9 @@ webhookWhatsappRouter.post("/", async (req, res) => {
         continue;
       }
 
-      if (config.app_secret && !firmaValida(cuerpoCrudo, firmaHeader, config.app_secret)) {
-        console.warn(`Firma inválida en webhook de WhatsApp (sucursal ${config.sucursal_id})`);
+      // Sin secreto de la app cualquiera podría inyectar mensajes o forzar bajas: sin firma válida no se procesa nada.
+      if (!config.app_secret || !firmaValida(cuerpoCrudo, firmaHeader, config.app_secret)) {
+        console.warn(`Webhook de WhatsApp sin firma válida (sucursal ${config.sucursal_id}): se ignora`);
         continue;
       }
 

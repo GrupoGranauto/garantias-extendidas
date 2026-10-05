@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
-import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, requireAdminPlataforma } from "../middleware/auth.js";
 import { generarApiKey, descifrarApiKey } from "../lib/apiKeyEntidad.js";
 import {
   crearEsquemaYTabla,
@@ -19,6 +19,17 @@ import { emitirBroadcast } from "../lib/realtime.js";
 export const adminEntidadesRouter = Router();
 
 adminEntidadesRouter.use(requireAuth, requireAdmin);
+// La definición de la base (tabla, campos, panel, llave de ingesta) es de la plataforma.
+adminEntidadesRouter.all(
+  [
+    "/sucursales/:id/entidad",
+    "/sucursales/:id/entidad/ejecutivos",
+    "/sucursales/:id/entidad/campos-editables",
+    "/sucursales/:id/entidad/panel",
+    "/sucursales/:id/entidad/api-key/regenerar",
+  ],
+  requireAdminPlataforma,
+);
 
 const campoSchema = z.object({
   nombre_tecnico: z.string().trim().min(1),

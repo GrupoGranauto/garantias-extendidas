@@ -18,6 +18,15 @@ if (!cfg?.app_secret || !cfg.phone_number_id) {
   console.error("ABORTO: no hay app_secret/phone_number_id para firmar.");
   process.exit(2);
 }
+// La base es la de producción: con envíos, pasos o campañas encendidas la prueba tocaría (y su limpieza borraría) operación real.
+{
+  const antes = (await q(`SELECT (SELECT count(*)::int FROM crm_envios) e, (SELECT count(*)::int FROM crm_campana_pasos) p,
+                                 (SELECT count(*)::int FROM crm_campanas_envio WHERE activa) activas`))[0];
+  if (antes.e !== 0 || antes.p !== 0 || antes.activas !== 0) {
+    console.error("ABORTO: la base no está limpia (hay envíos, pasos o campañas encendidas). No se corre nada.", antes);
+    process.exit(3);
+  }
+}
 
 async function enviarWebhook(msg: Record<string, unknown> | null, estado: Record<string, unknown> | null, firmar = true) {
   const valor = { messaging_product: "whatsapp", metadata: { phone_number_id: cfg.phone_number_id, display_phone_number: "000" }, ...(msg ? { messages: [msg] } : {}), ...(estado ? { statuses: [estado] } : {}) };
@@ -118,7 +127,8 @@ try {
   chk("ERROR INESPERADO", false, e instanceof Error ? (e.stack ?? e.message) : String(e));
 } finally {
   try {
-    await pool.query(`DELETE FROM crm_envios WHERE sucursal_id = $1`, [SUC]);
+    // Solo lo que creó la prueba (y el paso de prueba arrastra en cascada lo suyo).
+    if (idsEnvios.length) await pool.query(`DELETE FROM crm_envios WHERE id = ANY($1::uuid[])`, [idsEnvios]);
     if (pasoId) await pool.query(`DELETE FROM crm_campana_pasos WHERE id = $1`, [pasoId]);
     for (const l of leads) {
       await pool.query(`UPDATE crm_contactos SET whatsapp_baja = $2, whatsapp_baja_en = $3 WHERE id = $1`, [l.contacto_id, l.whatsapp_baja, l.whatsapp_baja_en]);

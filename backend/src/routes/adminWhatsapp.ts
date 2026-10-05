@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
-import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, requireAdminPlataforma } from "../middleware/auth.js";
 
 export const adminWhatsappRouter = Router();
 
 // Todo lo de aquí exige sesión con rol admin
 adminWhatsappRouter.use(requireAuth, requireAdmin);
+// Las credenciales de WhatsApp de una sucursal solo las maneja el admin de la plataforma.
+adminWhatsappRouter.all("/sucursales/:id/whatsapp", requireAdminPlataforma);
 
 const configSchema = z.object({
   app_id: z.string().trim().nullable().optional(),
