@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
-import { IconoXMarca } from "../componentes/Iconos";
+import { IconoChevron, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 
@@ -77,6 +77,7 @@ const ESTADOS: Record<string, string> = { pendiente: "Pendiente", hecho: "Hecho"
 const MOTIVOS: Record<string, string> = {
   ya_no_aplica: "La oportunidad ya no está abierta",
   ya_tiene_ge: "Ya compró garantía",
+  excluido_etapa: "El vehículo ya no puede contratar (fuera de meses o km)",
   baja: "Pidió la baja",
   no_cumple_condicion: "No cumplió las condiciones",
 };
@@ -313,10 +314,10 @@ export default function Seguimientos() {
                 <input type="checkbox" checked={f.activa} onChange={(e) => editar(f.clave, { activa: e.target.checked })} /> Activo
               </label>
               <button type="button" className="auto-quitar" aria-label="Subir" disabled={idx === 0} onClick={() => mover(f.clave, -1)}>
-                ↑
+                <IconoChevron className="icono-inline icono-arriba" />
               </button>
               <button type="button" className="auto-quitar" aria-label="Bajar" disabled={idx === propios.length - 1} onClick={() => mover(f.clave, 1)}>
-                ↓
+                <IconoChevron className="icono-inline" />
               </button>
               <button type="button" className="auto-quitar" aria-label={`Quitar ${f.nombre || "seguimiento"}`} onClick={() => cambiar((x) => x.filter((y) => y.clave !== f.clave))}>
                 <IconoXMarca className="icono-inline" />

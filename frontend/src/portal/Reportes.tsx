@@ -3,6 +3,7 @@ import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
+import ReporteCampanas from "./ReporteCampanas";
 
 type EtapaActual = { id: string; nombre: string; color: string; tipo: string; tiempo_max_horas: number | null; total: number; horas_promedio: number; fuera_sla: number };
 type Reporte = {
@@ -60,6 +61,21 @@ export default function Reportes() {
   const [datos, setDatos] = useState<Reporte | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
+  const [vista, setVista] = useState<"embudo" | "campanas">(() => {
+    try {
+      return sessionStorage.getItem("portal.reportes.vista") === "campanas" ? "campanas" : "embudo";
+    } catch {
+      return "embudo";
+    }
+  });
+  const elegirVista = (v: "embudo" | "campanas") => {
+    setVista(v);
+    try {
+      sessionStorage.setItem("portal.reportes.vista", v);
+    } catch {
+      // sin persistencia; no afecta el funcionamiento
+    }
+  };
 
   useEffect(() => {
     if (desde > hasta) {
@@ -83,6 +99,14 @@ export default function Reportes() {
   return (
     <div className="pagina-formulario">
       <div className="pf-barra">
+        <div className="vista-selector" role="tablist" aria-label="Reporte">
+          <button type="button" role="tab" aria-selected={vista === "embudo"} className={`vista-opcion${vista === "embudo" ? " vista-opcion-activa" : ""}`} onClick={() => elegirVista("embudo")}>
+            Embudo
+          </button>
+          <button type="button" role="tab" aria-selected={vista === "campanas"} className={`vista-opcion${vista === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirVista("campanas")}>
+            Campañas
+          </button>
+        </div>
         <div className="rep-rango">
           <label>
             Desde
@@ -95,10 +119,13 @@ export default function Reportes() {
         </div>
       </div>
 
-      {error && <Alerta tipo="error">{error}</Alerta>}
-      {!datos && !error && <Cargador />}
+      {vista === "campanas" && desde <= hasta && <ReporteCampanas desde={desde} hasta={hasta} />}
+      {vista === "campanas" && desde > hasta && <Alerta tipo="error">La fecha inicial no puede ser posterior a la final.</Alerta>}
 
-      {datos && (
+      {vista === "embudo" && error && <Alerta tipo="error">{error}</Alerta>}
+      {vista === "embudo" && !datos && !error && <Cargador />}
+
+      {vista === "embudo" && datos && (
         <div className={`rep${cargando ? " tabla-cargando" : ""}`}>
           <div className="rep-kpis">
             <div className="rep-kpi">

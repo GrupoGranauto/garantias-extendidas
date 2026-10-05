@@ -24,6 +24,11 @@ export function getPool(): pg.Pool {
     });
     // Sin este manejador, una conexión inactiva que el servidor cierra tumbaría todo el proceso.
     pool.on("error", (err) => console.error(`[db] una conexión inactiva se cerró: ${err.message}`));
+    // Lo mismo para una conexión PRESTADA (en medio de una transacción del motor): el pool solo vigila las inactivas, y un
+    // error sin manejador en un cliente tumba el proceso. Con esto la consulta en curso falla y el motor la reintenta.
+    pool.on("connect", (cliente) => {
+      cliente.on("error", (err) => console.error(`[db] se cerró una conexión en uso: ${err.message}`));
+    });
   }
   return pool;
 }

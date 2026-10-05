@@ -86,7 +86,7 @@ async function asegurarConfigEnvio(cl: Consulta, sucursalId: string, nombres: st
    Cálculo
    ============================================================ */
 
-type Candidata = { id: string; fecha_factura: string | null; fecha_reporte: string | null; etapa_orden: number | null };
+type Candidata = { id: string; fecha_factura: string | null; fecha_reporte: string | null; etapa_orden: number | null; excluido: boolean };
 
 /**
  * Oportunidades a las que se les calcula campaña: abiertas, de un vehículo sin garantía extendida y de un contacto que
@@ -95,7 +95,8 @@ type Candidata = { id: string; fecha_factura: string | null; fecha_reporte: stri
  */
 async function candidatas(cl: Consulta, sucursalId: string): Promise<Candidata[]> {
   const { rows } = await cl.query(
-    `SELECT o.id, v.fecha_factura::text AS fecha_factura, v.fecha_reporte::text AS fecha_reporte, ce.orden AS etapa_orden
+    `SELECT o.id, v.fecha_factura::text AS fecha_factura, v.fecha_reporte::text AS fecha_reporte, ce.orden AS etapa_orden,
+            coalesce(v.etapa_vehiculo_motivo IN ('excluido_km', 'excluido_fecha'), false) AS excluido
        FROM crm_oportunidades o
        JOIN crm_vehiculos v ON v.id = o.vehiculo_id
        JOIN crm_contactos c ON c.id = o.contacto_id
@@ -124,7 +125,7 @@ export async function calcularCampanas(
   let traslapes = 0;
   for (const o of lista) {
     const fechaDe = (d: DefinicionCampana) => (d.columna_fecha === "fecha_reporte" ? o.fecha_reporte : o.fecha_factura);
-    const { elegida, todas } = asignarCampana(defs, (d) => ({ fecha: fechaDe(d), etapaOrden: o.etapa_orden }), hoy);
+    const { elegida, todas } = asignarCampana(defs, (d) => ({ fecha: fechaDe(d), etapaOrden: o.etapa_orden, excluido: o.excluido }), hoy);
     if (todas.length > 1) traslapes++;
     if (elegida) {
       filas.push({

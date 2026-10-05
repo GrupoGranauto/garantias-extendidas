@@ -37,6 +37,11 @@ export type LeadCampana = {
   fecha: string | null;
   /** Orden de la etapa del vehículo del lead, o null si no tiene. */
   etapaOrden: number | null;
+  /**
+   * El vehículo quedó EXCLUIDO por las etapas (pasó del último mes o del último kilometraje permitido): ya no puede
+   * contratar, así que no entra a ninguna campaña aunque la campaña acepte «cualquier etapa».
+   */
+  excluido?: boolean;
 };
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -59,6 +64,7 @@ export function mesAtras(hoy: string, n: number): string {
 /** ¿El lead pertenece hoy a esta campaña? */
 export function perteneceACampana(def: DefinicionCampana, lead: LeadCampana, hoy: string): boolean {
   if (!def.activa) return false;
+  if (lead.excluido) return false;
   if (def.etapa_orden !== null && lead.etapaOrden !== def.etapa_orden) return false;
   if (!lead.fecha || !FECHA.test(lead.fecha)) return false;
 

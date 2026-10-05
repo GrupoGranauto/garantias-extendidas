@@ -267,21 +267,20 @@ async function cargarFila(cl: Consulta, x: FilaEjecucion): Promise<{ fila: Recor
   const fila = rows[0].f as Record<string, unknown>;
   const tel = telefono10(fila.telefono_principal);
 
-  const [resp, contesto] = await Promise.all([
-    tel
-      ? cl.query(
-          `SELECT EXISTS (SELECT 1 FROM whatsapp_mensajes m JOIN whatsapp_conversaciones cv ON cv.id = m.conversacion_id
-                           WHERE cv.sucursal_id = $1 AND right(regexp_replace(cv.wa_id, '\\D', '', 'g'), 10) = $2
-                             AND m.direccion = 'entrante' AND m.creado_en >= $3) AS v`,
-          [x.sucursal_id, tel, x.referencia_en],
-        )
-      : Promise.resolve({ rows: [{ v: false }] }),
-    cl.query(
-      `SELECT EXISTS (SELECT 1 FROM crm_actividades a WHERE a.oportunidad_id = $1 AND a.tipo IN ('llamada', 'whatsapp')
-                       AND a.detalle->>'resultado' = 'contesto' AND a.creado_en >= $2) AS v`,
-      [x.oportunidad_id, x.referencia_en],
-    ),
-  ]);
+  // Misma conexión (la de la transacción): una consulta tras otra.
+  const resp = tel
+    ? await cl.query(
+        `SELECT EXISTS (SELECT 1 FROM whatsapp_mensajes m JOIN whatsapp_conversaciones cv ON cv.id = m.conversacion_id
+                         WHERE cv.sucursal_id = $1 AND right(regexp_replace(cv.wa_id, '\\D', '', 'g'), 10) = $2
+                           AND m.direccion = 'entrante' AND m.creado_en >= $3) AS v`,
+        [x.sucursal_id, tel, x.referencia_en],
+      )
+    : { rows: [{ v: false }] };
+  const contesto = await cl.query(
+    `SELECT EXISTS (SELECT 1 FROM crm_actividades a WHERE a.oportunidad_id = $1 AND a.tipo IN ('llamada', 'whatsapp')
+                     AND a.detalle->>'resultado' = 'contesto' AND a.creado_en >= $2) AS v`,
+    [x.oportunidad_id, x.referencia_en],
+  );
   fila.respondio_whatsapp = resp.rows[0].v === true;
   fila.contesto = contesto.rows[0].v === true;
   return { fila, baja: rows[0].whatsapp_baja === true };
@@ -323,6 +322,12 @@ async function ejecutarUno(tiposPorSucursal: Map<string, Record<string, TipoCamp
     const { fila, baja } = datos;
     if (fila.tiene_ge === true) {
       await cerrar(cliente, x.id, "omitido", "ya_tiene_ge");
+      await cliente.query("COMMIT");
+      return { hubo: true, tarea: null };
+    }
+    // Un vehículo que ya no puede contratar (pasó del último mes o kilometraje de las etapas) no recibe seguimiento.
+    if (fila.etapa_vehiculo_motivo === "excluido_km" || fila.etapa_vehiculo_motivo === "excluido_fecha") {
+      await cerrar(cliente, x.id, "omitido", "excluido_etapa");
       await cliente.query("COMMIT");
       return { hubo: true, tarea: null };
     }

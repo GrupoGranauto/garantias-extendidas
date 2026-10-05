@@ -105,6 +105,22 @@ export function telefono10(valor: unknown): string | null {
   return d.length >= 10 ? d.slice(-10) : null;
 }
 
+/**
+ * Cuántos mensajes puede mandar hoy una campaña. Sin rampa, su tope diario. Con rampa, arranca en `inicial` y sube
+ * `incremento` cada día desde el primer envío real (día 0 = el día de ese primer envío), sin pasar del tope diario.
+ * Antes del primer envío real vale el valor inicial.
+ */
+export function topeEfectivo(p: {
+  maxPorDia: number;
+  rampa: { activa: boolean; inicial: number; incremento: number };
+  /** Días transcurridos desde el primer envío real, o null si todavía no hay ninguno. */
+  diasDesdePrimerEnvio: number | null;
+}): number {
+  if (!p.rampa.activa) return p.maxPorDia;
+  const dias = Math.max(0, p.diasDesdePrimerEnvio ?? 0);
+  return Math.min(p.maxPorDia, p.rampa.inicial + p.rampa.incremento * dias);
+}
+
 export type ContextoEnvio = {
   ahora: AhoraLocal;
   ahoraMs: number;
@@ -116,7 +132,9 @@ export type ContextoEnvio = {
   ventana: Ventana;
   maxPorDia: number;
   enviadosHoy: number;
-  oportunidad: { campana: string | null; campanaEsperada: string; estadoCartera: string; estado: string; etapa: string | null };
+  oportunidad: { campana: string | null; campanaEsperada: string; estadoCartera: string; estado: string; etapa: string | null; agencia: string | null };
+  /** Si no está vacía, la campaña solo manda a leads de estas agencias (piloto). */
+  pilotoAgencias: string[];
   contacto: { baja: boolean; telefono10: string | null; tieneCelular: boolean | null };
   paso: { etapas: string[]; soloSinRespuesta: boolean; soloSinContacto: boolean };
   respondio: boolean;
@@ -163,6 +181,8 @@ export function decidirEnvio(c: ContextoEnvio): Decision {
   const esperar = (motivo: string, hasta: "ventana" | "dia_siguiente" | { minutos: number }): Decision =>
     vencido ? { accion: "omitir", motivo: c.motivoPrevio ?? motivo } : { accion: "posponer", motivo, hasta };
 
+  // Piloto: fuera de las agencias elegidas se espera (si el piloto se amplía a tiempo, sale); al vencer la vigencia se omite.
+  if (c.pilotoAgencias.length > 0 && !c.pilotoAgencias.includes(o.agencia ?? "")) return esperar("fuera_del_piloto", "dia_siguiente");
   if (c.enviadoRecienteOtraCampana) return esperar("descanso_entre_campanas", { minutos: 360 });
   if (!dentroDeVentana(c.ahora, c.ventana)) return esperar("fuera_de_ventana", "ventana");
   if (c.enviadosHoy >= c.maxPorDia) return esperar("tope_diario", "dia_siguiente");
@@ -171,6 +191,46 @@ export function decidirEnvio(c: ContextoEnvio): Decision {
 
   if (vencido) return { accion: "omitir", motivo: "fuera_de_vigencia" };
   return { accion: "enviar" };
+}
+
+/**
+ * Qué hacer con un envío de WhatsApp que falló:
+ *  - "reintentar": el mensaje no salió y el problema es pasajero (límite de velocidad, error del servidor de Meta);
+ *  - "definitivo": Meta lo rechazó y reintentar no cambia nada (número sin WhatsApp, plantilla inexistente, límite de
+ *    mensajes de marketing por persona, parámetros inválidos…);
+ *  - "incierto": no se sabe si salió; se da por fallido para no mandar el mismo mensaje dos veces.
+ */
+export type ResultadoFallo = "reintentar" | "definitivo" | "incierto";
+
+/** Códigos de error de Meta que son de velocidad o saturación pasajera. */
+const CODIGOS_PASAJEROS = new Set([4, 17, 80007, 130429, 131056, 133016]);
+
+export function clasificarErrorMeta(status: number, codigo: number | null): ResultadoFallo {
+  if (codigo !== null && CODIGOS_PASAJEROS.has(codigo)) return "reintentar";
+  if (status === 429 || status >= 500) return "reintentar";
+  return "definitivo";
+}
+
+/** Valor de una variable de plantilla listo para Meta: sin saltos de línea ni tabuladores y con los espacios compactados. */
+export function sanearParametro(valor: string): string {
+  return valor.replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
+}
+
+/**
+ * Lo que «escribió» el cliente en un mensaje entrante, o null si no es algo escrito o elegido (foto, ubicación…).
+ * Un botón de respuesta rápida de una plantilla llega como tipo `button` (su texto es el del botón) y el botón de un mensaje
+ * interactivo como `interactive`; para el cliente es lo mismo que escribir esa palabra, así que «Baja» como botón es una baja.
+ */
+export function textoEntrante(msg: {
+  type: string;
+  text?: { body?: string };
+  button?: { text?: string; payload?: string };
+  interactive?: { button_reply?: { title?: string }; list_reply?: { title?: string } };
+}): string | null {
+  if (msg.type === "text") return msg.text?.body ?? "";
+  if (msg.type === "button") return msg.button?.text ?? msg.button?.payload ?? "";
+  if (msg.type === "interactive") return msg.interactive?.button_reply?.title ?? msg.interactive?.list_reply?.title ?? "";
+  return null;
 }
 
 /** Normaliza un texto entrante para detectar una petición de baja ("BAJA", "Stop.", "no más"). */

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   aMinutos,
   calcularProgramacion,
+  clasificarErrorMeta,
+  sanearParametro,
   decidirEnvio,
   dentroDeVentana,
   diaSemana,
@@ -10,6 +12,8 @@ import {
   siguienteApertura,
   sumarDias,
   telefono10,
+  textoEntrante,
+  topeEfectivo,
   type ContextoEnvio,
   type Ventana,
 } from "../lib/campanasLogica.js";
@@ -85,7 +89,8 @@ const base = (extra: Partial<ContextoEnvio> = {}): ContextoEnvio => ({
   ventana: LUN_A_VIE,
   maxPorDia: 100,
   enviadosHoy: 0,
-  oportunidad: { campana: "5M", campanaEsperada: "5M", estadoCartera: "ACTIVA", estado: "abierta", etapa: "Por contactar" },
+  oportunidad: { campana: "5M", campanaEsperada: "5M", estadoCartera: "ACTIVA", estado: "abierta", etapa: "Por contactar", agencia: "Navojoa" },
+  pilotoAgencias: [],
   contacto: { baja: false, telefono10: "6621234567", tieneCelular: true },
   paso: { etapas: [], soloSinRespuesta: false, soloSinContacto: false },
   respondio: false,
@@ -94,6 +99,109 @@ const base = (extra: Partial<ContextoEnvio> = {}): ContextoEnvio => ({
   whatsappListo: true,
   plantillaDisponible: true,
   ...extra,
+});
+
+describe("clasificarErrorMeta", () => {
+  it("límites de velocidad y fallas del servidor se reintentan", () => {
+    expect(clasificarErrorMeta(429, null)).toBe("reintentar");
+    expect(clasificarErrorMeta(500, null)).toBe("reintentar");
+    expect(clasificarErrorMeta(503, null)).toBe("reintentar");
+    expect(clasificarErrorMeta(400, 130429)).toBe("reintentar"); // exceso de velocidad
+    expect(clasificarErrorMeta(400, 131056)).toBe("reintentar"); // demasiados mensajes al mismo par
+  });
+  it("los rechazos de Meta no se reintentan", () => {
+    expect(clasificarErrorMeta(400, 131026)).toBe("definitivo"); // no se pudo entregar (sin WhatsApp)
+    expect(clasificarErrorMeta(400, 131049)).toBe("definitivo"); // límite de marketing por persona
+    expect(clasificarErrorMeta(400, 132001)).toBe("definitivo"); // la plantilla no existe
+    expect(clasificarErrorMeta(400, 132000)).toBe("definitivo"); // parámetros que no coinciden
+    expect(clasificarErrorMeta(401, 190)).toBe("definitivo"); // token vencido
+    expect(clasificarErrorMeta(404, null)).toBe("definitivo");
+  });
+});
+
+describe("sanearParametro", () => {
+  it("quita saltos de línea y tabuladores y compacta espacios (Meta los rechaza)", () => {
+    expect(sanearParametro("Navojoa\nCentro")).toBe("Navojoa Centro");
+    expect(sanearParametro("  Versa   Advance\t2026 ")).toBe("Versa Advance 2026");
+    expect(sanearParametro("a\r\n\r\nb")).toBe("a b");
+  });
+  it("un valor vacío o solo de espacios queda vacío", () => {
+    expect(sanearParametro("   ")).toBe("");
+    expect(sanearParametro("")).toBe("");
+  });
+});
+
+describe("textoEntrante (botones de respuesta rápida)", () => {
+  it("texto normal", () => {
+    expect(textoEntrante({ type: "text", text: { body: "hola" } })).toBe("hola");
+  });
+  it("botón de una plantilla: usa el texto del botón", () => {
+    expect(textoEntrante({ type: "button", button: { text: "Baja", payload: "x" } })).toBe("Baja");
+    expect(textoEntrante({ type: "button", button: { payload: "baja" } })).toBe("baja");
+  });
+  it("mensaje interactivo: el título del botón o de la lista", () => {
+    expect(textoEntrante({ type: "interactive", interactive: { button_reply: { title: "Quiero informes" } } })).toBe("Quiero informes");
+    expect(textoEntrante({ type: "interactive", interactive: { list_reply: { title: "Otro" } } })).toBe("Otro");
+  });
+  it("fotos, ubicaciones y demás no son texto", () => {
+    expect(textoEntrante({ type: "image" })).toBeNull();
+    expect(textoEntrante({ type: "location" })).toBeNull();
+  });
+  it("el botón «Baja» es una petición de baja y «Quiero informes» no", () => {
+    expect(esPeticionDeBaja(textoEntrante({ type: "button", button: { text: "Baja" } })!)).toBe(true);
+    expect(esPeticionDeBaja(textoEntrante({ type: "button", button: { text: "Quiero informes" } })!)).toBe(false);
+  });
+});
+
+describe("topeEfectivo (rampa)", () => {
+  const rampa = { activa: true, inicial: 20, incremento: 30 };
+  it("sin rampa vale el tope diario", () => {
+    expect(topeEfectivo({ maxPorDia: 100, rampa: { ...rampa, activa: false }, diasDesdePrimerEnvio: 5 })).toBe(100);
+  });
+  it("arranca en el valor inicial, antes y el día del primer envío", () => {
+    expect(topeEfectivo({ maxPorDia: 100, rampa, diasDesdePrimerEnvio: null })).toBe(20);
+    expect(topeEfectivo({ maxPorDia: 100, rampa, diasDesdePrimerEnvio: 0 })).toBe(20);
+  });
+  it("sube cada día y se detiene en el tope diario", () => {
+    expect(topeEfectivo({ maxPorDia: 100, rampa, diasDesdePrimerEnvio: 1 })).toBe(50);
+    expect(topeEfectivo({ maxPorDia: 100, rampa, diasDesdePrimerEnvio: 2 })).toBe(80);
+    expect(topeEfectivo({ maxPorDia: 100, rampa, diasDesdePrimerEnvio: 3 })).toBe(100);
+    expect(topeEfectivo({ maxPorDia: 100, rampa, diasDesdePrimerEnvio: 30 })).toBe(100);
+  });
+  it("el valor inicial nunca pasa del tope diario", () => {
+    expect(topeEfectivo({ maxPorDia: 10, rampa, diasDesdePrimerEnvio: 0 })).toBe(10);
+  });
+  it("un incremento de 0 mantiene el valor inicial", () => {
+    expect(topeEfectivo({ maxPorDia: 100, rampa: { ...rampa, incremento: 0 }, diasDesdePrimerEnvio: 9 })).toBe(20);
+  });
+});
+
+describe("piloto por agencia", () => {
+  it("sin piloto manda a todas las agencias", () => {
+    expect(decidirEnvio(base({ pilotoAgencias: [] }))).toEqual({ accion: "enviar" });
+  });
+  it("con piloto manda solo a las agencias elegidas", () => {
+    expect(decidirEnvio(base({ pilotoAgencias: ["Navojoa"] }))).toEqual({ accion: "enviar" });
+  });
+  it("fuera del piloto espera al día siguiente", () => {
+    expect(decidirEnvio(base({ pilotoAgencias: ["Guaymas"] }))).toEqual({ accion: "posponer", motivo: "fuera_del_piloto", hasta: "dia_siguiente" });
+  });
+  it("una oportunidad sin agencia queda fuera del piloto", () => {
+    const sinAgencia = base({ pilotoAgencias: ["Guaymas"], oportunidad: { ...base().oportunidad, agencia: null } });
+    expect(decidirEnvio(sinAgencia)).toEqual({ accion: "posponer", motivo: "fuera_del_piloto", hasta: "dia_siguiente" });
+  });
+  it("si vence la vigencia sin que se amplíe el piloto, se omite con ese motivo", () => {
+    const vencido = base({
+      pilotoAgencias: ["Guaymas"],
+      motivoPrevio: "fuera_del_piloto",
+      programadoMs: Date.parse("2026-10-01T17:00:00Z"),
+      ahoraMs: Date.parse("2026-10-05T18:00:00Z"),
+    });
+    expect(decidirEnvio(vencido)).toEqual({ accion: "omitir", motivo: "fuera_del_piloto" });
+  });
+  it("las omisiones definitivas pesan más que el piloto (baja, sin teléfono)", () => {
+    expect(decidirEnvio(base({ pilotoAgencias: ["Guaymas"], contacto: { baja: true, telefono10: "6621234567", tieneCelular: true } }))).toEqual({ accion: "omitir", motivo: "baja" });
+  });
 });
 
 describe("decidirEnvio", () => {

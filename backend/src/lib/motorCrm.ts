@@ -371,24 +371,32 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
     const porTiempo = vuelta % Math.max(1, Math.round(60000 / cadaMs)) === 0;
     procesarEventosCrm()
       .then(async (r) => {
-        const extra = porTiempo ? await procesarReglasPorTiempo() : 0;
-        // Conversaciones que escribieron antes de estar en la base: se ligan en cuanto aparece su contacto.
-        if (porTiempo) await vincularConversaciones().catch(() => 0);
-        // Con el paso de los meses los vehículos cambian de etapa solos: se recalcula una vez al día.
-        if (porTiempo) await recalcularSiToca().catch(() => 0);
-        // Las campañas que define el usuario se calculan una vez al día, a la hora que eligió (modo sombra).
-        if (porTiempo) await calcularCampanasSiToca().catch(() => 0);
+        // Cada etapa falla por separado y deja su mensaje: un problema al planificar no debe dejar sin despachar lo que ya
+        // estaba programado, ni esconderse detrás de un aviso genérico.
+        const etapa = async <T>(nombre: string, trabajo: () => Promise<T>, vacio: T): Promise<T> => {
+          try {
+            return await trabajo();
+          } catch (err) {
+            console.error(`[motor-crm] falló «${nombre}»:`, err instanceof Error ? err.message : err);
+            return vacio;
+          }
+        };
+        const extra = porTiempo ? await etapa("reglas por tiempo", procesarReglasPorTiempo, 0) : 0;
+        if (porTiempo) {
+          // Conversaciones que escribieron antes de estar en la base: se ligan en cuanto aparece su contacto.
+          await etapa("vincular conversaciones", vincularConversaciones, 0);
+          // Con el paso de los meses los vehículos cambian de etapa solos: se recalcula una vez al día.
+          await etapa("etapas del vehículo", recalcularSiToca, 0);
+          // Las campañas que define el usuario se calculan una vez al día, a la hora que eligió.
+          await etapa("cálculo de campañas", calcularCampanasSiToca, 0);
+        }
         // Envíos de campaña: solo en el servidor que los tenga encendidos (CRM_ENVIOS=on), nunca en una copia de desarrollo.
         if (porTiempo && process.env.CRM_ENVIOS === "on") {
-          await planificarEnvios();
-          await despacharEnvios();
-          // Seguimientos (tarea, llamada u otro WhatsApp) de lo que ya se mandó. Un fallo aquí no frena los envíos.
-          try {
-            await planificarSeguimientos();
-            await ejecutarSeguimientos();
-          } catch (err) {
-            console.error("[seguimientos] fallo el ciclo", err instanceof Error ? err.message : err);
-          }
+          await etapa("planificar envíos", planificarEnvios, 0);
+          await etapa("despachar envíos", despacharEnvios, 0);
+          // Seguimientos (tarea, llamada u otro WhatsApp) de lo que ya se mandó.
+          await etapa("planificar seguimientos", planificarSeguimientos, 0);
+          await etapa("ejecutar seguimientos", ejecutarSeguimientos, 0);
         }
         if (r.tareas + extra > 0) console.log(`[motor-crm] ${r.tareas + extra} tarea(s) creada(s)`);
       })

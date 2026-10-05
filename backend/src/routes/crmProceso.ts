@@ -21,6 +21,7 @@ import {
   registrarContacto,
   reporteEmbudo,
 } from "../lib/crmProceso.js";
+import { reporteCampanas } from "../lib/campanasReporte.js";
 
 /**
  * Proceso comercial del CRM en el portal: ficha de oportunidad (contacto, notas, contrato, línea de
@@ -202,6 +203,25 @@ crmProcesoRouter.get("/sucursales/:id/crm/reportes/embudo", async (req, res, nex
   }
 });
 
+/** Reporte del ciclo de campañas (mensajes, respuestas, avance y ventas, seguimientos). Un ejecutivo ve solo lo suyo. */
+crmProcesoRouter.get("/sucursales/:id/crm/reportes/campanas", async (req, res, next) => {
+  try {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const hace30 = new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+    const desde = fechaSchema.safeParse(req.query.desde);
+    const hasta = fechaSchema.safeParse(req.query.hasta);
+    const d = desde.success ? desde.data : hace30;
+    const h = hasta.success ? hasta.data : hoy;
+    if (d > h) {
+      res.status(400).json({ error: "La fecha inicial no puede ser posterior a la final." });
+      return;
+    }
+    res.json(await reporteCampanas(req.params.id, d, h, restringidoA(req)));
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ============================================================
    Equipo (admin de la sucursal)
    ============================================================ */
@@ -217,6 +237,8 @@ crmProcesoRouter.get("/sucursales/:id/crm/equipo", requireAdminSucursal, async (
 const equipoSchema = z.object({
   roster: z
     .array(z.string().trim().min(1).max(80))
+    // Sin ejecutivos en la lista la sincronización diaria se detiene (no hay a quién asignar lo nuevo): se exige al menos uno.
+    .min(1, "Deja al menos un ejecutivo para recibir oportunidades nuevas.")
     .max(30)
     .transform((l) => [...new Set(l)])
     .optional(),
@@ -226,7 +248,7 @@ const equipoSchema = z.object({
 crmProcesoRouter.put("/sucursales/:id/crm/equipo", requireAdminSucursal, async (req, res, next) => {
   const parsed = equipoSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Datos inválidos." });
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." });
     return;
   }
   try {

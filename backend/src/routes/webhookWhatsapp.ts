@@ -10,7 +10,7 @@ import {
 import { emitirEventoChat } from "../lib/eventosChat.js";
 import { procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
 import { buscarVinculo, registrarEntrante, type Vinculo } from "../lib/vinculoWhatsapp.js";
-import { esPeticionDeBaja, telefono10 } from "../lib/campanasLogica.js";
+import { esPeticionDeBaja, telefono10, textoEntrante } from "../lib/campanasLogica.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
 
 export const webhookWhatsappRouter = Router();
@@ -71,6 +71,10 @@ type MensajeEntrante = {
   location?: { latitude: number; longitude: number; name?: string; address?: string };
   contacts?: unknown;
   reaction?: { message_id: string; emoji?: string };
+  /** Botón de respuesta rápida de una plantilla. */
+  button?: { text?: string; payload?: string };
+  /** Botón o elemento de lista de un mensaje interactivo. */
+  interactive?: { type?: string; button_reply?: { id?: string; title?: string }; list_reply?: { id?: string; title?: string } };
 };
 
 type EstadoMensaje = {
@@ -273,8 +277,11 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
 
   switch (msg.type) {
     case "text":
+    case "button":
+    case "interactive":
+      // Un botón elegido se ve y se trata como texto (lo que dice el botón).
       fila.tipo = "texto";
-      fila.texto = msg.text?.body ?? "";
+      fila.texto = textoEntrante(msg) ?? "";
       break;
 
     case "image":
@@ -360,7 +367,8 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
   }
 
   // "BAJA", "STOP"…: el contacto pidió no recibir más. Se respeta de inmediato y para siempre.
-  if (msg.type === "text" && esPeticionDeBaja(String(fila.texto ?? ""))) {
+  const escrito = textoEntrante(msg);
+  if (escrito !== null && esPeticionDeBaja(escrito)) {
     const tel = telefono10(msg.from);
     if (tel) {
       try {

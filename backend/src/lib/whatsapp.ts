@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { getSupabase } from "./supabase.js";
 
+import { clasificarErrorMeta, type ResultadoFallo } from "./campanasLogica.js";
+
 const GRAPH_API_VERSION = "v21.0";
 const GRAPH_API = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const BUCKET_MEDIA = "whatsapp-media";
@@ -149,22 +151,44 @@ export async function enviarMensaje(
       : { name: envio.nombreTecnico, language: { code: envio.idioma } };
   }
 
-  const res = await fetch(`${GRAPH_API}/${config.phone_number_id}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.access_token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(cuerpo),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GRAPH_API}/${config.phone_number_id}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(cuerpo),
+      // Sin límite, una petición colgada detendría todo el despachador.
+      signal: AbortSignal.timeout(25_000),
+    });
+  } catch (err) {
+    // Sin respuesta de Meta no se sabe si el mensaje salió. Solo si ni siquiera se pudo conectar es seguro reintentar.
+    const codigo = String((err as { cause?: { code?: string } })?.cause?.code ?? "");
+    const noSalio = ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(codigo);
+    throw new ErrorEnvioMeta(`No se pudo contactar a WhatsApp (${codigo || (err instanceof Error ? err.message : "error de red")})`, null, null, noSalio ? "reintentar" : "incierto");
+  }
 
-  const cuerpoRespuesta = (await res.json()) as { messages?: { id: string }[]; error?: { message: string } };
+  const cuerpoRespuesta = (await res.json().catch(() => ({}))) as { messages?: { id: string }[]; error?: { message?: string; code?: number } };
 
   if (!res.ok || !cuerpoRespuesta.messages?.[0]) {
-    throw new Error(cuerpoRespuesta.error?.message ?? `Envío falló: HTTP ${res.status}`);
+    throw new ErrorEnvioMeta(cuerpoRespuesta.error?.message ?? `Envío falló: HTTP ${res.status}`, res.status, cuerpoRespuesta.error?.code ?? null, clasificarErrorMeta(res.status, cuerpoRespuesta.error?.code ?? null));
   }
 
   return { id: cuerpoRespuesta.messages[0].id };
+}
+
+export class ErrorEnvioMeta extends Error {
+  constructor(
+    mensaje: string,
+    public readonly status: number | null,
+    public readonly codigo: number | null,
+    public readonly resultado: ResultadoFallo,
+  ) {
+    super(mensaje);
+    this.name = "ErrorEnvioMeta";
+  }
 }
 
 /* ============================================================

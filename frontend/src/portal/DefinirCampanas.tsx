@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
-import { IconoXMarca } from "../componentes/Iconos";
+import { IconoChevron, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 
@@ -254,10 +254,10 @@ export default function DefinirCampanas() {
                 <input type="checkbox" checked={f.activa} onChange={(e) => editar(f.clave, { activa: e.target.checked })} /> Activa
               </label>
               <button type="button" className="auto-quitar" aria-label="Subir" disabled={i === 0} onClick={() => mover(i, -1)}>
-                ↑
+                <IconoChevron className="icono-inline icono-arriba" />
               </button>
               <button type="button" className="auto-quitar" aria-label="Bajar" disabled={i === filas.length - 1} onClick={() => mover(i, 1)}>
-                ↓
+                <IconoChevron className="icono-inline" />
               </button>
               <button type="button" className="auto-quitar" aria-label={`Quitar ${f.nombre || "campaña"}`} onClick={() => cambiar((x) => x.filter((y) => y.clave !== f.clave))}>
                 <IconoXMarca className="icono-inline" />

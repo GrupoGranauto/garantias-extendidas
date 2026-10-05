@@ -8,7 +8,9 @@ import { aMinutos } from "../lib/campanasLogica.js";
 import {
   guardarCampana,
   leerCampanas,
+  listarAgencias,
   registroEnvios,
+  revisarActivacion,
   vistaPrevia,
 } from "../lib/campanasEnvio.js";
 
@@ -47,6 +49,10 @@ const campanaSchema = z
     hora_fin: hora,
     max_por_dia: z.number().int().min(1).max(5000),
     dias_entre_mensajes: z.number().int().min(0).max(365),
+    piloto_agencias: z.array(z.string().trim().min(1).max(120)).max(100).transform((a) => [...new Set(a)]),
+    rampa_activa: z.boolean(),
+    rampa_inicial: z.number().int().min(1).max(5000),
+    rampa_incremento: z.number().int().min(0).max(5000),
     pasos: z.array(pasoSchema).max(6, "Una campaña admite hasta 6 mensajes."),
   })
   .superRefine((c, ctx) => {
@@ -99,6 +105,7 @@ crmCampanasRouter.get("/sucursales/:id/crm/campanas", async (req, res, next) => 
       campanas,
       plantillas,
       etapas: etapas.map((e) => e.nombre as string),
+      agencias: await listarAgencias(req.params.id),
       whatsapp_listo: Boolean(whatsapp && whatsapp.activo),
       // Si el servidor no tiene encendido el motor de envíos, nada sale aunque la campaña esté activa.
       motor_encendido: process.env.CRM_ENVIOS === "on",
@@ -146,6 +153,24 @@ crmCampanasRouter.get("/sucursales/:id/crm/campanas/:campana/vista-previa", asyn
   }
   try {
     const r = await vistaPrevia(req.params.id, nombre.data);
+    if (!r) {
+      res.status(404).json({ error: "La campaña no existe." });
+      return;
+    }
+    res.json(r);
+  } catch (err) {
+    next(err);
+  }
+});
+
+crmCampanasRouter.get("/sucursales/:id/crm/campanas/:campana/activacion", async (req, res, next) => {
+  const nombre = nombreCampana.safeParse(req.params.campana);
+  if (!nombre.success) {
+    res.status(400).json({ error: "Campaña inválida." });
+    return;
+  }
+  try {
+    const r = await revisarActivacion(req.params.id, nombre.data);
     if (!r) {
       res.status(404).json({ error: "La campaña no existe." });
       return;

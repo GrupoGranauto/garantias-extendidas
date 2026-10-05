@@ -2122,3 +2122,16 @@ textarea.auto-input { resize: vertical; }
 .seg-ancho { grid-column: span 2; }
 .tarea-llamar { display: inline-block; margin-top: 6px; text-decoration: none; }
 @media (max-width: 700px) { .seg-condicion { grid-template-columns: 1fr 1fr; } .seg-ancho { grid-column: span 1; } }
+
+/* ---------- Activación gradual y reporte de campañas ---------- */
+.camp-grad { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 8px; }
+.camp-grad-nota { display: block; margin-top: 6px; color: var(--texto-suave, #6b7280); }
+.camp-agencias { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; }
+.camp-agencia { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.camp-checks { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 6px; }
+.camp-checks li { display: flex; align-items: center; gap: 8px; }
+.camp-check-icono { width: 14px; height: 14px; flex: none; }
+.camp-check-ok { color: #15803d; }
+.camp-check-mal { color: #b91c1c; }
+.camp-check-aviso { color: #b45309; }
+.icono-arriba { transform: rotate(180deg); }

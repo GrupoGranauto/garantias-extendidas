@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import Interruptor from "../componentes/Interruptor";
-import { IconoXMarca } from "../componentes/Iconos";
+import { IconoCheck, IconoReloj, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 
@@ -28,6 +28,10 @@ type Campana = {
   hora_fin: string;
   max_por_dia: number;
   dias_entre_mensajes: number;
+  piloto_agencias: string[];
+  rampa_activa: boolean;
+  rampa_inicial: number;
+  rampa_incremento: number;
   oportunidades_activas: number;
   inicio: string | null;
   fin: string | null;
@@ -38,8 +42,17 @@ type Respuesta = {
   campanas: Campana[];
   plantillas: Plantilla[];
   etapas: string[];
+  agencias: string[];
   whatsapp_listo: boolean;
   motor_encendido: boolean;
+};
+type Activacion = {
+  checks: { clave: string; ok: boolean; bloqueante: boolean; texto: string }[];
+  bloqueos: number;
+  listo_para_real: boolean;
+  modo: "apagada" | "simulacion" | "real";
+  tope_hoy: number;
+  primer_envio_real: string | null;
 };
 type Borrador = Omit<Campana, "pasos"> & { pasos: Paso[] };
 
@@ -88,6 +101,9 @@ const MOTIVOS: Record<string, string> = {
   campana_apagada: "Campaña apagada",
   ya_no_aplica: "Ya no aplica",
   fuera_de_vigencia: "Pasó su vigencia",
+  fuera_del_piloto: "Fuera del piloto",
+  variable_vacia: "Falta un dato para el mensaje",
+  enviando: "Enviando",
   reintento: "Reintentando",
 };
 const ESTADOS: Record<string, string> = {
@@ -128,6 +144,7 @@ export default function CampanasEnvio() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [previa, setPrevia] = useState<VistaPrevia | null>(null);
   const [registro, setRegistro] = useState<Registro | null>(null);
+  const [activacion, setActivacion] = useState<Activacion | null>(null);
 
   const cargar = useCallback(() => {
     apiFetch<Respuesta>(`${base}/campanas`)
@@ -155,6 +172,15 @@ export default function CampanasEnvio() {
     cargarRegistro();
   }, [cargarRegistro]);
 
+  // La lista de verificación se vuelve a pedir al cambiar de campaña y al guardar (datos cambia con cada carga).
+  useEffect(() => {
+    if (!sel) return;
+    setActivacion(null);
+    apiFetch<Activacion>(`${base}/campanas/${sel}/activacion`)
+      .then(setActivacion)
+      .catch(() => setActivacion(null));
+  }, [base, sel, datos]);
+
   function cambiar(fn: (b: Borrador) => Borrador) {
     if (!sel) return;
     setBorradores((b) => ({ ...b, [sel]: fn(b[sel]) }));
@@ -179,6 +205,10 @@ export default function CampanasEnvio() {
           hora_fin: c.hora_fin,
           max_por_dia: c.max_por_dia,
           dias_entre_mensajes: c.dias_entre_mensajes,
+          piloto_agencias: c.piloto_agencias,
+          rampa_activa: c.rampa_activa,
+          rampa_inicial: c.rampa_inicial,
+          rampa_incremento: c.rampa_incremento,
           pasos: c.pasos.map((p) => ({
             ...(p.id ? { id: p.id } : {}),
             plantilla_id: p.plantilla_id,
@@ -353,6 +383,92 @@ export default function CampanasEnvio() {
                 </label>
               </div>
               <p className="rep-ayuda">Horario de Hermosillo. Fuera de estos días y horas, los mensajes esperan a que abra la ventana.</p>
+            </div>
+
+            {/* ---- Activación gradual ---- */}
+            <div className="camp-bloque">
+              <h3>Activación gradual</h3>
+              <p className="rep-ayuda">
+                Para salir sin sorpresas: prueba en simulación, empieza con una o dos agencias y deja que el tope diario crezca solo. Plan sugerido: 1) simulación uno o dos días; 2) real con
+                piloto y rampa; 3) quitar el piloto cuando todo salga bien.
+              </p>
+
+              <div className="camp-grad">
+                <div>
+                  <strong>Piloto por agencia</strong>
+                  <small className="camp-grad-nota">
+                    {c.piloto_agencias.length === 0 ? "Sin piloto: se manda a todas las agencias." : `Solo se manda a ${c.piloto_agencias.length} agencia(s). Las demás esperan y, si pasa su vigencia, se omiten.`}
+                  </small>
+                  <div className="camp-agencias">
+                    {datos.agencias.map((a) => (
+                      <label key={a} className="camp-agencia">
+                        <input
+                          type="checkbox"
+                          checked={c.piloto_agencias.includes(a)}
+                          onChange={(e) => cambiar((b) => ({ ...b, piloto_agencias: e.target.checked ? [...b.piloto_agencias, a] : b.piloto_agencias.filter((x) => x !== a) }))}
+                        />{" "}
+                        {a}
+                      </label>
+                    ))}
+                    {datos.agencias.length === 0 && <span className="rep-ayuda">Todavía no hay agencias en la cartera.</span>}
+                  </div>
+                  {c.piloto_agencias.length > 0 && (
+                    <button type="button" className="boton-secundario-claro auto-agregar" onClick={() => cambiar((b) => ({ ...b, piloto_agencias: [] }))}>
+                      Quitar el piloto (todas las agencias)
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <strong>Rampa del tope diario</strong>
+                  <Interruptor etiqueta={c.rampa_activa ? "Rampa encendida" : "Rampa apagada"} activo={c.rampa_activa} onChange={(v) => cambiar((b) => ({ ...b, rampa_activa: v }))} />
+                  {c.rampa_activa && (
+                    <div className="auto-cuerpo">
+                      <label className="auto-campo">
+                        <span>El primer día manda hasta</span>
+                        <input type="number" min={1} max={5000} className="auto-input" value={c.rampa_inicial} onChange={(e) => cambiar((b) => ({ ...b, rampa_inicial: Math.min(5000, Math.max(1, Math.floor(Number(e.target.value) || 1))) }))} />
+                      </label>
+                      <label className="auto-campo">
+                        <span>Y cada día suma</span>
+                        <input type="number" min={0} max={5000} className="auto-input" value={c.rampa_incremento} onChange={(e) => cambiar((b) => ({ ...b, rampa_incremento: Math.min(5000, Math.max(0, Math.floor(Number(e.target.value) || 0))) }))} />
+                      </label>
+                    </div>
+                  )}
+                  <small className="camp-grad-nota">
+                    {c.rampa_activa
+                      ? `Sin pasar de ${c.max_por_dia} por día (el máximo de arriba). La rampa cuenta desde el primer envío real: la simulación no la hace avanzar.`
+                      : `Sin rampa: manda hasta ${c.max_por_dia} por día desde el primer día.`}
+                  </small>
+                  {activacion && sucia === false && (
+                    <small className="camp-grad-nota">
+                      <strong>Hoy el tope es {activacion.tope_hoy}.</strong>
+                      {activacion.primer_envio_real ? ` Primer envío real: ${activacion.primer_envio_real}.` : " Todavía no hay envíos reales."}
+                    </small>
+                  )}
+                </div>
+              </div>
+
+              <h4 className="camp-def-sub">Antes de encender en real</h4>
+              {!activacion ? (
+                <p className="rep-ayuda">Revisando…</p>
+              ) : (
+                <>
+                  <ul className="camp-checks">
+                    {activacion.checks.map((k) => (
+                      <li key={k.clave} className={k.ok ? "camp-check-ok" : k.bloqueante ? "camp-check-mal" : "camp-check-aviso"}>
+                        {k.ok ? <IconoCheck className="camp-check-icono" /> : k.bloqueante ? <IconoXMarca className="camp-check-icono" /> : <IconoReloj className="camp-check-icono" />} {k.texto}
+                        {!k.ok && <small>{k.bloqueante ? " Pendiente: sin esto no puede salir." : " Recomendado."}</small>}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="rep-ayuda">
+                    {activacion.listo_para_real
+                      ? "Todo lo indispensable está listo para enviar de verdad."
+                      : `Faltan ${activacion.bloqueos} cosa(s) indispensable(s) antes de poder enviar de verdad.`}
+                    {sucia ? " Guarda la campaña para actualizar esta lista." : ""}
+                  </p>
+                </>
+              )}
             </div>
 
             {/* ---- Mensajes ---- */}

@@ -1,7 +1,7 @@
 import { getPool } from "./db.js";
-import { configPorSucursalId, enviarMensaje } from "./whatsapp.js";
+import { configPorSucursalId, enviarMensaje, ErrorEnvioMeta } from "./whatsapp.js";
 import { emitirEventoChat } from "./eventosChat.js";
-import { horaDelPaso } from "./campanasDefLogica.js";
+import { diasTranscurridos, horaDelPaso } from "./campanasDefLogica.js";
 import { leerDescripciones, leerFuente } from "./campanasDefinidas.js";
 import {
   CAMPANAS_CONOCIDAS,
@@ -9,8 +9,10 @@ import {
   ahoraLocal,
   calcularProgramacion,
   decidirEnvio,
+  sanearParametro,
   siguienteApertura,
   telefono10,
+  topeEfectivo,
   type ContextoEnvio,
   type Decision,
   type Ventana,
@@ -52,6 +54,11 @@ export type ConfigCampana = {
   hora_fin: string;
   max_por_dia: number;
   dias_entre_mensajes: number;
+  /** Activación gradual: agencias del piloto (vacío = todas) y rampa del tope diario. */
+  piloto_agencias: string[];
+  rampa_activa: boolean;
+  rampa_inicial: number;
+  rampa_incremento: number;
   pasos: PasoCampana[];
 };
 
@@ -71,7 +78,8 @@ export async function leerCampanas(sucursalId: string) {
   await asegurarCampanas(sucursalId);
   const pool = getPool();
   const { rows: cfgs } = await pool.query(
-    `SELECT id, campana, activa, modo, dias_semana, hora_inicio::text AS hora_inicio, hora_fin::text AS hora_fin, max_por_dia, dias_entre_mensajes
+    `SELECT id, campana, activa, modo, dias_semana, hora_inicio::text AS hora_inicio, hora_fin::text AS hora_fin, max_por_dia, dias_entre_mensajes,
+            piloto_agencias, rampa_activa, rampa_inicial, rampa_incremento
        FROM crm_campanas_envio WHERE sucursal_id = $1 ORDER BY campana`,
     [sucursalId],
   );
@@ -107,6 +115,10 @@ export async function leerCampanas(sucursalId: string) {
     hora_fin: hhmm(c.hora_fin)!,
     max_por_dia: c.max_por_dia as number,
     dias_entre_mensajes: c.dias_entre_mensajes as number,
+    piloto_agencias: c.piloto_agencias as string[],
+    rampa_activa: c.rampa_activa as boolean,
+    rampa_inicial: c.rampa_inicial as number,
+    rampa_incremento: c.rampa_incremento as number,
     oportunidades_activas: (porCampana.get(c.campana)?.n as number | undefined) ?? 0,
     inicio: (porCampana.get(c.campana)?.inicio as string | undefined) ?? null,
     fin: (porCampana.get(c.campana)?.fin as string | undefined) ?? null,
@@ -154,9 +166,13 @@ export async function guardarCampana(sucursalId: string, campana: string, datos:
 
     await cliente.query(
       `UPDATE crm_campanas_envio
-          SET activa = $2, modo = $3, dias_semana = $4, hora_inicio = $5, hora_fin = $6, max_por_dia = $7, dias_entre_mensajes = $8
+          SET activa = $2, modo = $3, dias_semana = $4, hora_inicio = $5, hora_fin = $6, max_por_dia = $7, dias_entre_mensajes = $8,
+              piloto_agencias = $9, rampa_activa = $10, rampa_inicial = $11, rampa_incremento = $12
         WHERE id = $1`,
-      [configId, datos.activa, datos.modo, datos.dias_semana, datos.hora_inicio, datos.hora_fin, datos.max_por_dia, datos.dias_entre_mensajes],
+      [
+        configId, datos.activa, datos.modo, datos.dias_semana, datos.hora_inicio, datos.hora_fin, datos.max_por_dia, datos.dias_entre_mensajes,
+        datos.piloto_agencias, datos.rampa_activa, datos.rampa_inicial, datos.rampa_incremento,
+      ],
     );
 
     const { rows: existentes } = await cliente.query(`SELECT id FROM crm_campana_pasos WHERE config_id = $1`, [configId]);
@@ -257,6 +273,81 @@ export async function vistaPrevia(sucursalId: string, campana: string) {
     sin_telefono: suma("sin_telefono"),
     alcanzables: suma("alcanzables"),
     pasos,
+  };
+}
+
+/** Las agencias que hay en la cartera, para elegir las del piloto. */
+export async function listarAgencias(sucursalId: string): Promise<string[]> {
+  const { rows } = await getPool().query(
+    `SELECT DISTINCT agencia FROM crm_vehiculos WHERE sucursal_id = $1 AND agencia IS NOT NULL AND btrim(agencia) <> '' ORDER BY 1`,
+    [sucursalId],
+  );
+  return rows.map((r) => r.agencia as string);
+}
+
+export type Revision = { clave: string; ok: boolean; bloqueante: boolean; texto: string };
+
+/**
+ * Lista de verificación antes de encender una campaña de verdad. Lo «bloqueante» impediría que el mensaje salga o saldría mal;
+ * lo demás son recomendaciones para una salida gradual (probar en simulación, empezar con un piloto y una rampa).
+ */
+export async function revisarActivacion(sucursalId: string, campana: string) {
+  const campanas = await leerCampanas(sucursalId);
+  const cfg = campanas.find((c) => c.campana === campana);
+  if (!cfg) return null;
+  const pool = getPool();
+  const checks: Revision[] = [];
+
+  const whatsapp = await configPorSucursalId(sucursalId).catch(() => null);
+  checks.push({ clave: "whatsapp", ok: Boolean(whatsapp && whatsapp.activo), bloqueante: true, texto: "WhatsApp está configurado y activo en esta sucursal." });
+  checks.push({ clave: "motor", ok: process.env.CRM_ENVIOS === "on", bloqueante: true, texto: "El servidor tiene encendido el envío automático (variable CRM_ENVIOS=on)." });
+
+  const conPlantilla = cfg.pasos.filter((p) => p.plantilla_id);
+  checks.push({ clave: "mensajes", ok: conPlantilla.length > 0 && conPlantilla.length === cfg.pasos.length, bloqueante: true, texto: "La campaña tiene al menos un mensaje y todos tienen plantilla." });
+
+  const ids = [...new Set(conPlantilla.map((p) => p.plantilla_id as string))];
+  const { rows: pls } = ids.length
+    ? await pool.query(
+        `SELECT p.id, p.estado, p.componentes->'body'->>'texto' AS cuerpo,
+                (SELECT count(*)::int FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id) AS mapeadas
+           FROM whatsapp_plantillas p WHERE p.sucursal_id = $1 AND p.id = ANY($2::uuid[])`,
+        [sucursalId, ids],
+      )
+    : { rows: [] as { id: string; estado: string; cuerpo: string | null; mapeadas: number }[] };
+  checks.push({ clave: "aprobadas", ok: ids.length > 0 && pls.length === ids.length && pls.every((p) => p.estado === "aprobada"), bloqueante: true, texto: "Todas las plantillas están aprobadas por Meta." });
+  const sinMapear = pls.filter((p) => {
+    const vars = new Set([...String(p.cuerpo ?? "").matchAll(/\{\{(\d+)\}\}/g)].map((m) => m[1])).size;
+    return vars > (p.mapeadas as number);
+  });
+  checks.push({ clave: "variables", ok: ids.length > 0 && sinMapear.length === 0, bloqueante: true, texto: "Las variables de cada plantilla están ligadas a una columna de la base." });
+
+  const { rows: sim } = await pool.query(`SELECT count(*)::int AS n FROM crm_envios WHERE sucursal_id = $1 AND campana = $2 AND estado = 'simulado'`, [sucursalId, campana]);
+  checks.push({ clave: "simulacion", ok: (sim[0]?.n as number) > 0, bloqueante: false, texto: "Ya la probaste en simulación y revisaste a quién le habría llegado." });
+  checks.push({
+    clave: "gradual",
+    ok: cfg.piloto_agencias.length > 0 || cfg.rampa_activa,
+    bloqueante: false,
+    texto: "Tiene un piloto (agencias) o una rampa de tope diario para empezar poco a poco.",
+  });
+
+  const bloqueos = checks.filter((c) => c.bloqueante && !c.ok).length;
+  const { rows: primero } = await pool.query(
+    `SELECT min((enviado_en AT TIME ZONE '${ZONA_ENVIOS}')::date)::text AS d FROM crm_envios
+      WHERE sucursal_id = $1 AND campana = $2 AND estado IN ('enviado', 'entregado', 'leido')`,
+    [sucursalId, campana],
+  );
+  const primerReal = (primero[0]?.d as string | null) ?? null;
+  return {
+    checks,
+    bloqueos,
+    listo_para_real: bloqueos === 0,
+    modo: cfg.activa ? cfg.modo : "apagada",
+    tope_hoy: topeEfectivo({
+      maxPorDia: cfg.max_por_dia,
+      rampa: { activa: cfg.rampa_activa, inicial: cfg.rampa_inicial, incremento: cfg.rampa_incremento },
+      diasDesdePrimerEnvio: primerReal ? diasTranscurridos(primerReal, ahoraLocal().fecha) : null,
+    }),
+    primer_envio_real: primerReal,
   };
 }
 
@@ -367,6 +458,11 @@ type FilaContexto = {
   hora_fin: string;
   max_por_dia: number;
   dias_entre_mensajes: number;
+  piloto_agencias: string[];
+  rampa_activa: boolean;
+  rampa_inicial: number;
+  rampa_incremento: number;
+  agencia: string | null;
   vigencia_dias: number;
   solo_sin_respuesta: boolean;
   solo_sin_contacto: boolean;
@@ -402,6 +498,7 @@ const dd = (v: unknown): string => {
 async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string; oportunidad_id: string; campana: string; programado_para: Date; motivo: string | null }, whatsappListo: boolean) {
   const { rows } = await cl.query(
     `SELECT cfg.activa, cfg.modo, cfg.dias_semana, cfg.hora_inicio::text AS hora_inicio, cfg.hora_fin::text AS hora_fin, cfg.max_por_dia, cfg.dias_entre_mensajes,
+            cfg.piloto_agencias, cfg.rampa_activa, cfg.rampa_inicial, cfg.rampa_incremento, v.agencia,
             -- Un envío viene de un paso de la campaña o de un seguimiento (que no tiene esas condiciones: usa las suyas).
             coalesce(p.vigencia_dias::float8, sg.vigencia_horas / 24.0) AS vigencia_dias,
             coalesce(p.solo_sin_respuesta, false) AS solo_sin_respuesta, coalesce(p.solo_sin_contacto, false) AS solo_sin_contacto,
@@ -413,7 +510,9 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
                  WHEN coalesce(cc.campanas_fuente, 'bigquery') = 'web'
                  THEN (CASE WHEN w.campana IS NULL OR w.campana = e.campana THEN e.campana ELSE w.campana END)
                  ELSE o.campana END AS campana,
-            CASE WHEN e.seguimiento_id IS NOT NULL OR coalesce(cc.campanas_fuente, 'bigquery') = 'web'
+            -- Un vehículo excluido por las etapas (ya no puede contratar) deja de recibir mensajes con CUALQUIER fuente de campañas.
+            CASE WHEN v.etapa_vehiculo_motivo IN ('excluido_km', 'excluido_fecha') THEN 'EXCLUIDO_ETAPA'
+                 WHEN e.seguimiento_id IS NOT NULL OR coalesce(cc.campanas_fuente, 'bigquery') = 'web'
                  THEN (CASE WHEN coalesce(v.tiene_ge, false) THEN 'YA_TIENE_GE' ELSE 'ACTIVA' END)
                  ELSE o.estado_cartera END AS estado_cartera,
             o.estado, coalesce(e.inicio, o.fecha_inicio_campana)::text AS inicio, o.ejecutivo, et.nombre AS etapa,
@@ -439,35 +538,44 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
   const tel = telefono10(f.telefono);
   const ahora = ahoraLocal();
 
-  const [resp, contactado, reciente, hoy] = await Promise.all([
-    tel
-      ? cl.query(
-          `SELECT EXISTS (SELECT 1 FROM whatsapp_mensajes m JOIN whatsapp_conversaciones cv ON cv.id = m.conversacion_id
-                           WHERE cv.sucursal_id = $1 AND right(regexp_replace(cv.wa_id, '\\D', '', 'g'), 10) = $2
-                             AND m.direccion = 'entrante' AND m.creado_en >= $3::date) AS v`,
-          [e.sucursal_id, tel, f.inicio],
-        )
-      : Promise.resolve({ rows: [{ v: false }], rowCount: 1 }),
-    cl.query(
-      `SELECT EXISTS (SELECT 1 FROM crm_actividades a WHERE a.oportunidad_id = $1 AND a.tipo IN ('llamada', 'whatsapp')
-                       AND a.detalle->>'resultado' = 'contesto' AND a.creado_en >= $2::date) AS v`,
-      [e.oportunidad_id, f.inicio],
-    ),
+  // Todas estas consultas van por la MISMA conexión (la de la transacción del envío): se hacen una tras otra.
+  const resp = tel
+    ? await cl.query(
+        `SELECT EXISTS (SELECT 1 FROM whatsapp_mensajes m JOIN whatsapp_conversaciones cv ON cv.id = m.conversacion_id
+                         WHERE cv.sucursal_id = $1 AND right(regexp_replace(cv.wa_id, '\\D', '', 'g'), 10) = $2
+                           AND m.direccion = 'entrante' AND m.creado_en >= $3::date) AS v`,
+        [e.sucursal_id, tel, f.inicio],
+      )
+    : { rows: [{ v: false }], rowCount: 1 };
+  const contactado = await cl.query(
+    `SELECT EXISTS (SELECT 1 FROM crm_actividades a WHERE a.oportunidad_id = $1 AND a.tipo IN ('llamada', 'whatsapp')
+                     AND a.detalle->>'resultado' = 'contesto' AND a.creado_en >= $2::date) AS v`,
+    [e.oportunidad_id, f.inicio],
+  );
+  const reciente =
     f.dias_entre_mensajes > 0
-      ? cl.query(
+      ? await cl.query(
           `SELECT EXISTS (SELECT 1 FROM crm_envios e2 JOIN crm_oportunidades o2 ON o2.id = e2.oportunidad_id
                            WHERE o2.contacto_id = $1 AND e2.campana <> $2 AND e2.estado IN ('enviado', 'entregado', 'leido')
                              AND e2.enviado_en > now() - make_interval(days => $3::int)) AS v`,
           [f.contacto_id, e.campana, f.dias_entre_mensajes],
         )
-      : Promise.resolve({ rows: [{ v: false }], rowCount: 1 }),
-    cl.query(
-      `SELECT count(*)::int AS n FROM crm_envios e3
-        WHERE e3.sucursal_id = $1 AND e3.campana = $2 AND e3.estado IN ('enviado', 'entregado', 'leido', 'simulado')
-          AND (e3.enviado_en AT TIME ZONE '${ZONA_ENVIOS}')::date = $3::date`,
-      [e.sucursal_id, e.campana, ahora.fecha],
-    ),
-  ]);
+      : { rows: [{ v: false }], rowCount: 1 };
+  const hoy = await cl.query(
+    `SELECT count(*)::int AS n FROM crm_envios e3
+      WHERE e3.sucursal_id = $1 AND e3.campana = $2 AND e3.estado IN ('enviado', 'entregado', 'leido', 'simulado')
+        AND (e3.enviado_en AT TIME ZONE '${ZONA_ENVIOS}')::date = $3::date`,
+    [e.sucursal_id, e.campana, ahora.fecha],
+  );
+  // La rampa del tope diario cuenta desde el primer envío REAL (la simulación no la hace avanzar).
+  const primero = f.rampa_activa
+    ? await cl.query(
+        `SELECT min((enviado_en AT TIME ZONE '${ZONA_ENVIOS}')::date)::text AS d FROM crm_envios
+          WHERE sucursal_id = $1 AND campana = $2 AND estado IN ('enviado', 'entregado', 'leido')`,
+        [e.sucursal_id, e.campana],
+      )
+    : { rows: [{ d: null }], rowCount: 1 };
+  const primerReal = (primero.rows[0]?.d as string | null) ?? null;
 
   const ventana: Ventana = { dias_semana: f.dias_semana, hora_inicio: f.hora_inicio, hora_fin: f.hora_fin };
   const plantillaOk = f.plantilla_estado === "aprobada" && !!f.componentes && (!f.componentes.header || f.componentes.header.tipo === "texto");
@@ -480,9 +588,14 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
     vigenciaDias: f.vigencia_dias,
     configActiva: f.activa,
     ventana,
-    maxPorDia: f.max_por_dia,
+    maxPorDia: topeEfectivo({
+      maxPorDia: f.max_por_dia,
+      rampa: { activa: f.rampa_activa, inicial: f.rampa_inicial, incremento: f.rampa_incremento },
+      diasDesdePrimerEnvio: primerReal ? diasTranscurridos(primerReal, ahora.fecha) : null,
+    }),
     enviadosHoy: hoy.rows[0].n as number,
-    oportunidad: { campana: f.campana, campanaEsperada: e.campana, estadoCartera: f.estado_cartera, estado: f.estado, etapa: f.etapa },
+    oportunidad: { campana: f.campana, campanaEsperada: e.campana, estadoCartera: f.estado_cartera, estado: f.estado, etapa: f.etapa, agencia: f.agencia },
+    pilotoAgencias: f.piloto_agencias ?? [],
     contacto: { baja: f.whatsapp_baja, telefono10: tel, tieneCelular: f.tiene_celular },
     paso: { etapas: f.etapas ?? [], soloSinRespuesta: f.solo_sin_respuesta, soloSinContacto: f.solo_sin_contacto },
     respondio: resp.rows[0].v === true,
@@ -494,16 +607,13 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
   return { f, ctx, ventana, tel };
 }
 
-/** Pasa la plantilla por las variables de la oportunidad y la manda; deja el mensaje en el chat. */
-async function enviarPlantilla(
-  cl: Consulta,
-  e: { sucursal_id: string; oportunidad_id: string; campana: string },
-  f: FilaContexto,
-  tel: string,
-): Promise<{ waMessageId: string; texto: string; conversacionId: string }> {
-  const config = await configPorSucursalId(e.sucursal_id);
-  if (!config || !config.activo) throw new Error("WhatsApp no está configurado para esta sucursal.");
+type ParametrosPlantilla = { parametros: string[]; texto: string; /** Alguna variable quedó sin valor: el mensaje saldría a medias. */ incompleto: boolean };
 
+/**
+ * Los valores de las variables de la plantilla para esta oportunidad. Se usa también en la simulación, para que ahí se vea
+ * a quién le faltaría un dato (por ejemplo, un vehículo sin agencia) en lugar de descubrirlo al enviar de verdad.
+ */
+async function armarParametros(cl: Consulta, e: { oportunidad_id: string }, f: FilaContexto): Promise<ParametrosPlantilla> {
   const cuerpo = f.componentes!.body.texto;
   const indices = [...new Set([...cuerpo.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1])))].sort((a, b) => a - b);
 
@@ -515,11 +625,25 @@ async function enviarPlantilla(
     parametros = indices.map((i) => {
       const columna = mapeos.find((m) => m.indice === i)?.columna_tecnica as string | undefined;
       const valor = columna ? fila[columna] : null;
-      return valor === null || valor === undefined ? "" : dd(valor);
+      return valor === null || valor === undefined ? "" : sanearParametro(dd(valor));
     });
   }
   let n = 0;
   const texto = cuerpo.replace(/\{\{\d+\}\}/g, () => parametros[n++] ?? "");
+  return { parametros, texto, incompleto: parametros.some((p) => p === "") };
+}
+
+/** Manda la plantilla (ya con sus variables) por WhatsApp. El mensaje se deja en el chat después, con registrarEnChat. */
+async function enviarPlantilla(
+  cl: Consulta,
+  e: { sucursal_id: string; oportunidad_id: string; campana: string },
+  f: FilaContexto,
+  tel: string,
+  p: ParametrosPlantilla,
+): Promise<{ waMessageId: string; texto: string; conversacionId: string }> {
+  const config = await configPorSucursalId(e.sucursal_id);
+  if (!config || !config.activo) throw new Error("WhatsApp no está configurado para esta sucursal.");
+  const { parametros, texto } = p;
 
   // Conversación existente del teléfono (se conserva su wa_id) o una nueva.
   const { rows: conv } = await cl.query(
@@ -593,6 +717,17 @@ async function procesarUnEnvio(listos: Map<string, boolean>): Promise<boolean> {
       return false;
     }
 
+    // Quedó «enviando» de un intento anterior que no terminó (el proceso se cayó a medias): no se sabe si salió, así que NO
+    // se reenvía.
+    if (e.motivo === "enviando") {
+      await cliente.query(
+        `UPDATE crm_envios SET estado = 'fallido', error = 'Se interrumpió durante el envío; no se reintenta para no mandar el mensaje dos veces.' WHERE id = $1`,
+        [e.id],
+      );
+      await cliente.query("COMMIT");
+      return true;
+    }
+
     if (!listos.has(e.sucursal_id)) {
       const cfg = await configPorSucursalId(e.sucursal_id as string).catch(() => null);
       listos.set(e.sucursal_id, Boolean(cfg && cfg.activo));
@@ -605,6 +740,17 @@ async function procesarUnEnvio(listos: Map<string, boolean>): Promise<boolean> {
     }
     const { f, ctx, ventana, tel } = armado;
     const decision: Decision = decidirEnvio(ctx);
+
+    // Los datos de la plantilla se arman ANTES de enviar o simular: si falta alguno, el mensaje no sale a medias.
+    let parametros: ParametrosPlantilla | null = null;
+    if (decision.accion === "enviar") {
+      parametros = await armarParametros(cliente, e, f);
+      if (parametros.incompleto) {
+        await cliente.query(`UPDATE crm_envios SET estado = 'omitido', motivo = 'variable_vacia' WHERE id = $1`, [e.id]);
+        await cliente.query("COMMIT");
+        return true;
+      }
+    }
 
     if (decision.accion === "omitir") {
       await cliente.query(`UPDATE crm_envios SET estado = 'omitido', motivo = $2 WHERE id = $1`, [e.id, decision.motivo]);
@@ -624,20 +770,30 @@ async function procesarUnEnvio(listos: Map<string, boolean>): Promise<boolean> {
     } else if (f.modo === "simulacion") {
       await cliente.query(`UPDATE crm_envios SET estado = 'simulado', motivo = NULL, enviado_en = now() WHERE id = $1`, [e.id]);
     } else {
-      // Envío real. El estado se confirma ANTES de cualquier otra cosa: si algo falla después, no se repite el mensaje.
+      // Envío real, «a lo sumo una vez». Antes de hablar con Meta se deja DURABLE la marca «enviando» (y el envío sale de la
+      // cola por una hora): si el proceso muere o la confirmación falla después de que Meta aceptó el mensaje, jamás se
+      // reenvía solo; al encontrarlo así, se da por fallido y se avisa. Es preferible perder un mensaje a mandarlo dos veces.
+      await cliente.query(`UPDATE crm_envios SET motivo = 'enviando', programado_para = now() + interval '1 hour' WHERE id = $1`, [e.id]);
+      await cliente.query("COMMIT");
       try {
-        const r = await enviarPlantilla(cliente, e, f, tel!);
+        const r = await enviarPlantilla(cliente, e, f, tel!, parametros!);
         await cliente.query(
           `UPDATE crm_envios SET estado = 'enviado', motivo = NULL, wa_message_id = $2, enviado_en = now(), intentos = intentos + 1, error = NULL WHERE id = $1`,
           [e.id, r.waMessageId],
         );
-        await cliente.query("COMMIT");
         await registrarEnChat(getPool(), e, r.conversacionId, r.waMessageId, r.texto, f.plantilla_nombre);
-        return true;
       } catch (err) {
         const mensaje = (err instanceof Error ? err.message : String(err)).slice(0, 300);
         const intentos = (e.intentos as number) + 1;
-        if (intentos >= MAX_INTENTOS_ENVIO) {
+        // Un rechazo definitivo de Meta, o no saber si salió, no se reintenta.
+        const resultado = err instanceof ErrorEnvioMeta ? err.resultado : "reintentar";
+        if (resultado === "incierto") {
+          await cliente.query(`UPDATE crm_envios SET estado = 'fallido', intentos = $2, error = $3 WHERE id = $1`, [
+            e.id,
+            intentos,
+            `${mensaje} No se confirmó el envío; no se reintenta para no mandar el mensaje dos veces.`.slice(0, 300),
+          ]);
+        } else if (resultado === "definitivo" || intentos >= MAX_INTENTOS_ENVIO) {
           await cliente.query(`UPDATE crm_envios SET estado = 'fallido', intentos = $2, error = $3 WHERE id = $1`, [e.id, intentos, mensaje]);
         } else {
           await cliente.query(
@@ -646,6 +802,7 @@ async function procesarUnEnvio(listos: Map<string, boolean>): Promise<boolean> {
           );
         }
       }
+      return true;
     }
     await cliente.query("COMMIT");
     return true;

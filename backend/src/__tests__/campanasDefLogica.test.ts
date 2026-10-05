@@ -116,6 +116,16 @@ describe("condiciones comunes", () => {
   it("sin pedir etapa, sirve cualquiera", () => {
     expect(perteneceACampana(porMeses("5M", 5), lead("2026-05-10", 2), HOY)).toBe(true);
   });
+  it("un vehículo excluido por las etapas no entra a ninguna campaña, ni siquiera a las de «cualquier etapa»", () => {
+    const excluido = { fecha: "2026-05-10", etapaOrden: null, excluido: true };
+    expect(perteneceACampana(porMeses("5M", 5), excluido, HOY)).toBe(false);
+    expect(perteneceACampana(porDias("48H", 0, 400), { ...excluido, fecha: "2026-10-01" }, HOY)).toBe(false);
+    expect(asignarCampana([porMeses("5M", 5), porDias("A", 0, 400)], () => excluido, HOY).elegida).toBeNull();
+  });
+  it("sin la marca de excluido (etapas sin configurar) todo sigue como antes", () => {
+    expect(perteneceACampana(porMeses("5M", 5), { fecha: "2026-05-10", etapaOrden: null, excluido: false }, HOY)).toBe(true);
+    expect(perteneceACampana(porMeses("5M", 5), { fecha: "2026-05-10", etapaOrden: null }, HOY)).toBe(true);
+  });
 });
 
 describe("asignarCampana", () => {
