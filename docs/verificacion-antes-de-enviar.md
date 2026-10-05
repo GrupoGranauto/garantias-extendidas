@@ -1,12 +1,15 @@
 # Verificación antes de enviar mensajes de verdad
 
-Tres comprobaciones repetibles. Ninguna manda nada a WhatsApp.
+Cuatro comprobaciones repetibles. Ninguna manda nada a WhatsApp.
 
 | Qué | Comando | Qué comprueba |
 |---|---|---|
 | Reglas puras | `npm test` | Reglas de campañas, seguimientos, condiciones, piloto, rampa, errores de Meta, botones del webhook (144 pruebas) |
 | Motor de envíos | `npm run verificar:motor --workspace backend` | El camino completo contra un **Meta simulado**: planificador (fuente BigQuery y web), simulación, envío real, seguimientos (tarea, llamada y otro WhatsApp), rechazo definitivo, error pasajero con reintentos, sin respuesta de Meta, caída a medias, piloto por agencia, rampa del tope diario, baja y vehículo excluido |
 | Webhook de WhatsApp | `npm run verificar:webhook --workspace backend` (con el backend local corriendo) | Mensajes entrantes **firmados**: botón «Quiero informes», botón «Baja», texto «STOP», mensaje interactivo, firma inválida y estados de entrega |
+| Reglas del contrato | `npm run verificar:contrato --workspace backend` | Tareas por tiempo en el estado del contrato (orden de pago, certificado), oportunidad perdida sin tareas, cambio de estado antes de tiempo, idempotencia, regla apagada, cambio de espera y cobertura automática a los 36 meses (27 comprobaciones) |
+
+Corre **una a la vez** y no sobre una operación en vivo. `verificar:contrato` enciende las reglas del contrato unos segundos y las deja como estaban (apagadas) al terminar; como el motor del servidor comparte la base, sus comprobaciones cuentan el resultado final en la base y no lo que devuelve cada llamada.
 
 ## Cómo se protege la prueba del motor
 - Instala un Meta simulado **antes** de cargar el código y se hace una llamada de autoprueba; si no intercepta, aborta sin tocar nada.

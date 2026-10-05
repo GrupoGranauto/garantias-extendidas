@@ -19,7 +19,9 @@ const masUnDia = (f: string) => new Date(Date.parse(`${f}T00:00:00Z`) + 86_400_0
 const hoyLocal = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Hermosillo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 
 const reglasAntes = (await q(`SELECT count(*)::int n FROM crm_reglas_contrato WHERE sucursal_id = $1`, [SUC]))[0].n as number;
-const contratosAntes = (await q(`SELECT count(*)::int n FROM crm_contratos WHERE sucursal_id = $1`, [SUC]))[0].n as number;
+// Estado de las reglas antes de la prueba: la prueba las enciende y cambia su espera, y al terminar hay que dejarlas igual.
+const reglasSnapshot = await q(`SELECT id, activa, espera_horas, estado, titulo, descripcion, vence_horas, nombre, orden FROM crm_reglas_contrato WHERE sucursal_id = $1`, [SUC]);
+const contratosAntes =(await q(`SELECT count(*)::int n FROM crm_contratos WHERE sucursal_id = $1`, [SUC]))[0].n as number;
 if (contratosAntes !== 0 || (await q(`SELECT count(*)::int n FROM crm_tareas WHERE regla_contrato_id IS NOT NULL`))[0].n !== 0) {
   console.error("ABORTO: ya hay contratos o tareas de reglas de contrato (¿operación en vivo?).");
   process.exit(3);
@@ -59,14 +61,18 @@ try {
   await poner(E, "orden_pago", [{ estado: "orden_pago", en: hace(30) }]);
   await pool.query(`UPDATE crm_oportunidades SET estado = 'perdida' WHERE id = $1`, [E]); // una oportunidad perdida no recibe tareas
 
-  const planificadas = await planificarReglasContrato();
+  // El motor del servidor (local o de producción) comparte esta base y puede planificar antes que la prueba: se cuenta lo que
+  // quedó planificado, no lo que devolvió esta llamada.
+  await planificarReglasContrato();
+  const planificadas = (await q(`SELECT count(*)::int n FROM crm_regla_contrato_ejecuciones WHERE oportunidad_id = ANY($1::uuid[])`, [[A, B, C, D]]))[0].n;
   chk("C1 se planifican las reglas de cada contrato (A:2, B:2, C:1, D:2)", planificadas === 7, `planificadas=${planificadas}`);
   chk("C1 la oportunidad perdida no se planifica", (await q(`SELECT count(*)::int n FROM crm_regla_contrato_ejecuciones WHERE oportunidad_id = $1`, [E]))[0].n === 0);
 
   // D cambia de estado ANTES de que se ejecute: su tarea ya no tiene sentido
   await poner(D, "pago_confirmado", [{ estado: "orden_pago", en: hace(21) }, { estado: "pago_confirmado", en: hace(1) }]);
 
-  const hechas = await ejecutarReglasContrato(15_000, 50);
+  await ejecutarReglasContrato(15_000, 50);
+  const hechas = (await q(`SELECT count(*)::int n FROM crm_regla_contrato_ejecuciones WHERE oportunidad_id = ANY($1::uuid[]) AND estado <> 'pendiente'`, [[A, B, C, D]]))[0].n;
   const tA = await tareasDe(A), tB = await tareasDe(B), tC = await tareasDe(C), tD = await tareasDe(D);
   chk("C2 A (21 h): solo la tarea «Liga de pago por vencer»", tA.length === 1 && tA[0].regla === "Liga de pago por vencer", JSON.stringify(tA.map((t) => t.regla)));
   chk("C2 B (26 h): las dos tareas de orden de pago", tB.length === 2, JSON.stringify(tB.map((t) => t.regla)));
@@ -76,7 +82,7 @@ try {
   chk("C2 la tarea tiene fecha de vencimiento y marca de contrato", !!tA[0]?.vence_en && tA[0].config?.contrato === true, JSON.stringify(tA[0]));
   const pendientesA = (await q(`SELECT count(*)::int n FROM crm_regla_contrato_ejecuciones x JOIN crm_reglas_contrato r ON r.id = x.regla_id WHERE x.oportunidad_id = $1 AND x.estado = 'pendiente'`, [A]))[0].n;
   chk("C2 A: la regla de 25 h queda pendiente para más tarde", pendientesA === 1, `pendientes=${pendientesA}`);
-  chk("C2 se resolvieron 6 (3 hechas de A,B(2) ... + C + las 2 de D)", hechas >= 5, `resueltas=${hechas}`);
+  chk("C2 se resolvieron 5 (A:1, B:2, C:1, D:1; la de 25 h de A y de D aún no vence)", hechas === 5, `resueltas=${hechas}`);
 
   // ---------- Idempotencia ----------
   const otraVez = await planificarReglasContrato();
@@ -135,6 +141,14 @@ try {
     await pool.query(`DELETE FROM crm_tareas WHERE regla_contrato_id IS NOT NULL`);
     await pool.query(`DELETE FROM crm_regla_contrato_ejecuciones WHERE sucursal_id = $1`, [SUC]);
     if (reglasAntes === 0) await pool.query(`DELETE FROM crm_reglas_contrato WHERE sucursal_id = $1`, [SUC]);
+    else {
+      for (const r of reglasSnapshot) {
+        await pool.query(
+          `UPDATE crm_reglas_contrato SET activa = $2, espera_horas = $3, estado = $4, titulo = $5, descripcion = $6, vence_horas = $7, nombre = $8, orden = $9 WHERE id = $1`,
+          [r.id, r.activa, r.espera_horas, r.estado, r.titulo, r.descripcion, r.vence_horas, r.nombre, r.orden],
+        );
+      }
+    }
     const oids = soporte.map((s) => s.id);
     if (oids.length) {
       await pool.query(`DELETE FROM crm_actividades WHERE creado_en >= $1 AND oportunidad_id = ANY($2::uuid[])`, [t0, oids]);
