@@ -20,6 +20,7 @@ import { crmCicloRouter } from "./routes/crmCiclo.js";
 import { crmCampanasDefRouter } from "./routes/crmCampanasDef.js";
 import { crmSeguimientosRouter } from "./routes/crmSeguimientos.js";
 import { crmReglasContratoRouter } from "./routes/crmReglasContrato.js";
+import { crmProgramaRouter } from "./routes/crmPrograma.js";
 import { iniciarMotorCrm } from "./lib/motorCrm.js";
 import { iniciarSyncProgramadoCrm } from "./lib/sincronizacionCrm.js";
 import { entidadDatosRouter } from "./routes/entidadDatos.js";
@@ -91,6 +92,7 @@ app.use("/api/admin", crmCicloRouter);
 app.use("/api/admin", crmCampanasDefRouter);
 app.use("/api/admin", crmSeguimientosRouter);
 app.use("/api/admin", crmReglasContratoRouter);
+app.use("/api/admin", crmProgramaRouter);
 // Routers solo-admin (adminRouter gatea con requireAdmin todo lo que le llegue).
 app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);

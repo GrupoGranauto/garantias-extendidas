@@ -9,6 +9,7 @@ import EtapasVehiculo from "./EtapasVehiculo";
 import DefinirCampanas from "./DefinirCampanas";
 import Seguimientos from "./Seguimientos";
 import ReglasContrato from "./ReglasContrato";
+import ProgramaGe from "./ProgramaGe";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -94,11 +95,13 @@ export default function Automatizaciones() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
   // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
-  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir" | "seguimientos" | "contrato";
+  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir" | "seguimientos" | "contrato" | "programa";
   const [apartado, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" || guardado === "seguimientos" || guardado === "contrato" ? guardado : "etapas";
+      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" || guardado === "seguimientos" || guardado === "contrato" || guardado === "programa"
+        ? guardado
+        : "etapas";
     } catch {
       return "etapas";
     }
@@ -130,6 +133,9 @@ export default function Automatizaciones() {
       </button>
       <button type="button" role="tab" aria-selected={apartado === "contrato"} className={`vista-opcion${apartado === "contrato" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("contrato")}>
         Contrato
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "programa"} className={`vista-opcion${apartado === "programa" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("programa")}>
+        Programa
       </button>
     </div>
   );
@@ -205,6 +211,15 @@ export default function Automatizaciones() {
     } finally {
       setGuardando(false);
     }
+  }
+
+  if (apartado === "programa") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <ProgramaGe />
+      </div>
+    );
   }
 
   if (apartado === "contrato") {

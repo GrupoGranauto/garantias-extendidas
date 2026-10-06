@@ -181,13 +181,25 @@ crmProcesoRouter.put("/sucursales/:id/crm/oportunidades/:oid/contrato", async (r
   }
 });
 
+const textoONulo = (max: number) => z.union([z.string().max(max), z.null()]);
+const numeroONulo = z.union([z.string().max(10), z.number(), z.null()]);
 const emisionSchema = z
   .object({
-    numero_factura: z.union([z.string().max(100), z.null()]),
+    numero_factura: textoONulo(100),
     valor_factura: z.union([z.string().max(30), z.number(), z.null()]),
-    numero_motor: z.union([z.string().max(100), z.null()]),
-    estado_circulacion: z.union([z.string().max(200), z.null()]),
-    direccion: z.union([z.string().max(1000), z.null()]),
+    numero_motor: textoONulo(100),
+    estado_circulacion: textoONulo(200),
+    dir_cp: textoONulo(20),
+    dir_estado: textoONulo(200),
+    dir_municipio: textoONulo(300),
+    dir_colonia: textoONulo(300),
+    dir_calle: textoONulo(400),
+    dir_num_ext: textoONulo(60),
+    dir_num_int: textoONulo(60),
+    plazo_meses: numeroONulo,
+    metodo_pago: textoONulo(20),
+    msi_meses: numeroONulo,
+    vendedor: textoONulo(300),
   })
   .partial()
   .strict();

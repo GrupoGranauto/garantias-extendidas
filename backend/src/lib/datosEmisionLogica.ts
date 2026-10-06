@@ -1,17 +1,20 @@
-import { MESES_GARANTIA_ORIGINAL, sumarMesesFecha } from "./contratoLogica.js";
+import { sumarMesesFecha } from "./contratoLogica.js";
+import { bandaDeKm, fechasCobertura, kmMaximo, nombreProducto, type ProgramaGe } from "./programaGeLogica.js";
 
 /**
  * Datos para emitir la garantía extendida en el portal de Assurant. Funciones puras, sin base de datos.
  *
- * El portal pide: VIN, modelo, año, versión, fecha de factura original, kilometraje, número y valor de la factura,
- * número de motor, estado de circulación y dirección del cliente; la orden de pago le llega al cliente por correo.
- * El vehículo debe estar dentro de la garantía original (36 meses) y tener como máximo 59,000 km.
+ * El portal pide: datos del vehículo (VIN, modelo, año, versión, fecha de factura original, km, número y valor de la
+ * factura, número de motor, estado de circulación), información del programa (producto = banda de km + plazo, método de
+ * pago, vendedor) y la dirección del cliente por partes. La orden de pago le llega al cliente por correo.
+ * Las reglas (meses de garantía original, km máximo, plazos, MSI, listas) vienen del programa de la sucursal.
  */
 
-export const KM_MAXIMO_PARA_EMITIR = 59000;
-
-/** Los cinco datos que captura el ejecutivo (el resto ya viene de la maestra). */
-export const CAMPOS_EMISION = ["numero_factura", "valor_factura", "numero_motor", "estado_circulacion", "direccion"] as const;
+/** Lo que captura el ejecutivo (el resto ya viene de la maestra). */
+export const CAMPOS_VEHICULO = ["numero_factura", "valor_factura", "numero_motor", "estado_circulacion"] as const;
+export const CAMPOS_DIRECCION = ["dir_cp", "dir_estado", "dir_municipio", "dir_colonia", "dir_calle", "dir_num_ext", "dir_num_int"] as const;
+export const CAMPOS_PRODUCTO = ["plazo_meses", "metodo_pago", "msi_meses", "vendedor"] as const;
+export const CAMPOS_EMISION = [...CAMPOS_VEHICULO, ...CAMPOS_DIRECCION, ...CAMPOS_PRODUCTO] as const;
 export type CampoEmision = (typeof CAMPOS_EMISION)[number];
 
 export const ETIQUETA_EMISION: Record<string, string> = {
@@ -26,25 +29,54 @@ export const ETIQUETA_EMISION: Record<string, string> = {
   valor_factura: "Valor de la factura",
   numero_motor: "Número de motor",
   estado_circulacion: "Estado de circulación",
-  direccion: "Dirección del cliente",
+  dir_cp: "Código postal",
+  dir_estado: "Estado",
+  dir_municipio: "Municipio",
+  dir_colonia: "Colonia",
+  dir_calle: "Calle",
+  dir_num_ext: "Número exterior",
+  dir_num_int: "Número interior",
+  plazo_meses: "Plazo",
+  metodo_pago: "Método de pago",
+  msi_meses: "Meses sin intereses",
+  vendedor: "Vendedor",
 };
 
-export type DatosEmisionEntrada = Partial<Record<CampoEmision, string | number | null>>;
+export type MetodoPago = "contado" | "financiado";
+
 export type DatosEmision = {
   numero_factura: string | null;
   valor_factura: number | null;
   numero_motor: string | null;
   estado_circulacion: string | null;
-  direccion: string | null;
+  dir_cp: string | null;
+  dir_estado: string | null;
+  dir_municipio: string | null;
+  dir_colonia: string | null;
+  dir_calle: string | null;
+  dir_num_ext: string | null;
+  dir_num_int: string | null;
+  plazo_meses: number | null;
+  metodo_pago: MetodoPago | null;
+  msi_meses: number | null;
+  vendedor: string | null;
 };
 
+export type DatosEmisionEntrada = Partial<Record<CampoEmision, string | number | null>>;
+
 const texto = (v: unknown): string => (v === null || v === undefined ? "" : String(v).replace(/\s+/g, " ").trim());
+const enLista = (v: string, lista: string[]) => lista.find((x) => x.toLowerCase() === v.toLowerCase()) ?? null;
+const meses = (n: number) => `${n} ${n === 1 ? "mes" : "meses"}`;
 
 /**
- * Limpia y valida lo que captura el ejecutivo. Solo se revisan los campos que vienen en la entrada; un texto vacío
- * borra el dato (null). Devuelve los campos listos para guardar o el texto del error.
+ * Limpia y valida lo que captura el ejecutivo, con las listas y reglas del programa. Solo se revisan los campos que vienen
+ * en la entrada; un texto vacío borra el dato (null). `actual` es lo guardado, para revisar MSI contra el método de pago.
  */
-export function normalizarDatosEmision(entrada: DatosEmisionEntrada): { datos: Partial<DatosEmision> } | { error: string } {
+export function normalizarDatosEmision(
+  entrada: DatosEmisionEntrada,
+  programa: ProgramaGe,
+  actual: Pick<DatosEmision, "metodo_pago"> = { metodo_pago: null },
+): { datos: Partial<DatosEmision> } | { error: string } {
   const datos: Partial<DatosEmision> = {};
 
   if ("numero_factura" in entrada) {
@@ -72,16 +104,69 @@ export function normalizarDatosEmision(entrada: DatosEmisionEntrada): { datos: P
     datos.numero_motor = v ? v.toUpperCase() : null;
   }
 
-  if ("estado_circulacion" in entrada) {
-    const v = texto(entrada.estado_circulacion);
-    if (v.length > 60) return { error: "El estado de circulación no puede pasar de 60 caracteres." };
-    datos.estado_circulacion = v || null;
+  // Estado de circulación y estado de la dirección: de la lista del programa (si tiene); si no, texto libre.
+  for (const campo of ["estado_circulacion", "dir_estado"] as const) {
+    if (!(campo in entrada)) continue;
+    const v = texto(entrada[campo]);
+    if (v.length > 60) return { error: `${ETIQUETA_EMISION[campo]}: máximo 60 caracteres.` };
+    if (v && programa.estados_circulacion.length > 0) {
+      const valido = enLista(v, programa.estados_circulacion);
+      if (!valido) return { error: `${ETIQUETA_EMISION[campo]}: elige uno de la lista.` };
+      datos[campo] = valido;
+    } else datos[campo] = v || null;
   }
 
-  if ("direccion" in entrada) {
-    const v = texto(entrada.direccion);
-    if (v.length > 300) return { error: "La dirección no puede pasar de 300 caracteres." };
-    datos.direccion = v || null;
+  if ("dir_cp" in entrada) {
+    const v = texto(entrada.dir_cp).replace(/\s/g, "");
+    if (v && !/^\d{5}$/.test(v)) return { error: "El código postal debe tener 5 dígitos." };
+    datos.dir_cp = v || null;
+  }
+  const libres: [keyof DatosEmision, number][] = [["dir_municipio", 120], ["dir_colonia", 120], ["dir_calle", 160], ["dir_num_ext", 20], ["dir_num_int", 20]];
+  for (const [campo, max] of libres) {
+    if (!(campo in entrada)) continue;
+    const v = texto(entrada[campo as CampoEmision]);
+    if (v.length > max) return { error: `${ETIQUETA_EMISION[campo]}: máximo ${max} caracteres.` };
+    (datos as Record<string, unknown>)[campo] = v || null;
+  }
+
+  if ("plazo_meses" in entrada) {
+    const v = texto(entrada.plazo_meses);
+    if (!v) datos.plazo_meses = null;
+    else {
+      const n = Number(v);
+      if (!programa.plazos_meses.includes(n)) return { error: `El plazo debe ser uno de los del programa: ${programa.plazos_meses.map(meses).join(", ")}.` };
+      datos.plazo_meses = n;
+    }
+  }
+
+  if ("metodo_pago" in entrada) {
+    const v = texto(entrada.metodo_pago).toLowerCase();
+    if (v && v !== "contado" && v !== "financiado") return { error: "El método de pago es «Contado» o «Financiado»." };
+    datos.metodo_pago = (v || null) as MetodoPago | null;
+  }
+
+  const metodo = "metodo_pago" in datos ? datos.metodo_pago : actual.metodo_pago;
+  if ("msi_meses" in entrada) {
+    const v = texto(entrada.msi_meses);
+    if (!v) datos.msi_meses = null;
+    else {
+      const n = Number(v);
+      if (metodo !== "financiado") return { error: "Los meses sin intereses solo aplican con pago «Financiado»." };
+      if (!programa.msi_meses.includes(n)) return { error: `Los meses sin intereses deben ser ${programa.msi_meses.join(", ")}.` };
+      datos.msi_meses = n;
+    }
+  }
+  // «Contado» no tiene meses sin intereses.
+  if (metodo !== "financiado" && ("metodo_pago" in datos || "msi_meses" in datos)) datos.msi_meses = null;
+
+  if ("vendedor" in entrada) {
+    const v = texto(entrada.vendedor);
+    if (v.length > 120) return { error: "El vendedor no puede pasar de 120 caracteres." };
+    if (v && programa.vendedores.length > 0) {
+      const valido = enLista(v, programa.vendedores);
+      if (!valido) return { error: "Elige un vendedor de la lista." };
+      datos.vendedor = valido;
+    } else datos.vendedor = v || null;
   }
 
   return { datos };
@@ -96,9 +181,12 @@ export type BaseEmision = DatosEmision & {
   fecha_factura: string | null;
   kilometraje: number | null;
   correo: string | null;
+  /** Dirección anterior en texto libre (antes de pedirla por partes). Solo se muestra como referencia. */
+  direccion: string | null;
 };
 
 export type Semaforo = "verde" | "ambar" | "rojo";
+export type Producto = { nombre: string; banda: string; cobertura: { inicio: string; fin: string } | null };
 export type Completitud = {
   semaforo: Semaforo;
   /** Datos que faltan, con su nombre visible. */
@@ -107,15 +195,17 @@ export type Completitud = {
   bloqueos: string[];
   total: number;
   completos: number;
+  /** El producto que se emitiría (banda por el km + plazo), con las fechas de cobertura. */
+  producto: Producto | null;
 };
 
 const vacio = (v: unknown) => v === null || v === undefined || String(v).trim() === "";
 
 /**
- * Semáforo: rojo si el vehículo no cumple los requisitos (km pasado de 59,000 o garantía original terminada),
- * ámbar si faltan datos, verde si está todo. `hoy` es 'YYYY-MM-DD' (hora de Hermosillo).
+ * Semáforo: rojo si el vehículo no cumple los requisitos del programa (km arriba del máximo o garantía original
+ * terminada), ámbar si faltan datos, verde si está todo. `hoy` es 'YYYY-MM-DD' (hora de Hermosillo).
  */
-export function evaluarCompletitud(b: BaseEmision, hoy: string): Completitud {
+export function evaluarCompletitud(b: BaseEmision, hoy: string, programa: ProgramaGe): Completitud {
   const requeridos: { campo: keyof BaseEmision; capturable: boolean }[] = [
     { campo: "vin", capturable: false },
     { campo: "modelo", capturable: false },
@@ -125,22 +215,36 @@ export function evaluarCompletitud(b: BaseEmision, hoy: string): Completitud {
     // El kilometraje se captura arriba, en Datos: aquí solo se avisa.
     { campo: "kilometraje", capturable: false },
     { campo: "correo", capturable: false },
-    { campo: "numero_factura", capturable: true },
-    { campo: "valor_factura", capturable: true },
-    { campo: "numero_motor", capturable: true },
-    { campo: "estado_circulacion", capturable: true },
-    { campo: "direccion", capturable: true },
+    ...CAMPOS_VEHICULO.map((campo) => ({ campo, capturable: true })),
+    // El número interior es opcional en el portal.
+    ...CAMPOS_DIRECCION.filter((c) => c !== "dir_num_int").map((campo) => ({ campo, capturable: true })),
+    { campo: "plazo_meses", capturable: true },
+    { campo: "metodo_pago", capturable: true },
+    ...(b.metodo_pago === "financiado" ? [{ campo: "msi_meses" as const, capturable: true }] : []),
+    { campo: "vendedor", capturable: true },
   ];
   const faltan = requeridos.filter((r) => vacio(b[r.campo])).map((r) => ({ campo: r.campo, etiqueta: ETIQUETA_EMISION[r.campo] ?? r.campo, capturable: r.capturable }));
 
   const bloqueos: string[] = [];
-  if (typeof b.kilometraje === "number" && b.kilometraje > KM_MAXIMO_PARA_EMITIR) {
-    bloqueos.push(`El kilometraje (${b.kilometraje.toLocaleString("es-MX")}) pasa de ${KM_MAXIMO_PARA_EMITIR.toLocaleString("es-MX")}: no se puede emitir.`);
+  const maximo = kmMaximo(programa);
+  if (typeof b.kilometraje === "number" && b.kilometraje > maximo) {
+    bloqueos.push(`El kilometraje (${b.kilometraje.toLocaleString("es-MX")}) pasa de ${maximo.toLocaleString("es-MX")}: no se puede emitir.`);
   }
-  if (b.fecha_factura && /^\d{4}-\d{2}-\d{2}$/.test(b.fecha_factura) && hoy >= sumarMesesFecha(b.fecha_factura, MESES_GARANTIA_ORIGINAL)) {
-    bloqueos.push("La garantía original de 36 meses ya terminó: no se puede emitir.");
+  const fechaValida = !!b.fecha_factura && /^\d{4}-\d{2}-\d{2}$/.test(b.fecha_factura);
+  if (fechaValida && hoy >= sumarMesesFecha(b.fecha_factura!, programa.meses_garantia_original)) {
+    bloqueos.push(`La garantía original de ${programa.meses_garantia_original} meses ya terminó: no se puede emitir.`);
   }
 
+  const banda = typeof b.kilometraje === "number" ? bandaDeKm(b.kilometraje, programa.bandas_km) : null;
+  const producto: Producto | null =
+    banda && b.plazo_meses
+      ? {
+          nombre: nombreProducto(programa.nombre, banda.etiqueta, b.plazo_meses),
+          banda: banda.etiqueta,
+          cobertura: fechaValida ? fechasCobertura(b.fecha_factura!, programa.meses_garantia_original, b.plazo_meses) : null,
+        }
+      : null;
+
   const semaforo: Semaforo = bloqueos.length > 0 ? "rojo" : faltan.length > 0 ? "ambar" : "verde";
-  return { semaforo, faltan, bloqueos, total: requeridos.length, completos: requeridos.length - faltan.length };
+  return { semaforo, faltan, bloqueos, total: requeridos.length, completos: requeridos.length - faltan.length, producto };
 }

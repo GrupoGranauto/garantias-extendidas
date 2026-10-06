@@ -1967,6 +1967,8 @@ textarea.auto-input { resize: vertical; }
 .ficha-campo > span { font-size: 11px; color: var(--gris-500); }
 .ficha-campo-ancho { grid-column: 1 / -1; }
 @media (max-width: 640px) { .ficha-campo-ancho { grid-column: auto; } }
+.ficha-grupo { display: flex; flex-direction: column; gap: 8px; }
+.ficha-grupo h4 { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--gris-900); }
 .celda-enlace { padding: 0; font: inherit; font-weight: 600; text-align: left; color: var(--gris-900); background: transparent; border: 0; cursor: pointer; }
 .celda-enlace:hover { color: var(--marca); text-decoration: underline; }
 

@@ -41,13 +41,13 @@ export function sumarMesesFecha(fecha: string, meses: number): string {
   return `${anio}-${String(mes).padStart(2, "0")}-${String(Math.min(d, ultimoDia)).padStart(2, "0")}`;
 }
 
-/** El día en que empieza la cobertura de la garantía extendida: 36 meses después de la factura. */
-export const inicioDeCobertura = (fechaFactura: string): string => sumarMesesFecha(fechaFactura, MESES_GARANTIA_ORIGINAL);
+/** El día en que empieza la cobertura de la garantía extendida: cuando termina la original (por omisión, 36 meses después de la factura). */
+export const inicioDeCobertura = (fechaFactura: string, mesesOriginal = MESES_GARANTIA_ORIGINAL): string => sumarMesesFecha(fechaFactura, mesesOriginal);
 
-/** ¿Ya terminó la garantía original (y por tanto empezó la cobertura)? */
-export function coberturaYaInicio(fechaFactura: string | null, hoy: string): boolean {
+/** ¿Ya terminó la garantía original (y por tanto empezó la cobertura)? Los meses vienen del programa de la sucursal. */
+export function coberturaYaInicio(fechaFactura: string | null, hoy: string, mesesOriginal = MESES_GARANTIA_ORIGINAL): boolean {
   if (!fechaFactura || !/^\d{4}-\d{2}-\d{2}$/.test(fechaFactura)) return false;
-  return hoy >= inicioDeCobertura(fechaFactura);
+  return hoy >= inicioDeCobertura(fechaFactura, mesesOriginal);
 }
 
 export type ReglaContratoEntrada = {

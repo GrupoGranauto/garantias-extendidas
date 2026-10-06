@@ -59,6 +59,45 @@ Textos listos para crear en Meta (WhatsApp Manager → Plantillas de mensajes). 
 
 ---
 
+# Plantillas del contrato (pago y póliza)
+
+Adaptadas de las plantillas 06, 07 y 08 de la base «Plantillas de WhatsApp GE» de Notion: sin emojis y sin el nombre del cliente. Se mandan
+**desde el chat** a un cliente que ya aceptó la garantía (el sistema todavía no las manda solo: las reglas del contrato crean tareas para
+el ejecutivo, y la tarea le recuerda mandarla). El chat no deja mandar ninguna plantilla a quien pidió la baja.
+
+| Campo | Valor |
+|---|---|
+| Categoría | **Utilidad** (son avisos de una compra que el cliente ya pidió; no llevan promoción) |
+| Idioma | Español (México), `es_MX` |
+| Encabezado | Ninguno |
+| Variables | Las mismas que en campañas: `{{1}}` = modelo (ejemplo Versa), `{{2}}` = agencia (ejemplo Navojoa). Así se ligan igual: `{{1}}` → Línea, `{{2}}` → Agencia |
+| Botones | Ninguno |
+
+## 5. `ge_aviso_liga_pago` (al generar la orden de pago)
+
+> Hola, te escribimos de {{2}}. Ya generamos la orden de pago de la Garantía Extendida de tu {{1}}.
+>
+> Te llegó por correo, de ventas@garantiagex.com, con la liga de pago de Openpay. La liga vence en 24 horas. Si no ves el correo, revisa tu carpeta de spam o respóndenos aquí y te ayudamos.
+
+## 6. `ge_recordatorio_pago` (antes de que venza la liga)
+
+> Hola, te escribimos de {{2}}. Te recordamos que la liga de pago de la Garantía Extendida de tu {{1}} vence pronto.
+>
+> Puedes pagar con tarjeta de crédito o débito desde el correo que te enviamos. Si ya venció o tienes alguna duda, respóndenos aquí y te generamos una nueva.
+
+## 7. `ge_poliza_enviada` (al confirmar el pago)
+
+> Hola, te escribimos de {{2}}. Recibimos tu pago: la Garantía Extendida de tu {{1}} quedó contratada.
+>
+> El certificado te llega por correo. Tu cobertura extendida empieza cuando termina la garantía original. Para asistencia vial, 24 horas: 55 5809 4787.
+
+Notas:
+- «24 horas» en la plantilla 5 es la vigencia actual de la liga (pestaña Programa). Si cambia, se ajusta el texto y se vuelve a aprobar en Meta.
+- La plantilla 7 no adjunta el PDF del certificado: lo manda Assurant por correo. Si se quiere mandar el PDF por WhatsApp, la plantilla necesita
+  encabezado de documento, que el sistema todavía no envía.
+
+---
+
 ## Pendiente de confirmar antes de enviarlas
 
 1. **Plantilla 4 (28M):** el material solo dice que la extensión empieza cuando termina la garantía original; la regla de que *solo* se puede

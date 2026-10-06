@@ -330,17 +330,19 @@ export async function ejecutarReglasContrato(presupuestoMs = 15_000, maximo = 20
 export async function iniciarCoberturasVencidas(maximo = 200): Promise<number> {
   const hoy = ahoraLocal().fecha;
   const { rows } = await getPool().query(
-    `SELECT c.sucursal_id, c.oportunidad_id, v.fecha_factura::text AS fecha_factura
+    `SELECT c.sucursal_id, c.oportunidad_id, v.fecha_factura::text AS fecha_factura, pg.meses_garantia_original
        FROM crm_contratos c
        JOIN crm_oportunidades o ON o.id = c.oportunidad_id
        JOIN crm_vehiculos v ON v.id = o.vehiculo_id
        LEFT JOIN crm_config cc ON cc.sucursal_id = c.sucursal_id
+       LEFT JOIN crm_programa_ge pg ON pg.sucursal_id = c.sucursal_id
       WHERE c.estado = 'certificado_entregado' AND coalesce(cc.cobertura_automatica, true) AND v.fecha_factura IS NOT NULL`,
   );
   let cambios = 0;
   for (const r of rows) {
     if (cambios >= maximo) break;
-    if (!coberturaYaInicio(r.fecha_factura as string, hoy)) continue;
+    // Los meses de la garantía original son del programa de la sucursal (36 si nunca se configuró).
+    if (!coberturaYaInicio(r.fecha_factura as string, hoy, (r.meses_garantia_original as number | null) ?? undefined)) continue;
     try {
       const res = await guardarContrato({ sucursalId: r.sucursal_id, oportunidadId: r.oportunidad_id, estado: "cobertura_iniciada", origen: "sistema" });
       if (res.ok) cambios++;

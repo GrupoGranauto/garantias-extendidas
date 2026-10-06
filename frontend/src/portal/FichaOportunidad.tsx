@@ -7,20 +7,16 @@ import { apiFetch } from "../lib/api";
 type Entrada = { tipo: string; titulo: string; detalle: Record<string, unknown> | null; autor: string | null; creado_en: string };
 type TareaPendiente = { id: string; tipo: "tarea" | "pregunta"; titulo: string; descripcion: string | null; vence_en: string | null };
 type Emision = {
-  datos: {
-    numero_factura: string | null;
-    valor_factura: number | null;
-    numero_motor: string | null;
-    estado_circulacion: string | null;
-    direccion: string | null;
-  };
+  datos: Record<CampoEmision, string | number | null> & { direccion: string | null };
   completitud: {
     semaforo: "verde" | "ambar" | "rojo";
     faltan: { campo: string; etiqueta: string; capturable: boolean }[];
     bloqueos: string[];
     total: number;
     completos: number;
+    producto: { nombre: string; banda: string; cobertura: { inicio: string; fin: string } | null } | null;
   };
+  opciones: { nombre: string; plazos_meses: number[]; msi_meses: number[]; estados_circulacion: string[]; vendedores: string[]; liga_pago_horas: number };
 };
 type Ficha = {
   oportunidad: Record<string, unknown>;
@@ -69,13 +65,59 @@ const SEMAFORO: Record<string, { texto: string; clase: string }> = {
   rojo: { texto: "No se puede emitir", clase: "ficha-semaforo-rojo" },
 };
 
-const CAMPOS_EMISION: { campo: "numero_factura" | "valor_factura" | "numero_motor" | "estado_circulacion" | "direccion"; etiqueta: string; ayuda?: string; max: number; ancho?: boolean }[] = [
-  { campo: "numero_factura", etiqueta: "Número de factura", max: 40 },
-  { campo: "valor_factura", etiqueta: "Valor de la factura", ayuda: "Con IVA, en pesos", max: 14 },
-  { campo: "numero_motor", etiqueta: "Número de motor", max: 30 },
-  { campo: "estado_circulacion", etiqueta: "Estado de circulación", max: 60 },
-  { campo: "direccion", etiqueta: "Dirección del cliente", max: 300, ancho: true },
+type CampoEmision =
+  | "numero_factura" | "valor_factura" | "numero_motor" | "estado_circulacion"
+  | "dir_cp" | "dir_estado" | "dir_municipio" | "dir_colonia" | "dir_calle" | "dir_num_ext" | "dir_num_int"
+  | "plazo_meses" | "metodo_pago" | "msi_meses" | "vendedor";
+type Lista = "estados" | "plazos" | "metodo" | "msi" | "vendedores";
+type DefCampo = { campo: CampoEmision; etiqueta: string; ayuda?: string; max: number; ancho?: boolean; lista?: Lista; numerico?: boolean };
+
+/** Los campos del portal de Assurant, en el orden en que los pide: vehículo, información del programa y dirección del cliente. */
+const GRUPOS_EMISION: { titulo: string; campos: DefCampo[] }[] = [
+  {
+    titulo: "Vehículo",
+    campos: [
+      { campo: "numero_factura", etiqueta: "Número de factura", max: 40 },
+      { campo: "valor_factura", etiqueta: "Valor de la factura", ayuda: "Con IVA, en pesos", max: 14 },
+      { campo: "numero_motor", etiqueta: "Número de motor", max: 30 },
+      { campo: "estado_circulacion", etiqueta: "Estado de circulación", max: 60, lista: "estados" },
+    ],
+  },
+  {
+    titulo: "Producto y pago",
+    campos: [
+      { campo: "plazo_meses", etiqueta: "Plazo de la extensión", max: 3, lista: "plazos" },
+      { campo: "metodo_pago", etiqueta: "Método de pago", max: 20, lista: "metodo" },
+      { campo: "msi_meses", etiqueta: "Meses sin intereses", max: 2, lista: "msi" },
+      { campo: "vendedor", etiqueta: "Vendedor", max: 120, lista: "vendedores" },
+    ],
+  },
+  {
+    titulo: "Dirección del cliente",
+    campos: [
+      { campo: "dir_cp", etiqueta: "Código postal", max: 5, numerico: true },
+      { campo: "dir_estado", etiqueta: "Estado", max: 60, lista: "estados" },
+      { campo: "dir_municipio", etiqueta: "Municipio", max: 120 },
+      { campo: "dir_colonia", etiqueta: "Colonia", max: 120 },
+      { campo: "dir_calle", etiqueta: "Calle", max: 160, ancho: true },
+      { campo: "dir_num_ext", etiqueta: "Número exterior", max: 20 },
+      { campo: "dir_num_int", etiqueta: "Número interior (opcional)", max: 20 },
+    ],
+  },
 ];
+const CAMPOS_EMISION = GRUPOS_EMISION.flatMap((g) => g.campos);
+
+const anos = (meses: number) => (meses % 12 === 0 ? ` (+${meses / 12} ${meses === 12 ? "año" : "años"})` : "");
+
+/** Opciones de una lista (valor guardado, texto visible). Si el programa no tiene lista, el campo es texto libre (null). */
+function opcionesDe(lista: Lista | undefined, o: Emision["opciones"]): { valor: string; texto: string }[] | null {
+  if (lista === "plazos") return o.plazos_meses.map((m) => ({ valor: String(m), texto: `${m} meses${anos(m)}` }));
+  if (lista === "metodo") return [{ valor: "financiado", texto: "Financiado (meses sin intereses)" }, { valor: "contado", texto: "Contado" }];
+  if (lista === "msi") return o.msi_meses.map((m) => ({ valor: String(m), texto: `${m} meses` }));
+  if (lista === "estados" && o.estados_circulacion.length > 0) return o.estados_circulacion.map((e) => ({ valor: e, texto: e }));
+  if (lista === "vendedores" && o.vendedores.length > 0) return o.vendedores.map((v) => ({ valor: v, texto: v }));
+  return null;
+}
 
 /** Columnas que se muestran como datos, en este orden (solo las que la ficha recibió). */
 const DATOS = [
@@ -359,23 +401,59 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                     </>
                   );
                 })()}
-                <div className="ficha-datos">
-                  {CAMPOS_EMISION.map((c) => (
-                    <label key={c.campo} className={`ficha-campo${c.ancho ? " ficha-campo-ancho" : ""}`}>
-                      <span>{c.etiqueta}</span>
-                      <input
-                        type="text"
-                        className="auto-input"
-                        inputMode={c.campo === "valor_factura" ? "decimal" : undefined}
-                        maxLength={c.max}
-                        placeholder={c.ayuda}
-                        value={emision[c.campo] ?? ""}
-                        disabled={enviando}
-                        onChange={(e) => setEmision((prev) => ({ ...prev, [c.campo]: e.target.value }))}
-                      />
-                    </label>
-                  ))}
-                </div>
+                {GRUPOS_EMISION.map((g) => (
+                  <div key={g.titulo} className="ficha-grupo">
+                    <h4>{g.titulo}</h4>
+                    <div className="ficha-datos">
+                      {g.campos
+                        // Los meses sin intereses solo aplican con pago financiado.
+                        .filter((c) => c.campo !== "msi_meses" || emision.metodo_pago === "financiado")
+                        .map((c) => {
+                          const opciones = opcionesDe(c.lista, ficha.emision!.opciones);
+                          const valor = emision[c.campo] ?? "";
+                          const poner = (v: string) =>
+                            setEmision((prev) => ({ ...prev, [c.campo]: v, ...(c.campo === "metodo_pago" && v !== "financiado" ? { msi_meses: "" } : {}) }));
+                          return (
+                            <label key={c.campo} className={`ficha-campo${c.ancho ? " ficha-campo-ancho" : ""}`}>
+                              <span>{c.etiqueta}</span>
+                              {opciones ? (
+                                <select className="auto-input" value={valor} disabled={enviando} onChange={(e) => poner(e.target.value)}>
+                                  <option value="">Elegir</option>
+                                  {/* Un valor guardado que ya no está en la lista se conserva visible. */}
+                                  {valor && !opciones.some((o) => o.valor === valor) && <option value={valor}>{valor}</option>}
+                                  {opciones.map((o) => (
+                                    <option key={o.valor} value={o.valor}>
+                                      {o.texto}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type="text"
+                                  className="auto-input"
+                                  inputMode={c.campo === "valor_factura" ? "decimal" : c.numerico ? "numeric" : undefined}
+                                  maxLength={c.max}
+                                  placeholder={c.ayuda}
+                                  value={valor}
+                                  disabled={enviando}
+                                  onChange={(e) => poner(e.target.value)}
+                                />
+                              )}
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </div>
+                ))}
+                {ficha.emision.datos.direccion && <p className="ficha-ayuda">Dirección anterior (texto libre): {ficha.emision.datos.direccion}</p>}
+                {ficha.emision.completitud.producto && (
+                  <p className="ficha-ayuda">
+                    <strong>Producto:</strong> {ficha.emision.completitud.producto.nombre}
+                    {ficha.emision.completitud.producto.cobertura &&
+                      `. Cobertura del ${formato(ficha.emision.completitud.producto.cobertura.inicio)} al ${formato(ficha.emision.completitud.producto.cobertura.fin)}`}
+                    .
+                  </p>
+                )}
                 <button
                   type="button"
                   className="boton-secundario-claro"
@@ -384,7 +462,10 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                 >
                   Guardar datos
                 </button>
-                <p className="ficha-ayuda">Son los que pide el portal de Assurant al emitir. La orden de pago le llega al cliente por correo.</p>
+                <p className="ficha-ayuda">
+                  Son los que pide el portal de Assurant ({ficha.emision.opciones.nombre}). La orden de pago le llega al cliente por correo y su liga dura{" "}
+                  {ficha.emision.opciones.liga_pago_horas} h.
+                </p>
               </section>
             )}
 
