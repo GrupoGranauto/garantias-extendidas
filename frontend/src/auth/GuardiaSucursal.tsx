@@ -11,15 +11,39 @@ import EnConstruccion from "../paginas/EnConstruccion";
 import SucursalEditLayout from "../paginas/SucursalEditLayout";
 
 /* Cada pantalla se descarga solo cuando se entra a ella: el primer arranque pesa mucho menos. */
-const PlantillasListado = lazy(() => import("../portal/PlantillasListado"));
-const PlantillaFormulario = lazy(() => import("../portal/PlantillaFormulario"));
-const BaseDatos = lazy(() => import("../portal/BaseDatos"));
-const Chat = lazy(() => import("../portal/Chat"));
-const Tareas = lazy(() => import("../portal/Tareas"));
-const InicioPortal = lazy(() => import("../portal/InicioPortal"));
-const Automatizaciones = lazy(() => import("../portal/Automatizaciones"));
-const Reportes = lazy(() => import("../portal/Reportes"));
-const Equipo = lazy(() => import("../portal/Equipo"));
+const PANTALLAS_PORTAL = {
+  plantillas: () => import("../portal/PlantillasListado"),
+  plantilla: () => import("../portal/PlantillaFormulario"),
+  baseDatos: () => import("../portal/BaseDatos"),
+  chat: () => import("../portal/Chat"),
+  tareas: () => import("../portal/Tareas"),
+  inicio: () => import("../portal/InicioPortal"),
+  automatizaciones: () => import("../portal/Automatizaciones"),
+  reportes: () => import("../portal/Reportes"),
+  equipo: () => import("../portal/Equipo"),
+};
+const PlantillasListado = lazy(PANTALLAS_PORTAL.plantillas);
+const PlantillaFormulario = lazy(PANTALLAS_PORTAL.plantilla);
+const BaseDatos = lazy(PANTALLAS_PORTAL.baseDatos);
+const Chat = lazy(PANTALLAS_PORTAL.chat);
+const Tareas = lazy(PANTALLAS_PORTAL.tareas);
+const InicioPortal = lazy(PANTALLAS_PORTAL.inicio);
+const Automatizaciones = lazy(PANTALLAS_PORTAL.automatizaciones);
+const Reportes = lazy(PANTALLAS_PORTAL.reportes);
+const Equipo = lazy(PANTALLAS_PORTAL.equipo);
+
+/**
+ * Ya dentro del portal, las demás pantallas se descargan en segundo plano. Sin esto, al entrar por primera vez a una
+ * pantalla la anterior se queda congelada unos segundos (el cambio de ruta espera a que llegue el código).
+ */
+let portalPrecargado = false;
+function precargarPortal() {
+  if (portalPrecargado) return;
+  portalPrecargado = true;
+  setTimeout(() => {
+    for (const cargar of Object.values(PANTALLAS_PORTAL)) cargar().catch(() => {});
+  }, 1500);
+}
 const SucursalNueva = lazy(() => import("../paginas/SucursalNueva"));
 const SucursalesListado = lazy(() => import("../paginas/SucursalesListado"));
 const SucursalGeneral = lazy(() => import("../paginas/SucursalGeneral"));
@@ -78,6 +102,10 @@ export default function GuardiaSucursal() {
       .then(setPerfil)
       .finally(() => setCargando(false));
   }, []);
+
+  useEffect(() => {
+    if (portal && perfil?.sucursal_id === portal.id) precargarPortal();
+  }, [portal, perfil]);
 
   if (cargando) return <Cargador pantalla />;
 

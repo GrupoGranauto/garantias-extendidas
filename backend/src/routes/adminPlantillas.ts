@@ -349,6 +349,9 @@ adminPlantillasRouter.patch("/sucursales/:id/plantillas/:pid", async (req, res, 
   }
 });
 
+/** Plantillas de muestra que Meta crea en toda cuenta de WhatsApp Business: no se importan y Meta no permite borrarlas. */
+const PLANTILLAS_MUESTRA_META = new Set(["hello_world"]);
+
 /** Borra la plantilla: primero en Meta (si ya se envió), luego localmente. */
 adminPlantillasRouter.delete("/sucursales/:id/plantillas/:pid", async (req, res, next) => {
   try {
@@ -365,7 +368,8 @@ adminPlantillasRouter.delete("/sucursales/:id/plantillas/:pid", async (req, res,
       return;
     }
 
-    if (plantilla.meta_template_id) {
+    // Las de muestra de Meta no se pueden borrar allá: solo se quitan del portal.
+    if (plantilla.meta_template_id && !PLANTILLAS_MUESTRA_META.has(plantilla.nombre_tecnico)) {
       const config = await obtenerConfigWhatsapp(req.params.id);
       if (config?.waba_id) {
         await eliminarPlantillaMeta(config.waba_id, config.access_token, plantilla.nombre_tecnico);
@@ -519,6 +523,8 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, n
     for (const b of borradores ?? []) existentes.add(`${b.nombre_tecnico}__${b.idioma}`);
     for (const remota of remotas) {
       if (existentes.has(`${remota.name}__${remota.language}`)) continue;
+      // La plantilla de muestra que Meta crea en toda cuenta no sirve aquí (y Meta no deja borrarla): no se trae.
+      if (PLANTILLAS_MUESTRA_META.has(remota.name)) continue;
       const categoria = remota.category?.toLowerCase();
       if (categoria !== "marketing" && categoria !== "utility" && categoria !== "authentication") continue;
       const componentes = componentesDesdeMeta(remota.components ?? []);

@@ -404,8 +404,12 @@ export default function PlantillaFormulario() {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (soloLectura) return;
     guardar(false);
   }
+
+  // Una plantilla ya enviada a Meta no se puede cambiar (Meta no lo permite): solo se ligan sus variables.
+  const soloLectura = editando && estadoPlantilla !== "borrador" && estadoPlantilla !== "rechazada";
 
   if (cargando) {
     return (
@@ -439,8 +443,15 @@ export default function PlantillaFormulario() {
         </div>
       )}
 
+      {soloLectura && (
+        <div className="aviso-formulario">
+          <Alerta tipo="info">Esta plantilla ya se envió a Meta: su contenido no se puede cambiar. Solo puedes ligar sus variables automáticas.</Alerta>
+        </div>
+      )}
+
       <div className="constructor-plantilla">
         <div>
+          <fieldset className="campos-bloqueables" disabled={soloLectura}>
           {/* ---------- Identidad ---------- */}
           <section className="seccion">
             <div className="seccion-info">
@@ -630,6 +641,8 @@ export default function PlantillaFormulario() {
             </div>
           </section>
 
+          </fieldset>
+
           {/* ---------- Variables automáticas ---------- */}
           {variables.length > 0 && (
             <section className="seccion">
@@ -684,6 +697,7 @@ export default function PlantillaFormulario() {
             </section>
           )}
 
+          <fieldset className="campos-bloqueables" disabled={soloLectura}>
           {/* ---------- Pie ---------- */}
           <section className="seccion">
             <div className="seccion-info">
@@ -808,6 +822,7 @@ export default function PlantillaFormulario() {
               </div>
             </div>
           </section>
+          </fieldset>
         </div>
 
         {/* ---------- Preview ---------- */}
@@ -892,7 +907,7 @@ export default function PlantillaFormulario() {
       </div>
 
       <footer className="barra-acciones">
-        {editando && estadoPlantilla !== "borrador" && estadoPlantilla !== "rechazada" ? (
+        {soloLectura ? (
           <>
             <p>Esta plantilla ya fue enviada a Meta: su contenido no se puede volver a editar. Solo sus variables automáticas (arriba).</p>
             <div className="pagina-acciones">

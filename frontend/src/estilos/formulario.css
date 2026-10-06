@@ -1401,10 +1401,14 @@
 }
 .chat-entrada-mic svg { width: 15px; height: 15px; }
 
-@media (max-width: 960px) {
+/* Con el menú lateral abierto, abajo de ~1180 px la vista previa apretaba el formulario: pasa debajo de él. */
+@media (max-width: 1180px) {
   .constructor-plantilla { grid-template-columns: 1fr; }
-  .vista-previa-whatsapp { position: static; }
+  .vista-previa-whatsapp { position: static; justify-self: center; }
 }
+
+/* Agrupa secciones para bloquearlas juntas sin cambiar el diseño (plantilla ya enviada a Meta). */
+.campos-bloqueables { display: contents; margin: 0; padding: 0; border: 0; min-width: 0; }
 
 /* ============================================================
    Chat (bandeja de WhatsApp del portal): a diferencia del resto
