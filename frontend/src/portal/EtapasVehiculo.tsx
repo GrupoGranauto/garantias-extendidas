@@ -138,9 +138,9 @@ export default function EtapasVehiculo() {
   return (
     <>
       <p className="pestana-descripcion">
-        Define en qué etapa está cada vehículo vendido. La etapa se calcula con los meses transcurridos desde una fecha y con el kilometraje que
-        captura el ejecutivo en la tabla. Si el kilometraje se pasa del máximo de la etapa que marca la fecha, manda el kilometraje: sube a la
-        etapa que lo cubre, o queda excluido si excede la última.
+        Define en qué etapa está cada vehículo vendido. El kilometraje es el primer parámetro: si se conoce (de la base de clientes o capturado por el
+        ejecutivo), la etapa es la que lo cubre, o el vehículo queda excluido si excede la última. Sin kilometraje, la etapa sale de los meses
+        transcurridos desde la fecha. La fecha siempre limita: pasado el último mes, el vehículo queda excluido aunque tenga pocos km.
       </p>
       {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 

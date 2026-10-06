@@ -7,7 +7,7 @@ import { apiFetch } from "../lib/api";
 type Entrada = { tipo: string; titulo: string; detalle: Record<string, unknown> | null; autor: string | null; creado_en: string };
 type TareaPendiente = { id: string; tipo: "tarea" | "pregunta"; titulo: string; descripcion: string | null; vence_en: string | null };
 type Emision = {
-  datos: Record<CampoEmision, string | number | null> & { direccion: string | null };
+  datos: Record<CampoEmision, string | number | null> & { direccion: string | null; vendedor: string | null };
   completitud: {
     semaforo: "verde" | "ambar" | "rojo";
     faltan: { campo: string; etiqueta: string; capturable: boolean }[];
@@ -37,10 +37,6 @@ type Props = {
   onCambio: () => void;
 };
 
-const CANALES = [
-  { valor: "llamada", texto: "Llamada" },
-  { valor: "whatsapp", texto: "WhatsApp" },
-];
 const RESULTADOS = [
   { valor: "contesto", texto: "Contestó" },
   { valor: "no_contesto", texto: "No contestó" },
@@ -68,8 +64,8 @@ const SEMAFORO: Record<string, { texto: string; clase: string }> = {
 type CampoEmision =
   | "numero_factura" | "valor_factura" | "numero_motor" | "estado_circulacion"
   | "dir_cp" | "dir_estado" | "dir_municipio" | "dir_colonia" | "dir_calle" | "dir_num_ext" | "dir_num_int"
-  | "plazo_meses" | "metodo_pago" | "msi_meses" | "vendedor";
-type Lista = "estados" | "plazos" | "metodo" | "msi" | "vendedores";
+  | "plazo_meses" | "metodo_pago" | "msi_meses";
+type Lista = "estados" | "plazos" | "metodo" | "msi";
 type DefCampo = { campo: CampoEmision; etiqueta: string; ayuda?: string; max: number; ancho?: boolean; lista?: Lista; numerico?: boolean };
 
 /** Los campos del portal de Assurant, en el orden en que los pide: vehículo, información del programa y dirección del cliente. */
@@ -87,9 +83,8 @@ const GRUPOS_EMISION: { titulo: string; campos: DefCampo[] }[] = [
     titulo: "Producto y pago",
     campos: [
       { campo: "plazo_meses", etiqueta: "Plazo de la extensión", max: 3, lista: "plazos" },
-      { campo: "metodo_pago", etiqueta: "Método de pago", max: 20, lista: "metodo" },
-      { campo: "msi_meses", etiqueta: "Meses sin intereses", max: 2, lista: "msi" },
-      { campo: "vendedor", etiqueta: "Vendedor", max: 120, lista: "vendedores" },
+      { campo: "metodo_pago", etiqueta: "Forma de pago", max: 20, lista: "metodo" },
+      { campo: "msi_meses", etiqueta: "Plazo de meses sin intereses", max: 2, lista: "msi" },
     ],
   },
   {
@@ -112,10 +107,9 @@ const anos = (meses: number) => (meses % 12 === 0 ? ` (+${meses / 12} ${meses ==
 /** Opciones de una lista (valor guardado, texto visible). Si el programa no tiene lista, el campo es texto libre (null). */
 function opcionesDe(lista: Lista | undefined, o: Emision["opciones"]): { valor: string; texto: string }[] | null {
   if (lista === "plazos") return o.plazos_meses.map((m) => ({ valor: String(m), texto: `${m} meses${anos(m)}` }));
-  if (lista === "metodo") return [{ valor: "financiado", texto: "Financiado (meses sin intereses)" }, { valor: "contado", texto: "Contado" }];
+  if (lista === "metodo") return [{ valor: "contado", texto: "Contado" }, { valor: "financiado", texto: "Meses sin intereses" }];
   if (lista === "msi") return o.msi_meses.map((m) => ({ valor: String(m), texto: `${m} meses` }));
   if (lista === "estados" && o.estados_circulacion.length > 0) return o.estados_circulacion.map((e) => ({ valor: e, texto: e }));
-  if (lista === "vendedores" && o.vendedores.length > 0) return o.vendedores.map((v) => ({ valor: v, texto: v }));
   return null;
 }
 
@@ -169,7 +163,6 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [enviando, setEnviando] = useState(false);
 
-  const [canal, setCanal] = useState("llamada");
   const [resultado, setResultado] = useState("contesto");
   const [nota, setNota] = useState("");
   const [textoNota, setTextoNota] = useState("");
@@ -284,23 +277,14 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
             {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
             <section className="ficha-sec">
-              <h3>Registrar contacto</h3>
-              <div className="ficha-fila">
-                <select className="auto-input" value={canal} onChange={(e) => setCanal(e.target.value)} aria-label="Canal">
-                  {CANALES.map((c) => (
-                    <option key={c.valor} value={c.valor}>
-                      {c.texto}
-                    </option>
-                  ))}
-                </select>
-                <select className="auto-input" value={resultado} onChange={(e) => setResultado(e.target.value)} aria-label="Resultado">
-                  {RESULTADOS.filter((r) => !(canal === "whatsapp" && r.valor === "buzon")).map((r) => (
-                    <option key={r.valor} value={r.valor}>
-                      {canal === "whatsapp" && r.valor === "contesto" ? "Respondió" : canal === "whatsapp" && r.valor === "no_contesto" ? "Sin respuesta" : r.texto}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <h3>Registrar llamada</h3>
+              <select className="auto-input" value={resultado} onChange={(e) => setResultado(e.target.value)} aria-label="Resultado de la llamada">
+                {RESULTADOS.map((r) => (
+                  <option key={r.valor} value={r.valor}>
+                    {r.texto}
+                  </option>
+                ))}
+              </select>
               <input
                 type="text"
                 className="auto-input"
@@ -314,12 +298,12 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                 className="boton-guardar"
                 disabled={enviando}
                 onClick={() =>
-                  accion("contacto", "POST", { canal, resultado: canal === "whatsapp" && resultado === "buzon" ? "no_contesto" : resultado, nota: nota.trim() || null }, "Contacto registrado.", () => setNota(""))
+                  accion("contacto", "POST", { canal: "llamada", resultado, nota: nota.trim() || null }, "Llamada registrada.", () => setNota(""))
                 }
               >
                 Registrar
               </button>
-              <p className="ficha-ayuda">Suma un intento, pone hoy como último contacto y actualiza el estado de contacto. La etapa no se mueve sola.</p>
+              <p className="ficha-ayuda">Suma un intento, pone hoy como último contacto y actualiza el estado de contacto. Los mensajes de WhatsApp se registran solos. El estado del lead no cambia solo.</p>
             </section>
 
             {ficha.tareas.length > 0 && (
@@ -406,7 +390,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                     <h4>{g.titulo}</h4>
                     <div className="ficha-datos">
                       {g.campos
-                        // Los meses sin intereses solo aplican con pago financiado.
+                        // El plazo de MSI solo aplica si paga a meses sin intereses («Financiado» en el portal de Assurant).
                         .filter((c) => c.campo !== "msi_meses" || emision.metodo_pago === "financiado")
                         .map((c) => {
                           const opciones = opcionesDe(c.lista, ficha.emision!.opciones);
@@ -445,6 +429,9 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                     </div>
                   </div>
                 ))}
+                <p className="ficha-ayuda">
+                  <strong>Vendedor:</strong> {ficha.emision.datos.vendedor ?? "sin ejecutivo asignado"} (el ejecutivo asignado al lead)
+                </p>
                 {ficha.emision.datos.direccion && <p className="ficha-ayuda">Dirección anterior (texto libre): {ficha.emision.datos.direccion}</p>}
                 {ficha.emision.completitud.producto && (
                   <p className="ficha-ayuda">

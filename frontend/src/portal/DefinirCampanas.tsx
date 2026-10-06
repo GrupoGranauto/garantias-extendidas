@@ -20,12 +20,6 @@ type Def = {
 };
 type Fila = Def & { clave: string };
 
-type Comparacion = {
-  por_campana: { campana: string; web: number; bigquery: number; coinciden: number; solo_web: number; solo_bigquery: number }[];
-  cruces: { web: string | null; bigquery: string | null; total: number }[];
-  sin_campana: number;
-  ejemplos: { cliente: string; fecha_factura: string | null; fecha_reporte: string | null; web: string | null; bigquery: string | null }[];
-};
 type Respuesta = {
   campanas: Def[];
   etapas_vehiculo: { orden: number; nombre: string }[];
@@ -33,8 +27,6 @@ type Respuesta = {
   hora_calculo: string;
   ultimo_calculo: string | null;
   ultima_corrida: { fecha: string; origen: string; evaluadas: number; asignadas: number; traslapes: number; ejecutado_en: string } | null;
-  comparacion: Comparacion | null;
-  fuente: "bigquery" | "web";
 };
 
 const n = (v: number) => v.toLocaleString("es-MX");
@@ -58,7 +50,7 @@ const entero = (v: string, min: number, max: number): number => Math.min(max, Ma
 
 /**
  * Campañas que define el usuario: quién entra a cada una, según la fecha de su vehículo. La web las calcula una vez al día
- * a la hora elegida y, por ahora, solo las compara con las de BigQuery (modo sombra): los envíos no cambian.
+ * a la hora elegida, y de ellas salen las oportunidades de cada campaña y sus envíos.
  */
 export default function DefinirCampanas() {
   const { portal } = usePortal();
@@ -72,7 +64,6 @@ export default function DefinirCampanas() {
   const [sucio, setSucio] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [calculando, setCalculando] = useState(false);
-  const [cambiandoFuente, setCambiandoFuente] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [pruebaFecha, setPruebaFecha] = useState("");
   const [pruebaEtapa, setPruebaEtapa] = useState("");
@@ -145,28 +136,6 @@ export default function DefinirCampanas() {
     }
   }
 
-  async function cambiarFuente(fuente: "bigquery" | "web") {
-    const aviso =
-      fuente === "web"
-        ? "Los envíos de WhatsApp de esta sucursal van a usar las campañas definidas aquí en lugar de las de BigQuery.\n\nLo que estaba pendiente de enviar se cancela y se reprograma con las campañas de la web. Cada campaña sigue apagada o en simulación hasta que la enciendas en «Campañas de WhatsApp».\n\n¿Continuar?"
-        : "Los envíos de WhatsApp van a volver a usar las campañas que manda BigQuery.\n\nLo que estaba pendiente de enviar se cancela y se reprograma. ¿Continuar?";
-    if (!window.confirm(aviso)) return;
-    setCambiandoFuente(true);
-    setAviso(null);
-    try {
-      const r = await apiFetch<{ pendientes_cancelados: number }>(`${base}/fuente`, { method: "PUT", body: JSON.stringify({ fuente }) });
-      setAviso({
-        tipo: "ok",
-        texto: `Ahora los envíos usan ${fuente === "web" ? "las campañas de la web" : "las campañas de BigQuery"}. Se cancelaron ${n(r.pendientes_cancelados)} envíos pendientes para reprogramarlos.`,
-      });
-      cargar();
-    } catch (err) {
-      setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo cambiar." });
-    } finally {
-      setCambiandoFuente(false);
-    }
-  }
-
   async function probar() {
     setAviso(null);
     try {
@@ -183,9 +152,7 @@ export default function DefinirCampanas() {
 
   if (error) return <Alerta tipo="error">{error}</Alerta>;
   if (!datos) return <Cargador />;
-  const cmp = datos.comparacion;
   const etapas = datos.etapas_vehiculo;
-  const hayDiferencias = cmp ? cmp.por_campana.some((c) => c.solo_web > 0 || c.solo_bigquery > 0) : false;
 
   return (
     <>
@@ -194,18 +161,7 @@ export default function DefinirCampanas() {
         los días) y <strong>por meses</strong> (una cohorte: todo lo que tenga la fecha en el mes de hace N meses, sin importar el día; se envía el día y la
         hora que elijas). La web calcula las campañas todos los días a la hora que definas.
       </p>
-      <Alerta tipo="info">
-        {datos.fuente === "web" ? (
-          <>
-            Los envíos de WhatsApp usan <strong>las campañas de la web</strong>. Cada campaña sigue apagada o en simulación hasta que la enciendas en «Campañas de WhatsApp».
-          </>
-        ) : (
-          <>
-            Los envíos de WhatsApp usan <strong>las campañas que manda BigQuery</strong>. La web calcula las suyas y las compara; cuando coincidan con lo que quieres, puedes
-            pasar los envíos a la web más abajo.
-          </>
-        )}
-      </Alerta>
+      <Alerta tipo="info">Cada campaña sigue apagada o en simulación hasta que la enciendas en «Campañas de WhatsApp».</Alerta>
       {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
       <section className="rep-tarjeta">
@@ -334,117 +290,6 @@ export default function DefinirCampanas() {
             Agregar campaña por meses
           </button>
         </div>
-      </section>
-
-      <section className="rep-tarjeta">
-        <h3>Comparación con BigQuery</h3>
-        {!cmp ? (
-          <p className="auto-vacio">Guarda las campañas para ver cuántas oportunidades coinciden con las de BigQuery.</p>
-        ) : (
-          <>
-            <div className="tabla-envoltura">
-              <table className="tabla">
-                <thead>
-                  <tr>
-                    <th>Campaña</th>
-                    <th>Web</th>
-                    <th>BigQuery</th>
-                    <th>Coinciden</th>
-                    <th>Solo web</th>
-                    <th>Solo BigQuery</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cmp.por_campana.map((c) => (
-                    <tr key={c.campana}>
-                      <td>{c.campana}</td>
-                      <td>{n(c.web)}</td>
-                      <td>{n(c.bigquery)}</td>
-                      <td>{n(c.coinciden)}</td>
-                      <td className={c.solo_web > 0 ? "camp-def-dif" : undefined}>{n(c.solo_web)}</td>
-                      <td className={c.solo_bigquery > 0 ? "camp-def-dif" : undefined}>{n(c.solo_bigquery)}</td>
-                    </tr>
-                  ))}
-                  {cmp.por_campana.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="auto-vacio">
-                        Ninguna oportunidad cayó en una campaña, ni en la web ni en BigQuery.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <p className="rep-ayuda">
-              {n(cmp.sin_campana)} oportunidades abiertas no tienen campaña ni en la web ni en BigQuery.{" "}
-              {hayDiferencias
-                ? "Donde hay diferencias, ajusta las reglas (por ejemplo los días de una campaña) hasta que la web coincida con lo que quieres."
-                : "La web coincide con BigQuery en todas las campañas."}
-            </p>
-            {cmp.cruces.length > 0 && (
-              <>
-                <h4 className="camp-def-sub">Dónde difieren</h4>
-                <ul className="camp-def-cruces">
-                  {cmp.cruces.map((c, i) => (
-                    <li key={i}>
-                      <strong>{n(c.total)}</strong> — web: {c.web ?? "sin campaña"} · BigQuery: {c.bigquery ?? "sin campaña"}
-                    </li>
-                  ))}
-                </ul>
-                <details className="camp-def-ejemplos">
-                  <summary>Ver ejemplos ({cmp.ejemplos.length})</summary>
-                  <div className="tabla-envoltura">
-                    <table className="tabla">
-                      <thead>
-                        <tr>
-                          <th>Cliente</th>
-                          <th>Fecha factura</th>
-                          <th>Fecha reporte</th>
-                          <th>Web</th>
-                          <th>BigQuery</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {cmp.ejemplos.map((e, i) => (
-                          <tr key={i}>
-                            <td>{e.cliente}</td>
-                            <td>{e.fecha_factura ?? "—"}</td>
-                            <td>{e.fecha_reporte ?? "—"}</td>
-                            <td>{e.web ?? "—"}</td>
-                            <td>{e.bigquery ?? "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </details>
-              </>
-            )}
-          </>
-        )}
-      </section>
-
-      <section className="rep-tarjeta">
-        <div className="inicio-cab">
-          <h3>Quién manda la campaña a los envíos</h3>
-          {datos.fuente === "web" ? (
-            <button type="button" className="boton-secundario-claro" disabled={cambiandoFuente || sucio} onClick={() => cambiarFuente("bigquery")}>
-              {cambiandoFuente ? "Cambiando…" : "Volver a BigQuery"}
-            </button>
-          ) : (
-            <button type="button" className="boton-guardar" disabled={cambiandoFuente || sucio || !datos.ultima_corrida || filas.length === 0} onClick={() => cambiarFuente("web")}>
-              {cambiandoFuente ? "Cambiando…" : "Pasar los envíos a la web"}
-            </button>
-          )}
-        </div>
-        <p className="rep-ayuda">
-          Hoy: <strong>{datos.fuente === "web" ? "la web" : "BigQuery"}</strong>. Con la web, los mensajes salen según las campañas de arriba: los días de cada paso se cuentan desde el inicio de la campaña
-          del lead (en las campañas por meses, desde el día de envío del mes; la hora del primer mensaje es la de la campaña salvo que el paso tenga la suya). Si un lead llega a una cohorte
-          mensual después del día de envío, recibe el mensaje en cuanto abra la ventana de envío siempre que siga dentro de la vigencia del paso; si no, se omite y queda registrado.
-          Una vez que un lead empezó la cadencia, sigue aunque salga de la ventana de la campaña, y se corta si compra una garantía, pide la baja o la web lo pasa a otra campaña.
-        </p>
-        {!datos.ultima_corrida && <p className="rep-ayuda">Primero guarda y calcula las campañas.</p>}
-        {sucio && <p className="rep-ayuda">Guarda los cambios antes de cambiar la fuente.</p>}
       </section>
 
       <section className="rep-tarjeta">

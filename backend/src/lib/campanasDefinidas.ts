@@ -48,6 +48,11 @@ async function leerDefs(cl: Consulta, sucursalId: string): Promise<Definicion[]>
   return rows.map(aDefinicion);
 }
 
+/** Las campañas activas de la sucursal, en el orden del usuario (para generar oportunidades desde el origen crudo). */
+export async function leerDefinicionesActivas(sucursalId: string): Promise<Definicion[]> {
+  return (await leerDefs(getPool(), sucursalId)).filter((d) => d.activa);
+}
+
 /** La regla de cada campaña en una frase (para mostrarla en la pestaña de envíos), por nombre de campaña. */
 export async function leerDescripciones(cl: Consulta, sucursalId: string): Promise<Map<string, string>> {
   const defs = await leerDefs(cl, sucursalId);
@@ -203,7 +208,7 @@ export async function calcularSiToca(): Promise<number> {
 }
 
 /* ============================================================
-   Quién manda la campaña para los envíos: BigQuery o la web
+   Quién manda la campaña para los envíos: la cartera de origen o la web
    ============================================================ */
 
 export type FuenteCampanas = "bigquery" | "web";
@@ -211,104 +216,6 @@ export type FuenteCampanas = "bigquery" | "web";
 export async function leerFuente(cl: Consulta, sucursalId: string): Promise<FuenteCampanas> {
   const { rows } = await cl.query(`SELECT campanas_fuente FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
   return rows[0]?.campanas_fuente === "web" ? "web" : "bigquery";
-}
-
-export type ResultadoFuente = { ok: true; fuente: FuenteCampanas; pendientes_cancelados: number; calculo?: ResultadoCalculo } | { ok: false; error: string };
-
-/**
- * Cambia quién decide la campaña de cada oportunidad para los envíos. Al pasar a la web se calcula de nuevo en ese
- * momento. Lo que estaba pendiente de enviar se cancela (el planificador lo vuelve a programar con la fuente nueva);
- * lo ya enviado queda como historial. Es reversible.
- */
-export async function cambiarFuente(sucursalId: string, fuente: FuenteCampanas, usuarioId: string | null): Promise<ResultadoFuente> {
-  const cliente = await getPool().connect();
-  try {
-    await cliente.query("BEGIN");
-    if ((await leerFuente(cliente, sucursalId)) === fuente) {
-      await cliente.query("ROLLBACK");
-      return { ok: true, fuente, pendientes_cancelados: 0 };
-    }
-    let calculo: ResultadoCalculo | undefined;
-    if (fuente === "web") {
-      const { rows } = await cliente.query(`SELECT count(*)::int AS n FROM crm_campanas_def WHERE sucursal_id = $1 AND activa`, [sucursalId]);
-      if ((rows[0]?.n as number) === 0) {
-        await cliente.query("ROLLBACK");
-        return { ok: false, error: "Define y activa al menos una campaña antes de pasar a la web." };
-      }
-      calculo = await calcularCampanas(cliente, sucursalId, "manual");
-    }
-    await cliente.query(
-      `INSERT INTO crm_config (sucursal_id, campanas_fuente, campanas_fuente_cambiada_en, campanas_fuente_cambiada_por) VALUES ($1, $2, now(), $3)
-       ON CONFLICT (sucursal_id) DO UPDATE SET campanas_fuente = EXCLUDED.campanas_fuente, campanas_fuente_cambiada_en = now(),
-              campanas_fuente_cambiada_por = EXCLUDED.campanas_fuente_cambiada_por, actualizado_en = now()`,
-      [sucursalId, fuente, usuarioId],
-    );
-    // Lo que está saliendo en este momento («enviando») no se toca: borrarlo dejaría el mensaje sin registro y se volvería a mandar.
-    const { rowCount } = await cliente.query(
-      `DELETE FROM crm_envios WHERE sucursal_id = $1 AND estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando'`,
-      [sucursalId],
-    );
-    await cliente.query("COMMIT");
-    return { ok: true, fuente, pendientes_cancelados: rowCount ?? 0, calculo };
-  } catch (err) {
-    await cliente.query("ROLLBACK").catch(() => {});
-    throw err;
-  } finally {
-    cliente.release();
-  }
-}
-
-/* ============================================================
-   Comparación con BigQuery
-   ============================================================ */
-
-/** Campaña que mandó BigQuery: solo cuenta en la cartera activa, y 6M es lo mismo que 5M. */
-const CAMPANA_BQ = `CASE WHEN o.estado_cartera = 'ACTIVA' THEN (CASE o.campana WHEN '6M' THEN '5M' ELSE o.campana END) END`;
-
-export async function compararConBigQuery(sucursalId: string) {
-  const pool = getPool();
-  const { rows } = await pool.query(
-    `SELECT w.campana AS web, ${CAMPANA_BQ} AS bq, count(*)::int AS n
-       FROM crm_oportunidades o
-       LEFT JOIN crm_campana_calculada w ON w.oportunidad_id = o.id
-      WHERE o.sucursal_id = $1 AND o.estado = 'abierta'
-      GROUP BY 1, 2`,
-    [sucursalId],
-  );
-  const nombres = new Set<string>();
-  for (const r of rows) {
-    if (r.web) nombres.add(r.web as string);
-    if (r.bq) nombres.add(r.bq as string);
-  }
-  const suma = (f: (r: any) => boolean) => rows.filter(f).reduce((n, r) => n + (r.n as number), 0);
-  const porCampana = [...nombres].sort().map((nombre) => ({
-    campana: nombre,
-    web: suma((r) => r.web === nombre),
-    bigquery: suma((r) => r.bq === nombre),
-    coinciden: suma((r) => r.web === nombre && r.bq === nombre),
-    solo_web: suma((r) => r.web === nombre && r.bq !== nombre),
-    solo_bigquery: suma((r) => r.bq === nombre && r.web !== nombre),
-  }));
-  const cruces = rows
-    .filter((r) => (r.web ?? null) !== (r.bq ?? null))
-    .sort((a, b) => (b.n as number) - (a.n as number))
-    .slice(0, 12)
-    .map((r) => ({ web: (r.web as string | null) ?? null, bigquery: (r.bq as string | null) ?? null, total: r.n as number }));
-  const sinCampana = suma((r) => !r.web && !r.bq);
-
-  const { rows: ejemplos } = await pool.query(
-    `SELECT c.nombre AS cliente, v.fecha_factura::text AS fecha_factura, v.fecha_reporte::text AS fecha_reporte,
-            w.campana AS web, ${CAMPANA_BQ} AS bigquery
-       FROM crm_oportunidades o
-       JOIN crm_contactos c ON c.id = o.contacto_id
-       JOIN crm_vehiculos v ON v.id = o.vehiculo_id
-       LEFT JOIN crm_campana_calculada w ON w.oportunidad_id = o.id
-      WHERE o.sucursal_id = $1 AND o.estado = 'abierta' AND w.campana IS DISTINCT FROM ${CAMPANA_BQ}
-      ORDER BY w.campana NULLS LAST, v.fecha_factura DESC
-      LIMIT 20`,
-    [sucursalId],
-  );
-  return { por_campana: porCampana, cruces, sin_campana: sinCampana, ejemplos };
 }
 
 /* ============================================================
@@ -337,8 +244,6 @@ export async function leerCampanasDef(sucursalId: string) {
     ultimo_calculo: (cfg[0]?.ultimo as string | undefined) ?? null,
     ultima_corrida: ultima[0] ?? null,
     columna_fecha_etapas: (ciclo[0]?.columna_fecha as string | undefined) ?? "fecha_factura",
-    fuente: await leerFuente(pool, sucursalId),
-    comparacion: ultima[0] ? await compararConBigQuery(sucursalId) : null,
   };
 }
 

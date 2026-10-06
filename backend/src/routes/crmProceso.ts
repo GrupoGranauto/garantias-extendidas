@@ -199,7 +199,6 @@ const emisionSchema = z
     plazo_meses: numeroONulo,
     metodo_pago: textoONulo(20),
     msi_meses: numeroONulo,
-    vendedor: textoONulo(300),
   })
   .partial()
   .strict();
@@ -348,7 +347,7 @@ crmProcesoRouter.put("/sucursales/:id/crm/etapas/:etapaId/sla", requireAdminSucu
       [req.params.etapaId, req.params.id, parsed.data.tiempo_max_horas],
     );
     if (!rowCount) {
-      res.status(404).json({ error: "La etapa no existe o no es una etapa abierta." });
+      res.status(404).json({ error: "Ese estado del lead no existe o no es un estado abierto." });
       return;
     }
     emitirBroadcast(`datos:${req.params.id}`, "refresh", {});

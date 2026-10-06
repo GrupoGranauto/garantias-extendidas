@@ -30,7 +30,7 @@ const TITULO_CAMPO: Record<string, string> = {
   fecha_compra: "Fecha de compra de la garantía",
   kilometraje: "Kilometraje",
   ejecutivo: "Ejecutivo",
-  estado_contacto: "Estado de contacto",
+  estado_contacto: "Contacto",
 };
 
 type Consulta = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }> };
@@ -166,7 +166,7 @@ export async function editarOportunidad(params: {
         : { rows: [] };
       if (!etapas[0]) {
         await cliente.query("ROLLBACK");
-        return { ok: false, estado: 400, error: "La etapa no existe." };
+        return { ok: false, estado: 400, error: "Ese estado del lead no existe." };
       }
       etapaDestinoId = etapas[0].id as string;
       tipoDestino = etapas[0].tipo as string;
@@ -341,7 +341,7 @@ export async function moverOportunidad(params: {
     );
     if (!etapas[0]) {
       await cliente.query("ROLLBACK");
-      return { ok: false, estado: 400, error: "La etapa no existe." };
+      return { ok: false, estado: 400, error: "Ese estado del lead no existe." };
     }
     const tipo = etapas[0].tipo as string;
     const cambioEtapa = etapaId !== actual.etapa_id;
@@ -362,7 +362,7 @@ export async function moverOportunidad(params: {
       );
       if (!ref[0]) {
         await cliente.query("ROLLBACK");
-        return { ok: false, estado: 400, error: "La tarjeta de referencia no está en esa etapa." };
+        return { ok: false, estado: 400, error: "La tarjeta de referencia no está en ese estado." };
       }
       const siguiente = ref[0].posicion as number;
       const { rows: prev } = await cliente.query(

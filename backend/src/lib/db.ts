@@ -1,6 +1,10 @@
 import pg from "pg";
 import { env } from "../config/env.js";
 
+// Las columnas DATE llegan como texto 'YYYY-MM-DD'. Si no, pg las convierte en la medianoche del huso del servidor (UTC en
+// Railway) y el navegador, en hora de Hermosillo, las muestra un día antes.
+pg.types.setTypeParser(1082, (v: string) => v);
+
 let pool: pg.Pool | null = null;
 
 /**

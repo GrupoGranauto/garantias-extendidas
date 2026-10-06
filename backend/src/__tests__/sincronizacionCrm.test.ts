@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   claveContacto,
   clasificarCierre,
+  normalizarCp,
+  normalizarEstado,
   oportunidadActiva,
   planificar,
   sumarMeses,
@@ -196,5 +198,31 @@ describe("planificar", () => {
     const p = planificar(m, [], roster);
     expect(p.contactos.size).toBe(1);
     expect([...p.contactos.values()][0].cliente).toBe("Nuevo");
+  });
+});
+
+describe("datos para emitir desde la maestra", () => {
+  it("normaliza el estado a como lo escribe el portal", () => {
+    expect(normalizarEstado("SONORA")).toBe("Sonora");
+    expect(normalizarEstado("ciudad de mexico")).toBe("Ciudad de México");
+    expect(normalizarEstado("  Nuevo León ")).toBe("Nuevo León");
+    expect(normalizarEstado("Texas")).toBe("Texas");
+    expect(normalizarEstado("")).toBeNull();
+  });
+
+  it("deja el código postal en 5 dígitos", () => {
+    expect(normalizarCp(85800)).toBe("85800");
+    expect(normalizarCp("5800")).toBe("05800");
+    expect(normalizarCp("C.P. 85000")).toBe("85000");
+    expect(normalizarCp("123")).toBeNull();
+    expect(normalizarCp(null)).toBeNull();
+  });
+
+  it("las columnas de emisión no se mezclan con los datos extra de la fuente", () => {
+    const d = oportunidadActiva({
+      vin: "VIN1", campania_actual: "5M", en_cartera_operativa: true, fecha_inicio_5m: "2026-10-01",
+      numero_factura: "A1", dir_cp: "85800", otra_columna: "x",
+    });
+    expect(d?.fuente).toEqual({ fecha_inicio_5m: "2026-10-01", en_cartera_operativa: true, otra_columna: "x" });
   });
 });

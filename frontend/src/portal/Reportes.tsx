@@ -166,7 +166,7 @@ export default function Reportes() {
 
             <section className="rep-tarjeta">
               <h3>Movimientos del periodo</h3>
-              <p className="rep-ayuda">Oportunidades que entraron a cada etapa por una acción del equipo o una automatización.</p>
+              <p className="rep-ayuda">Leads que entraron a cada estado por una acción del equipo o una automatización.</p>
               {datos.flujo.length === 0 ? (
                 <p className="auto-vacio">Sin movimientos en estas fechas.</p>
               ) : (

@@ -40,7 +40,7 @@ const ETIQUETAS_MOSTRAR: [keyof Mostrar, string][] = [
   ["telefono", "Teléfono"],
   ["vehiculo", "Vehículo"],
   ["campana", "Campaña y fase"],
-  ["contacto", "Estado de contacto"],
+  ["contacto", "Contacto"],
   ["ejecutivo", "Ejecutivo"],
 ];
 
@@ -238,7 +238,7 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
               <header className="embudo-col-cab">
                 <span className="embudo-col-nombre">{col.nombre}</span>
                 {col.fuera_sla > 0 && (
-                  <span className="embudo-col-sla" title={`Llevan más de ${col.tiempo_max_horas} h en esta etapa`}>
+                  <span className="embudo-col-sla" title={`Llevan más de ${col.tiempo_max_horas} h en este estado`}>
                     {col.fuera_sla} fuera de SLA
                   </span>
                 )}
@@ -306,8 +306,8 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
                               <span
                                 title={
                                   tiene("fecha_ultimo_contacto") && fechaCorta(t.fecha_ultimo_contacto)
-                                    ? `En la etapa. Último contacto: ${fechaCorta(t.fecha_ultimo_contacto)}`
-                                    : "Tiempo en la etapa"
+                                    ? `En el estado. Último contacto: ${fechaCorta(t.fecha_ultimo_contacto)}`
+                                    : "Tiempo en el estado"
                                 }
                               >
                                 {hace(t.entro_a_etapa_en) ?? ""}

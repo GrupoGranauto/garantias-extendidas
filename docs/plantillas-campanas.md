@@ -95,7 +95,7 @@ el ejecutivo, y la tarea le recuerda mandarla). El chat no deja mandar ninguna p
 > El certificado te llega por correo. Tu cobertura extendida empieza cuando termina la garantía original. Para asistencia vial, 24 horas: 55 5809 4787.
 
 Notas:
-- «24 horas» en la plantilla 5 es la vigencia actual de la liga (pestaña Programa). Si cambia, se ajusta el texto y se vuelve a aprobar en Meta.
+- «24 horas» en la plantilla 5 es la vigencia actual de la liga de Openpay. Si cambia, se ajusta el texto y se vuelve a aprobar en Meta.
 - La plantilla 7 no adjunta el PDF del certificado: lo manda Assurant por correo. Si se quiere mandar el PDF por WhatsApp, la plantilla necesita
   encabezado de documento, que el sistema todavía no envía.
 

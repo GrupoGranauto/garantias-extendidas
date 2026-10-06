@@ -93,11 +93,8 @@ describe("normalizarDatosEmision", () => {
     expect("error" in norm({ metodo_pago: "tarjeta" })).toBe(true);
   });
 
-  it("vendedor de la lista si el programa tiene; si no, libre", () => {
-    expect(norm({ vendedor: "Juan" })).toEqual({ datos: { vendedor: "Juan" } });
-    const conLista = { ...P, vendedores: ["Ana Pérez"] };
-    expect(norm({ vendedor: "ana pérez" }, conLista)).toEqual({ datos: { vendedor: "Ana Pérez" } });
-    expect("error" in norm({ vendedor: "Juan" }, conLista)).toBe(true);
+  it("el vendedor no se captura: es el ejecutivo asignado", () => {
+    expect(norm({ vendedor: "Juan" } as never)).toEqual({ datos: {} });
   });
 });
 

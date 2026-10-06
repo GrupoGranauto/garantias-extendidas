@@ -3,11 +3,11 @@
  * fecha (por omisión la de factura) y el kilometraje que captura el ejecutivo. Funciones puras, sin base de datos.
  *
  * Reglas:
- *  - La fecha da la etapa: la que contenga los meses transcurridos.
- *  - El kilometraje manda cuando se pasa: si el km excede el máximo de la etapa que marca la fecha, el vehículo
- *    sube a la primera etapa cuyo km máximo lo cubra; si excede el de la última etapa, queda EXCLUIDO.
- *  - Un km menor al de la etapa que marca la fecha no la cambia (la fecha manda).
- *  - Una fecha posterior a la última etapa excluye al vehículo; una anterior a la primera, "aún no entra".
+ *  - El kilometraje es el primer parámetro: si se conoce, la etapa es la primera cuyo km máximo lo cubre; si pasa el
+ *    de la última etapa, el vehículo queda EXCLUIDO.
+ *  - Sin kilometraje, la fecha da la etapa: la que contenga los meses transcurridos.
+ *  - La fecha siempre limita: posterior a la última etapa excluye al vehículo (ya terminó su garantía original, aunque
+ *    tenga pocos km); anterior a la primera, "aún no entra".
  */
 
 export type EtapaCiclo = {
@@ -59,8 +59,9 @@ export function calcularEtapaVehiculo(p: {
   if (edad < primera.meses_desde) return { etapaId: null, motivo: "aun_no" };
   if (edad > ultima.meses_hasta) return { etapaId: null, motivo: "excluido_fecha" };
 
+  // Con kilometraje, manda el kilometraje; sin él, la fecha.
+  if (etapaKm) return { etapaId: etapaKm.id, motivo: "km" };
   const etapaFecha = etapas.find((e) => edad >= e.meses_desde && edad <= e.meses_hasta) ?? ultima;
-  if (etapaKm && etapaKm.orden > etapaFecha.orden) return { etapaId: etapaKm.id, motivo: "km" };
   return { etapaId: etapaFecha.id, motivo: "fecha" };
 }
 

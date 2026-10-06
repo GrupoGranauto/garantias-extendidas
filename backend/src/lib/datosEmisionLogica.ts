@@ -6,14 +6,14 @@ import { bandaDeKm, fechasCobertura, kmMaximo, nombreProducto, type ProgramaGe }
  *
  * El portal pide: datos del vehículo (VIN, modelo, año, versión, fecha de factura original, km, número y valor de la
  * factura, número de motor, estado de circulación), información del programa (producto = banda de km + plazo, método de
- * pago, vendedor) y la dirección del cliente por partes. La orden de pago le llega al cliente por correo.
+ * pago, vendedor = el ejecutivo asignado al lead) y la dirección del cliente por partes. La orden de pago le llega al cliente por correo.
  * Las reglas (meses de garantía original, km máximo, plazos, MSI, listas) vienen del programa de la sucursal.
  */
 
 /** Lo que captura el ejecutivo (el resto ya viene de la maestra). */
 export const CAMPOS_VEHICULO = ["numero_factura", "valor_factura", "numero_motor", "estado_circulacion"] as const;
 export const CAMPOS_DIRECCION = ["dir_cp", "dir_estado", "dir_municipio", "dir_colonia", "dir_calle", "dir_num_ext", "dir_num_int"] as const;
-export const CAMPOS_PRODUCTO = ["plazo_meses", "metodo_pago", "msi_meses", "vendedor"] as const;
+export const CAMPOS_PRODUCTO = ["plazo_meses", "metodo_pago", "msi_meses"] as const;
 export const CAMPOS_EMISION = [...CAMPOS_VEHICULO, ...CAMPOS_DIRECCION, ...CAMPOS_PRODUCTO] as const;
 export type CampoEmision = (typeof CAMPOS_EMISION)[number];
 
@@ -37,9 +37,9 @@ export const ETIQUETA_EMISION: Record<string, string> = {
   dir_num_ext: "Número exterior",
   dir_num_int: "Número interior",
   plazo_meses: "Plazo",
-  metodo_pago: "Método de pago",
-  msi_meses: "Meses sin intereses",
-  vendedor: "Vendedor",
+  metodo_pago: "Forma de pago",
+  msi_meses: "Plazo de meses sin intereses",
+  vendedor: "Vendedor (ejecutivo asignado)",
 };
 
 export type MetodoPago = "contado" | "financiado";
@@ -59,7 +59,6 @@ export type DatosEmision = {
   plazo_meses: number | null;
   metodo_pago: MetodoPago | null;
   msi_meses: number | null;
-  vendedor: string | null;
 };
 
 export type DatosEmisionEntrada = Partial<Record<CampoEmision, string | number | null>>;
@@ -141,7 +140,7 @@ export function normalizarDatosEmision(
 
   if ("metodo_pago" in entrada) {
     const v = texto(entrada.metodo_pago).toLowerCase();
-    if (v && v !== "contado" && v !== "financiado") return { error: "El método de pago es «Contado» o «Financiado»." };
+    if (v && v !== "contado" && v !== "financiado") return { error: "La forma de pago es «Contado» o «Meses sin intereses»." };
     datos.metodo_pago = (v || null) as MetodoPago | null;
   }
 
@@ -151,23 +150,13 @@ export function normalizarDatosEmision(
     if (!v) datos.msi_meses = null;
     else {
       const n = Number(v);
-      if (metodo !== "financiado") return { error: "Los meses sin intereses solo aplican con pago «Financiado»." };
+      if (metodo !== "financiado") return { error: "El plazo de meses sin intereses solo aplica si paga a meses sin intereses." };
       if (!programa.msi_meses.includes(n)) return { error: `Los meses sin intereses deben ser ${programa.msi_meses.join(", ")}.` };
       datos.msi_meses = n;
     }
   }
   // «Contado» no tiene meses sin intereses.
   if (metodo !== "financiado" && ("metodo_pago" in datos || "msi_meses" in datos)) datos.msi_meses = null;
-
-  if ("vendedor" in entrada) {
-    const v = texto(entrada.vendedor);
-    if (v.length > 120) return { error: "El vendedor no puede pasar de 120 caracteres." };
-    if (v && programa.vendedores.length > 0) {
-      const valido = enLista(v, programa.vendedores);
-      if (!valido) return { error: "Elige un vendedor de la lista." };
-      datos.vendedor = valido;
-    } else datos.vendedor = v || null;
-  }
 
   return { datos };
 }
@@ -181,6 +170,8 @@ export type BaseEmision = DatosEmision & {
   fecha_factura: string | null;
   kilometraje: number | null;
   correo: string | null;
+  /** «Vendedor a asignar» del portal: el ejecutivo que tiene asignado el lead. No se captura. */
+  vendedor: string | null;
   /** Dirección anterior en texto libre (antes de pedirla por partes). Solo se muestra como referencia. */
   direccion: string | null;
 };
@@ -221,7 +212,7 @@ export function evaluarCompletitud(b: BaseEmision, hoy: string, programa: Progra
     { campo: "plazo_meses", capturable: true },
     { campo: "metodo_pago", capturable: true },
     ...(b.metodo_pago === "financiado" ? [{ campo: "msi_meses" as const, capturable: true }] : []),
-    { campo: "vendedor", capturable: true },
+    { campo: "vendedor", capturable: false },
   ];
   const faltan = requeridos.filter((r) => vacio(b[r.campo])).map((r) => ({ campo: r.campo, etiqueta: ETIQUETA_EMISION[r.campo] ?? r.campo, capturable: r.capturable }));
 

@@ -279,7 +279,7 @@ export default function Seguimientos() {
     <>
       <p className="pestana-descripcion">
         Define qué pasa después del primer mensaje automático de cada campaña: pasadas unas horas o días, y solo si se cumplen tus condiciones, se crea una tarea para el
-        ejecutivo, se agenda una llamada o se manda otro WhatsApp. Las condiciones pueden usar cualquier columna de la base; la etapa del embudo es la «etiqueta» del
+        ejecutivo, se agenda una llamada o se manda otro WhatsApp. Las condiciones pueden usar cualquier columna de la base; el estado del lead es la «etiqueta» del
         cliente.
       </p>
       <Alerta tipo="info">

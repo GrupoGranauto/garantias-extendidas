@@ -186,7 +186,7 @@ export default function ReglasContrato() {
           <input type="checkbox" checked={cobertura} onChange={(e) => { setCobertura(e.target.checked); setSucio(true); setAviso(null); }} /> Pasar solos a «Cobertura iniciada» cuando termina la garantía original
         </label>
         <p className="rep-ayuda">
-          La garantía original dura los meses que marca la pestaña Programa (36 en el programa de Nissan) desde la factura, y la extendida empieza al terminar. Con esto encendido, los contratos en «Certificado entregado» pasan solos a «Cobertura
+          La garantía original dura 36 meses desde la factura, y la extendida empieza al terminar. Con esto encendido, los contratos en «Certificado entregado» pasan solos a «Cobertura
           iniciada» ese día, y el cambio queda en el historial como automático. Hoy hay {datos.contratos_en_certificado.toLocaleString("es-MX")} contratos en «Certificado entregado».
         </p>
       </section>

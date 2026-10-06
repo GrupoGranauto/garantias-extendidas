@@ -22,7 +22,7 @@ const MOTIVOS: Record<string, string> = {
   ahora_no: "Respondió «Ahora no» (vuelve en la siguiente campaña)",
   sin_telefono: "Sin teléfono",
   sin_celular: "El número no es celular",
-  etapa_no_permitida: "Etapa no permitida",
+  etapa_no_permitida: "Estado del lead no permitido",
   respondio: "Ya respondió",
   ya_contactado: "Ya fue contactado",
   fuera_de_ventana: "Fuera del horario",
@@ -200,7 +200,7 @@ export default function ReporteCampanas({ desde, hasta }: { desde: string; hasta
             <div className="rep-rejilla">
               <div>
                 <h4 className="camp-def-sub">A dónde avanzaron los leads</h4>
-                {c.avance.length === 0 ? <p className="auto-vacio">Todavía ninguno cambió de etapa después del mensaje.</p> : <Barras filas={c.avance.map((a) => ({ clave: a.etapa, etiqueta: a.etapa, valor: a.total }))} />}
+                {c.avance.length === 0 ? <p className="auto-vacio">Todavía ninguno cambió de estado después del mensaje.</p> : <Barras filas={c.avance.map((a) => ({ clave: a.etapa, etiqueta: a.etapa, valor: a.total }))} />}
               </div>
               <div>
                 <h4 className="camp-def-sub">Por qué no salieron algunos mensajes</h4>

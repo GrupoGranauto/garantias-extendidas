@@ -79,7 +79,7 @@ crmPortalRouter.put("/sucursales/:id/crm/automatizaciones/:etapaId", requireAdmi
       req.params.id,
     ]);
     if (!etapa[0]) {
-      res.status(404).json({ error: "La etapa no existe." });
+      res.status(404).json({ error: "Ese estado del lead no existe." });
       return;
     }
 

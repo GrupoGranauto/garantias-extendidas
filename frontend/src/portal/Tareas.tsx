@@ -145,7 +145,7 @@ export default function Tareas() {
       {tareas && tareas.length === 0 && (
         <div className="marcador">
           <strong>{filtro === "pendiente" ? "No tienes tareas pendientes" : "Todavía no hay tareas hechas"}</strong>
-          <span>Las tareas aparecen cuando una oportunidad entra a una etapa con automatizaciones activas.</span>
+          <span>Las tareas aparecen cuando un lead entra a un estado con automatizaciones activas.</span>
         </div>
       )}
 

@@ -9,7 +9,6 @@ import EtapasVehiculo from "./EtapasVehiculo";
 import DefinirCampanas from "./DefinirCampanas";
 import Seguimientos from "./Seguimientos";
 import ReglasContrato from "./ReglasContrato";
-import ProgramaGe from "./ProgramaGe";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -36,20 +35,20 @@ const PESTANAS: { tipo: TipoAuto; titulo: string; ayuda: string; vacio: string }
   {
     tipo: "tarea",
     titulo: "Tareas",
-    ayuda: "Se crea una tarea para el ejecutivo encargado en cuanto la oportunidad entra a esta etapa.",
-    vacio: "Sin tareas automáticas en esta etapa.",
+    ayuda: "Se crea una tarea para el ejecutivo encargado en cuanto el lead entra a este estado.",
+    vacio: "Sin tareas automáticas en este estado.",
   },
   {
     tipo: "pregunta",
     titulo: "Preguntas",
     ayuda: "Preguntas que el ejecutivo debe hacerle al cliente. La respuesta puede quedar registrada en una columna de la tabla.",
-    vacio: "Sin preguntas en esta etapa.",
+    vacio: "Sin preguntas en este estado.",
   },
   {
     tipo: "whatsapp",
     titulo: "WhatsApp",
-    ayuda: "Envío de una plantilla al entrar a la etapa (mensajes masivos).",
-    vacio: "Sin envíos de WhatsApp en esta etapa.",
+    ayuda: "Envío de una plantilla al entrar al estado (mensajes masivos).",
+    vacio: "Sin envíos de WhatsApp en este estado.",
   },
 ];
 
@@ -95,11 +94,11 @@ export default function Automatizaciones() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
   // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
-  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir" | "seguimientos" | "contrato" | "programa";
+  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir" | "seguimientos" | "contrato";
   const [apartado, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" || guardado === "seguimientos" || guardado === "contrato" || guardado === "programa"
+      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" || guardado === "seguimientos" || guardado === "contrato"
         ? guardado
         : "etapas";
     } catch {
@@ -117,7 +116,7 @@ export default function Automatizaciones() {
   const apartados = (
     <div className="vista-selector auto-apartados" role="tablist" aria-label="Apartado de automatizaciones">
       <button type="button" role="tab" aria-selected={apartado === "etapas"} className={`vista-opcion${apartado === "etapas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("etapas")}>
-        Por etapa
+        Por estado
       </button>
       <button type="button" role="tab" aria-selected={apartado === "vehiculo"} className={`vista-opcion${apartado === "vehiculo" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("vehiculo")}>
         Etapas del vehículo
@@ -133,9 +132,6 @@ export default function Automatizaciones() {
       </button>
       <button type="button" role="tab" aria-selected={apartado === "contrato"} className={`vista-opcion${apartado === "contrato" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("contrato")}>
         Contrato
-      </button>
-      <button type="button" role="tab" aria-selected={apartado === "programa"} className={`vista-opcion${apartado === "programa" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("programa")}>
-        Programa
       </button>
     </div>
   );
@@ -155,7 +151,7 @@ export default function Automatizaciones() {
         delete copia[e.id];
         return copia;
       });
-      setAviso({ tipo: "ok", texto: horas === null ? "Sin tiempo máximo en esta etapa." : `Tiempo máximo: ${horas} h.` });
+      setAviso({ tipo: "ok", texto: horas === null ? "Sin tiempo máximo en este estado." : `Tiempo máximo: ${horas} h.` });
     } catch (err) {
       setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo guardar el tiempo máximo." });
     }
@@ -213,15 +209,6 @@ export default function Automatizaciones() {
     }
   }
 
-  if (apartado === "programa") {
-    return (
-      <div className="pagina-formulario">
-        {apartados}
-        <ProgramaGe />
-      </div>
-    );
-  }
-
   if (apartado === "contrato") {
     return (
       <div className="pagina-formulario">
@@ -277,12 +264,12 @@ export default function Automatizaciones() {
     <div className="pagina-formulario">
       {apartados}
       <p className="pestana-descripcion">
-        Define qué pasa cuando una oportunidad entra a cada etapa del embudo. Las tareas y preguntas se asignan solas al ejecutivo
-        encargado de esa oportunidad.
+        Define qué pasa cuando un lead entra a cada estado. Las tareas y preguntas se asignan solas al ejecutivo encargado de ese
+        lead.
       </p>
 
       <div className="auto">
-        <nav className="auto-etapas" aria-label="Etapas del embudo">
+        <nav className="auto-etapas" aria-label="Estados del lead">
           {datos.etapas.map((e) => (
             <button
               key={e.id}
@@ -318,7 +305,7 @@ export default function Automatizaciones() {
             {etapa.tipo === "abierta" && (
               <div className="auto-sla">
                 <label className="auto-campo">
-                  <span>Tiempo máximo en esta etapa (horas)</span>
+                  <span>Tiempo máximo en este estado (horas)</span>
                   <input
                     type="number"
                     min={1}
@@ -356,7 +343,7 @@ export default function Automatizaciones() {
 
             {pestana === "whatsapp" && (
               <Alerta tipo="info">
-                Aquí solo se deja configurado el envío por etapa; el motor todavía no lo manda. Los envíos automáticos de cada campaña (48 horas, 5 meses, 12 meses y 28 meses) se configuran en el apartado «Campañas de WhatsApp».
+                Aquí solo se deja configurado el envío por estado; el motor todavía no lo manda. Los envíos automáticos de cada campaña (48 horas, 5 meses, 12 meses y 28 meses) se configuran en el apartado «Campañas de WhatsApp».
               </Alerta>
             )}
 
@@ -589,14 +576,14 @@ function Disparo({
       <label className="auto-campo">
         <span>Cuándo se dispara</span>
         <select className="auto-input" value={evento} onChange={(e) => onEvento(e.target.value as Evento)}>
-          <option value="entra_etapa">Al entrar a la etapa</option>
-          <option value="tiempo_en_etapa">Después de un tiempo en la etapa</option>
+          <option value="entra_etapa">Al entrar al estado</option>
+          <option value="tiempo_en_etapa">Después de un tiempo en el estado</option>
         </select>
       </label>
       {evento === "tiempo_en_etapa" && (
         <>
           <label className="auto-campo">
-            <span>Horas en la etapa</span>
+            <span>Horas en el estado</span>
             <input
               type="number"
               min={1}
@@ -610,10 +597,10 @@ function Disparo({
             <Interruptor etiqueta="Solo si nadie ha contactado al cliente desde que entró" activo={cfg.solo_sin_contacto === true} onChange={(v) => onCfg({ solo_sin_contacto: v })} />
           </div>
           <div className="auto-campo auto-campo-casilla">
-            <Interruptor etiqueta="Aplicar también a las que ya están en la etapa" activo={cfg.aplicar_a_existentes === true} onChange={(v) => onCfg({ aplicar_a_existentes: v })} />
+            <Interruptor etiqueta="Aplicar también a los que ya están en el estado" activo={cfg.aplicar_a_existentes === true} onChange={(v) => onCfg({ aplicar_a_existentes: v })} />
           </div>
           {cfg.aplicar_a_existentes === true && (
-            <p className="auto-campo-ancho rep-ayuda">Cuidado: se creará una tarea por cada oportunidad que ya esté en la etapa y lleve ese tiempo.</p>
+            <p className="auto-campo-ancho rep-ayuda">Cuidado: se creará una tarea por cada lead que ya esté en el estado y lleve ese tiempo.</p>
           )}
         </>
       )}

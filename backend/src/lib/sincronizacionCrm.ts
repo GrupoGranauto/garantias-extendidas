@@ -2,6 +2,12 @@ import { getBigQuery } from "./bigquery.js";
 import { getPool } from "./db.js";
 import { env } from "../config/env.js";
 import { vincularConversaciones } from "./vinculoWhatsapp.js";
+import { ESTADOS_MEXICO } from "./programaGeLogica.js";
+import { adaptarFilaCruda, campanaDeVehiculo, esFilaCruda, type EtapaVehiculo } from "./origenCrudoLogica.js";
+import { leerDefinicionesActivas } from "./campanasDefinidas.js";
+import { ahoraLocal } from "./campanasLogica.js";
+import { recalcularEtapas } from "./cicloVehiculo.js";
+import type { DefinicionCampana } from "./campanasDefLogica.js";
 
 /**
  * Sincronización BigQuery -> modelo relacional del CRM.
@@ -105,11 +111,56 @@ export function claveContacto(m: FilaMaestra): string {
   return `vin:${texto(m.vin) ?? ""}`;
 }
 
+/**
+ * Datos para emitir que la maestra puede traer (columnas opcionales: mientras no existan llegan vacías). Se guardan en el
+ * vehículo y en el contacto, pero SOLO si el campo está vacío: lo que el ejecutivo ya capturó o corrigió nunca se pisa.
+ */
+const CAMPOS_EMISION_FUENTE = [
+  "numero_factura", "valor_factura", "numero_motor", "km", "fecha_km",
+  "dir_calle", "dir_num_ext", "dir_num_int", "dir_colonia", "dir_cp", "dir_municipio", "dir_estado",
+] as const;
+
+const sinAcentos = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const ESTADO_POR_LLAVE = new Map(ESTADOS_MEXICO.map((e) => [sinAcentos(e), e]));
+
+/** El estado como lo escribe la lista del portal («SONORA» → «Sonora»); si no se reconoce, tal cual. */
+export function normalizarEstado(v: unknown): string | null {
+  const t = texto(v);
+  if (!t) return null;
+  return ESTADO_POR_LLAVE.get(sinAcentos(t)) ?? t;
+}
+
+/** Código postal a 5 dígitos (BigQuery puede mandarlo como número: 5800 → «05800»). */
+export function normalizarCp(v: unknown): string | null {
+  const t = texto(v);
+  if (!t) return null;
+  const d = t.replace(/\D/g, "");
+  return d.length >= 4 && d.length <= 5 ? d.padStart(5, "0") : null;
+}
+
+/** Kilometraje del origen (por ejemplo, de la última orden de servicio). */
+function kmFuente(v: unknown): number | null {
+  const t = texto(v);
+  if (!t) return null;
+  const n = Number(t.replace(/[,\s]/g, ""));
+  return Number.isInteger(n) && n >= 0 && n <= 2_000_000 ? n : null;
+}
+
+function montoFactura(v: unknown): number | null {
+  const t = texto(v);
+  if (!t) return null;
+  const n = Number(t.replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 && n < 100_000_000 ? Math.round(n * 100) / 100 : null;
+}
+
 const CAMPOS_ESTRUCTURADOS = new Set([
   "vin", "fecha_factura", "fecha_reporte", "cve_distribuidor", "distribuidor", "agencia", "apv", "modelo", "version",
   "ano_modelo", "tipo_venta", "cliente", "telefono_principal", "telefono_origen", "tiene_celular", "correo",
   "es_contactable", "motivo_no_contactable", "tiene_ge", "cantidad_ge_activas", "fecha_fin_garantia",
   "campania_actual", "etapa", "proxima_campania", "fecha_proxima_campania", "motivo_no_elegible",
+  ...CAMPOS_EMISION_FUENTE,
+  // Origen crudo: el nombre por partes y el teléfono ya se guardan en el contacto.
+  "nombre", "apellido_paterno", "apellido_materno", "telefono",
 ]);
 
 /** Oportunidad activa de una fila de la maestra, o null si no es accionable hoy. */
@@ -131,6 +182,37 @@ export function oportunidadActiva(m: FilaMaestra): DatosFuente | null {
     proxima_campania: texto(m.proxima_campania),
     fecha_proxima_campania: texto(m.fecha_proxima_campania),
     motivo_no_elegible: texto(m.motivo_no_elegible),
+    fuente,
+    contacto_clave: claveContacto(m),
+  };
+}
+
+/**
+ * Oportunidad activa de una fila del origen crudo: la campaña la decide la web con sus reglas (no BigQuery). La identidad
+ * es la misma de siempre: VIN | campaña | inicio.
+ */
+export function oportunidadWeb(
+  m: FilaMaestra,
+  defs: DefinicionCampana[],
+  hoy: string,
+  etapas: Map<string, EtapaVehiculo>,
+): DatosFuente | null {
+  const vin = texto(m.vin);
+  if (!vin) return null;
+  const c = campanaDeVehiculo(m, defs, hoy, etapas.get(vin));
+  if (!c) return null;
+  const fuente: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(m)) if (!CAMPOS_ESTRUCTURADOS.has(k) && v !== null && v !== undefined) fuente[k] = v;
+  return {
+    clave: `${vin}|${c.campana}|${c.inicio}`,
+    vin,
+    campana: c.campana,
+    fecha_inicio_campana: c.inicio,
+    fecha_fin_campana: c.fin,
+    fase_campana: c.fase,
+    proxima_campania: c.proxima,
+    fecha_proxima_campania: null,
+    motivo_no_elegible: null,
     fuente,
     contacto_clave: claveContacto(m),
   };
@@ -169,7 +251,11 @@ export function planificar(
   maestra: FilaMaestra[],
   existentes: OportunidadExistente[],
   roster: string[],
+  /** Cómo se decide la oportunidad activa de cada fila: por omisión, la campaña que trae BigQuery. */
+  opciones: { activar?: (m: FilaMaestra) => DatosFuente | null; campanasValidas?: readonly string[] | null } = {},
 ): Plan {
+  const activar = opciones.activar ?? oportunidadActiva;
+  const validas = opciones.campanasValidas === undefined ? CAMPANAS : opciones.campanasValidas;
   const conflictos: string[] = [];
   const porVin = new Map<string, FilaMaestra>();
   for (const m of maestra) {
@@ -179,9 +265,9 @@ export function planificar(
 
   const activas = new Map<string, { datos: DatosFuente; fila: FilaMaestra }>();
   for (const m of maestra) {
-    const datos = oportunidadActiva(m);
+    const datos = activar(m);
     if (!datos) continue;
-    if (!(CAMPANAS as readonly string[]).includes(datos.campana)) continue;
+    if (validas && !(validas as readonly string[]).includes(datos.campana)) continue;
     if (activas.has(datos.clave)) conflictos.push("Oportunidad activa duplicada en la fuente.");
     activas.set(datos.clave, { datos, fila: m });
   }
@@ -299,14 +385,31 @@ export function planificar(
   };
 }
 
-/** Lee toda la maestra. Fechas llegan como 'YYYY-MM-DD' y la marca de tiempo como ISO (TO_JSON_STRING). */
-export async function leerMaestra(): Promise<FilaMaestra[]> {
-  const tabla = "base-maestra-gn.garantias_extendidas.nis_ge_cartera_maestra";
+export const TABLA_MAESTRA = "base-maestra-gn.garantias_extendidas.nis_ge_cartera_maestra";
+const TABLA_VALIDA = /^[a-z0-9-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+$/;
+
+/**
+ * Lee toda la maestra (o la tabla de pruebas de la sucursal). Fechas llegan como 'YYYY-MM-DD' y la marca de tiempo como
+ * ISO (TO_JSON_STRING).
+ */
+export async function leerMaestra(tabla: string = TABLA_MAESTRA): Promise<FilaMaestra[]> {
+  if (!TABLA_VALIDA.test(tabla)) throw new Error("La base de clientes configurada no es válida.");
   const [filas] = await getBigQuery().query({
     query: `SELECT TO_JSON_STRING(t) AS j FROM \`${tabla}\` t`,
     location: env.BIGQUERY_LOCATION,
   });
   return (filas as { j: string }[]).map((f) => JSON.parse(f.j) as FilaMaestra);
+}
+
+/** La etapa del vehículo que ya calculó la app (por meses y km), para las campañas que piden una etapa. */
+async function etapasPorVin(sucursalId: string): Promise<Map<string, EtapaVehiculo>> {
+  const { rows } = await getPool().query(
+    `SELECT v.vin, ce.orden, coalesce(v.etapa_vehiculo_motivo IN ('excluido_km', 'excluido_fecha'), false) AS excluido
+       FROM crm_vehiculos v LEFT JOIN crm_ciclo_etapas ce ON ce.id = v.etapa_vehiculo_id
+      WHERE v.sucursal_id = $1`,
+    [sucursalId],
+  );
+  return new Map(rows.map((r) => [r.vin as string, { etapaOrden: (r.orden as number | null) ?? null, excluido: r.excluido === true }]));
 }
 
 async function cargarEstadoActual(sucursalId: string) {
@@ -356,12 +459,14 @@ const resumenDe = (modo: ResumenSync["modo"], p: Plan): ResumenSync => ({
  * fallo de la fuente y no se escribe. Cerrar muchas filas de golpe sí es normal: las
  * cohortes de 5M y 28M rotan cada mes.
  */
-function validarSensatez(plan: Plan, existentes: OportunidadExistente[]): string | null {
-  if (plan.filasFuente < 1000) return "La fuente devolvió muy pocas filas; se aborta sin escribir.";
-  if (plan.activasFuente === 0) return "La fuente no trae oportunidades activas; se aborta sin escribir.";
+function validarSensatez(plan: Plan, existentes: OportunidadExistente[], esPrueba = false): string | null {
+  // Una tabla de pruebas es chica a propósito: solo se exige que traiga algo activo.
+  if (esPrueba) return plan.activasFuente === 0 ? "La base de prueba no trae oportunidades activas; se aborta sin escribir." : null;
+  if (plan.filasFuente < 1000) return "La base de clientes devolvió muy pocas filas; se aborta sin escribir.";
+  if (plan.activasFuente === 0) return "La base de clientes no trae oportunidades activas; se aborta sin escribir.";
   const activasHoy = existentes.filter((e) => e.estado_cartera === "ACTIVA").length;
   if (activasHoy >= 50 && plan.activasFuente < activasHoy * 0.5) {
-    return "Las oportunidades activas de la fuente bajaron a menos de la mitad; se aborta sin escribir.";
+    return "Las oportunidades activas de la base de clientes bajaron a menos de la mitad; se aborta sin escribir.";
   }
   return null;
 }
@@ -384,17 +489,37 @@ async function registrarCorrida(sucursalId: string, resumen: ResumenSync, estado
  */
 export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Promise<ResumenSync> {
   const modo = aplicar ? "real" : "simulacion";
-  const { rows: habilitada } = await getPool().query(`SELECT sync_bigquery FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
-  if (!habilitada[0]?.sync_bigquery) throw new Error("Esta sucursal no está habilitada para sincronizar con BigQuery.");
-  const maestra = await leerMaestra();
+  const { rows: habilitada } = await getPool().query(
+    `SELECT sync_bigquery, bq_tabla_fuente, campanas_fuente FROM crm_config WHERE sucursal_id = $1`,
+    [sucursalId],
+  );
+  if (!habilitada[0]?.sync_bigquery) throw new Error("Esta sucursal no tiene activada la sincronización de la base de clientes.");
+  const tabla = (habilitada[0]?.bq_tabla_fuente as string | null) ?? TABLA_MAESTRA;
+  const esPrueba = tabla !== TABLA_MAESTRA;
+  const crudas = await leerMaestra(tabla);
   const { existentes, roster } = await cargarEstadoActual(sucursalId);
-  const plan = planificar(maestra, existentes, roster);
+
+  // ¿Quién decide la campaña? Con la web, la app calcula la campaña de cada VIN con las reglas de «Definir campañas».
+  // Un origen crudo (sin campaña calculada) siempre se usa así.
+  const cruda = crudas.length > 0 && esFilaCruda(crudas[0]);
+  const web = cruda || (habilitada[0]?.campanas_fuente as string | null) === "web";
+  const maestra = cruda ? crudas.map(adaptarFilaCruda) : crudas;
+  let plan: Plan;
+  if (web) {
+    const defs = await leerDefinicionesActivas(sucursalId);
+    if (defs.length === 0) throw new Error("No hay campañas activas en Definir campañas.");
+    const etapas = await etapasPorVin(sucursalId);
+    const hoy = ahoraLocal().fecha;
+    plan = planificar(maestra, existentes, roster, { activar: (m) => oportunidadWeb(m, defs, hoy, etapas), campanasValidas: null });
+  } else {
+    plan = planificar(maestra, existentes, roster);
+  }
   const resumen = resumenDe(modo, plan);
 
   const problema =
     plan.conflictos.length > 0
       ? "El plan tiene conflictos; no se escribe."
-      : validarSensatez(plan, existentes) ?? (plan.nuevas.length > 0 && roster.length === 0 ? "Hay oportunidades nuevas pero el roster de ejecutivos está vacío." : null);
+      : validarSensatez(plan, existentes, esPrueba) ??(plan.nuevas.length > 0 && roster.length === 0 ? "Hay oportunidades nuevas pero el roster de ejecutivos está vacío." : null);
 
   if (problema) {
     await registrarCorrida(sucursalId, resumen, "error", problema);
@@ -407,6 +532,8 @@ export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Prom
   }
 
   await aplicarPlan(sucursalId, plan);
+  // Los vehículos nuevos (o con km nuevo) quedan con su etapa calculada de una vez, sin esperar al recálculo diario.
+  await recalcularEtapas(getPool(), sucursalId).catch((err) => console.error("[sync] no se pudieron recalcular las etapas", err instanceof Error ? err.message : err));
   await vincularConversaciones(sucursalId).catch(() => 0);
   await registrarCorrida(sucursalId, resumen, "ok", null);
   return resumen;
@@ -415,12 +542,22 @@ export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Prom
 const filaContacto = (m: FilaMaestra) => ({
   clave: claveContacto(m),
   nombre: texto(m.cliente),
+  nombre_pila: texto(m.nombre),
+  apellido_paterno: texto(m.apellido_paterno),
+  apellido_materno: texto(m.apellido_materno),
   telefono: texto(m.telefono_principal),
   telefono_origen: texto(m.telefono_origen),
   tiene_celular: typeof m.tiene_celular === "boolean" ? m.tiene_celular : null,
   correo: texto(m.correo),
   es_contactable: typeof m.es_contactable === "boolean" ? m.es_contactable : null,
   motivo_no_contactable: texto(m.motivo_no_contactable),
+  dir_calle: texto(m.dir_calle),
+  dir_num_ext: texto(m.dir_num_ext),
+  dir_num_int: texto(m.dir_num_int),
+  dir_colonia: texto(m.dir_colonia),
+  dir_cp: normalizarCp(m.dir_cp),
+  dir_municipio: texto(m.dir_municipio),
+  dir_estado: normalizarEstado(m.dir_estado),
 });
 
 const filaVehiculo = (m: FilaMaestra) => ({
@@ -438,6 +575,10 @@ const filaVehiculo = (m: FilaMaestra) => ({
   tiene_ge: typeof m.tiene_ge === "boolean" ? m.tiene_ge : null,
   cantidad_ge_activas: m.cantidad_ge_activas ?? null,
   fecha_fin_garantia: texto(m.fecha_fin_garantia),
+  numero_factura: texto(m.numero_factura)?.toUpperCase() ?? null,
+  valor_factura: montoFactura(m.valor_factura),
+  numero_motor: texto(m.numero_motor)?.replace(/\s/g, "").toUpperCase() ?? null,
+  kilometraje: kmFuente(m.km),
 });
 
 const filaOportunidad = (d: DatosFuente) => ({
@@ -466,30 +607,56 @@ async function aplicarPlan(sucursalId: string, plan: Plan): Promise<void> {
     // Vehículos y contactos primero: las oportunidades los referencian por VIN / clave.
     await cliente.query(
       `INSERT INTO crm_vehiculos (sucursal_id, vin, agencia, distribuidor, cve_distribuidor, modelo, version, ano_modelo, apv,
-                                  tipo_venta, fecha_factura, fecha_reporte, tiene_ge, cantidad_ge_activas, fecha_fin_garantia)
+                                  tipo_venta, fecha_factura, fecha_reporte, tiene_ge, cantidad_ge_activas, fecha_fin_garantia,
+                                  numero_factura, valor_factura, numero_motor, kilometraje)
        SELECT $1, r.vin, r.agencia, r.distribuidor, r.cve_distribuidor, r.modelo, r.version, r.ano_modelo, r.apv,
-              r.tipo_venta, r.fecha_factura, r.fecha_reporte, r.tiene_ge, r.cantidad_ge_activas, r.fecha_fin_garantia
+              r.tipo_venta, r.fecha_factura, r.fecha_reporte, r.tiene_ge, r.cantidad_ge_activas, r.fecha_fin_garantia,
+              r.numero_factura, r.valor_factura, r.numero_motor, r.kilometraje
          FROM jsonb_to_recordset($2::jsonb) AS r(vin text, agencia text, distribuidor text, cve_distribuidor int, modelo text,
               version text, ano_modelo int, apv text, tipo_venta text, fecha_factura date, fecha_reporte date,
-              tiene_ge boolean, cantidad_ge_activas int, fecha_fin_garantia date)
+              tiene_ge boolean, cantidad_ge_activas int, fecha_fin_garantia date,
+              numero_factura text, valor_factura numeric, numero_motor text, kilometraje int)
        ON CONFLICT (sucursal_id, vin) DO UPDATE SET
          agencia = EXCLUDED.agencia, distribuidor = EXCLUDED.distribuidor, cve_distribuidor = EXCLUDED.cve_distribuidor,
          modelo = EXCLUDED.modelo, version = EXCLUDED.version, ano_modelo = EXCLUDED.ano_modelo, apv = EXCLUDED.apv,
          tipo_venta = EXCLUDED.tipo_venta, fecha_factura = EXCLUDED.fecha_factura, fecha_reporte = EXCLUDED.fecha_reporte,
          tiene_ge = EXCLUDED.tiene_ge, cantidad_ge_activas = EXCLUDED.cantidad_ge_activas,
-         fecha_fin_garantia = EXCLUDED.fecha_fin_garantia, actualizado_en = now()`,
+         fecha_fin_garantia = EXCLUDED.fecha_fin_garantia,
+         -- Datos para emitir: la maestra solo llena lo vacío; lo que capturó o corrigió el ejecutivo se respeta.
+         numero_factura = coalesce(crm_vehiculos.numero_factura, EXCLUDED.numero_factura),
+         valor_factura = coalesce(crm_vehiculos.valor_factura, EXCLUDED.valor_factura),
+         numero_motor = coalesce(crm_vehiculos.numero_motor, EXCLUDED.numero_motor),
+         -- El km también: si el ejecutivo ya lo capturó, se respeta.
+         kilometraje = coalesce(crm_vehiculos.kilometraje, EXCLUDED.kilometraje),
+         actualizado_en = now()`,
       [sucursalId, JSON.stringify(plan.vehiculos.map(filaVehiculo))],
     );
 
     await cliente.query(
-      `INSERT INTO crm_contactos (sucursal_id, clave, nombre, telefono, telefono_origen, tiene_celular, correo, es_contactable, motivo_no_contactable)
-       SELECT $1, r.clave, r.nombre, r.telefono, r.telefono_origen, r.tiene_celular, r.correo, r.es_contactable, r.motivo_no_contactable
-         FROM jsonb_to_recordset($2::jsonb) AS r(clave text, nombre text, telefono text, telefono_origen text, tiene_celular boolean,
-              correo text, es_contactable boolean, motivo_no_contactable text)
+      `INSERT INTO crm_contactos (sucursal_id, clave, nombre, nombre_pila, apellido_paterno, apellido_materno, telefono, telefono_origen,
+                                  tiene_celular, correo, es_contactable, motivo_no_contactable, dir_calle, dir_num_ext, dir_num_int, dir_colonia, dir_cp, dir_municipio, dir_estado)
+       SELECT $1, r.clave, r.nombre, r.nombre_pila, r.apellido_paterno, r.apellido_materno, r.telefono, r.telefono_origen,
+              r.tiene_celular, r.correo, r.es_contactable, r.motivo_no_contactable, r.dir_calle, r.dir_num_ext, r.dir_num_int, r.dir_colonia, r.dir_cp, r.dir_municipio, r.dir_estado
+         FROM jsonb_to_recordset($2::jsonb) AS r(clave text, nombre text, nombre_pila text, apellido_paterno text, apellido_materno text,
+              telefono text, telefono_origen text, tiene_celular boolean,
+              correo text, es_contactable boolean, motivo_no_contactable text,
+              dir_calle text, dir_num_ext text, dir_num_int text, dir_colonia text, dir_cp text, dir_municipio text, dir_estado text)
        ON CONFLICT (sucursal_id, clave) DO UPDATE SET
-         nombre = EXCLUDED.nombre, telefono = EXCLUDED.telefono, telefono_origen = EXCLUDED.telefono_origen,
+         nombre = EXCLUDED.nombre, nombre_pila = coalesce(EXCLUDED.nombre_pila, crm_contactos.nombre_pila),
+         apellido_paterno = coalesce(EXCLUDED.apellido_paterno, crm_contactos.apellido_paterno),
+         apellido_materno = coalesce(EXCLUDED.apellido_materno, crm_contactos.apellido_materno),
+         telefono = EXCLUDED.telefono, telefono_origen = EXCLUDED.telefono_origen,
          tiene_celular = EXCLUDED.tiene_celular, correo = EXCLUDED.correo, es_contactable = EXCLUDED.es_contactable,
-         motivo_no_contactable = EXCLUDED.motivo_no_contactable, actualizado_en = now()`,
+         motivo_no_contactable = EXCLUDED.motivo_no_contactable,
+         -- La dirección se toma de la maestra solo si el contacto aún no tiene una: si el ejecutivo ya la capturó, se respeta.
+         dir_calle = CASE WHEN crm_contactos.dir_calle IS NULL AND crm_contactos.dir_cp IS NULL THEN EXCLUDED.dir_calle ELSE crm_contactos.dir_calle END,
+         dir_num_ext = CASE WHEN crm_contactos.dir_calle IS NULL AND crm_contactos.dir_cp IS NULL THEN EXCLUDED.dir_num_ext ELSE crm_contactos.dir_num_ext END,
+         dir_num_int = CASE WHEN crm_contactos.dir_calle IS NULL AND crm_contactos.dir_cp IS NULL THEN EXCLUDED.dir_num_int ELSE crm_contactos.dir_num_int END,
+         dir_colonia = CASE WHEN crm_contactos.dir_calle IS NULL AND crm_contactos.dir_cp IS NULL THEN EXCLUDED.dir_colonia ELSE crm_contactos.dir_colonia END,
+         dir_municipio = CASE WHEN crm_contactos.dir_calle IS NULL AND crm_contactos.dir_cp IS NULL THEN EXCLUDED.dir_municipio ELSE crm_contactos.dir_municipio END,
+         dir_estado = CASE WHEN crm_contactos.dir_calle IS NULL AND crm_contactos.dir_cp IS NULL THEN EXCLUDED.dir_estado ELSE crm_contactos.dir_estado END,
+         dir_cp = CASE WHEN crm_contactos.dir_calle IS NULL AND crm_contactos.dir_cp IS NULL THEN EXCLUDED.dir_cp ELSE crm_contactos.dir_cp END,
+         actualizado_en = now()`,
       [sucursalId, JSON.stringify([...plan.contactos.values()].map(filaContacto))],
     );
 
@@ -642,9 +809,10 @@ const HORAS_SIN_SYNC_ALERTA = 36;
  */
 export async function estadoSincronizacion(sucursalId: string) {
   const pool = getPool();
-  const { rows: cfg } = await pool.query(`SELECT sync_bigquery FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
+  const { rows: cfg } = await pool.query(`SELECT sync_bigquery, bq_tabla_fuente FROM crm_config WHERE sucursal_id = $1`, [sucursalId]);
   const habilitada = cfg[0]?.sync_bigquery === true;
-  if (!habilitada) return { habilitada: false, corridas: [], ultima_real: null, corrio_hoy: false, alerta: null, fuente_actualizada_en: null };
+  const tabla = (cfg[0]?.bq_tabla_fuente as string | null) ?? TABLA_MAESTRA;
+  if (!habilitada) return { habilitada: false, corridas: [], ultima_real: null, corrio_hoy: false, alerta: null, fuente_actualizada_en: null, tabla_fuente: tabla, es_prueba: tabla !== TABLA_MAESTRA };
 
   const { rows: corridas } = await pool.query(
     `SELECT modo, estado, filas_fuente, activas_fuente, nuevas, actualizadas, migradas, cerradas, conflictos, mensaje, creado_en
@@ -663,7 +831,7 @@ export async function estadoSincronizacion(sucursalId: string) {
   let fuenteActualizada: string | null = null;
   try {
     const [r] = await getBigQuery().query({
-      query: "SELECT CAST(MAX(fecha_actualizacion) AS STRING) AS f FROM `base-maestra-gn.garantias_extendidas.nis_ge_cartera_maestra`",
+      query: `SELECT CAST(MAX(fecha_actualizacion) AS STRING) AS f FROM \`${TABLA_VALIDA.test(tabla) ? tabla : TABLA_MAESTRA}\``,
       location: env.BIGQUERY_LOCATION,
     });
     fuenteActualizada = (r as { f: string | null }[])[0]?.f ?? null;
@@ -677,7 +845,9 @@ export async function estadoSincronizacion(sucursalId: string) {
     corridas,
     ultima_real: real ? real.creado_en : null,
     corrio_hoy: real?.hoy === true,
-    alerta: sinSync ? `Lleva más de ${HORAS_SIN_SYNC_ALERTA} horas sin una sincronización completa con BigQuery.` : null,
+    alerta: sinSync ? `Lleva más de ${HORAS_SIN_SYNC_ALERTA} horas sin una sincronización completa de la base de clientes.` : null,
     fuente_actualizada_en: fuenteActualizada,
+    tabla_fuente: tabla,
+    es_prueba: tabla !== TABLA_MAESTRA,
   };
 }

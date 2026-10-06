@@ -87,11 +87,11 @@ export const automatizacionSchema = z
     }
     if (a.evento === "tiempo_en_etapa") {
       if (a.tipo === "whatsapp") {
-        ctx.addIssue({ code: "custom", message: "El envío de WhatsApp solo se dispara al entrar a la etapa." });
+        ctx.addIssue({ code: "custom", message: "El envío de WhatsApp solo se dispara al entrar al estado." });
         return z.NEVER;
       }
       if (!(r.data as { horas: number | null }).horas) {
-        ctx.addIssue({ code: "custom", message: "Indica después de cuántas horas en la etapa se dispara." });
+        ctx.addIssue({ code: "custom", message: "Indica después de cuántas horas en el estado se dispara." });
         return z.NEVER;
       }
     }

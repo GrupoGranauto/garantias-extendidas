@@ -91,7 +91,7 @@ const MOTIVOS: Record<string, string> = {
   ahora_no: "Respondió «Ahora no» (vuelve en la siguiente campaña)",
   sin_telefono: "Sin teléfono",
   sin_celular: "El número no es celular",
-  etapa_no_permitida: "Etapa no permitida",
+  etapa_no_permitida: "Estado del lead no permitido",
   respondio: "Ya respondió",
   ya_contactado: "Ya fue contactado",
   fuera_de_ventana: "Fuera del horario",
@@ -546,7 +546,7 @@ export default function CampanasEnvio() {
                         {e}
                       </button>
                     ))}
-                    <small>{p.etapas.length === 0 ? "Cualquier etapa abierta." : ""}</small>
+                    <small>{p.etapas.length === 0 ? "Cualquier estado abierto." : ""}</small>
                   </div>
                 </article>
               ))}

@@ -16,7 +16,7 @@ import {
 
 /**
  * Datos para emitir la garantía extendida: viven en el vehículo (factura, motor, circulación), en el contacto (dirección
- * por partes) y en el contrato (plazo, método de pago, MSI y vendedor). Las listas y reglas vienen del programa de la sucursal.
+ * por partes) y en el contrato (plazo, forma de pago y MSI). El vendedor es el ejecutivo asignado al lead. Las listas y reglas vienen del programa de la sucursal.
  */
 
 const ZONA = "America/Hermosillo";
@@ -29,7 +29,7 @@ const SQL_BASE = `
   SELECT v.vin, v.modelo, v.version, v.ano_modelo, to_char(v.fecha_factura, 'YYYY-MM-DD') AS fecha_factura, v.kilometraje,
          v.numero_factura, v.valor_factura::float8 AS valor_factura, v.numero_motor, v.estado_circulacion,
          c.direccion, c.correo, c.dir_cp, c.dir_estado, c.dir_municipio, c.dir_colonia, c.dir_calle, c.dir_num_ext, c.dir_num_int,
-         ct.plazo_meses, ct.metodo_pago, ct.msi_meses, ct.vendedor,
+         ct.plazo_meses, ct.metodo_pago, ct.msi_meses, o.ejecutivo AS vendedor,
          to_char((now() AT TIME ZONE '${ZONA}')::date, 'YYYY-MM-DD') AS hoy
     FROM crm_oportunidades o
     JOIN crm_vehiculos v ON v.id = o.vehiculo_id

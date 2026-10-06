@@ -56,7 +56,7 @@ export default function AccionesMasivas({ sucursalId, ids, etapas, motivos, ejec
           {ids.length} {ids.length === 1 ? "seleccionada" : "seleccionadas"}
         </strong>
         <button type="button" className="boton-secundario-claro" onClick={() => setPanel(panel === "etapa" ? null : "etapa")}>
-          Cambiar etapa
+          Cambiar estado del lead
         </button>
         <button type="button" className="boton-secundario-claro" onClick={() => setPanel(panel === "ejecutivo" ? null : "ejecutivo")}>
           Reasignar
@@ -71,7 +71,7 @@ export default function AccionesMasivas({ sucursalId, ids, etapas, motivos, ejec
 
       {panel === "etapa" && (
         <div className="masivo-fila">
-          <select className="auto-input" value={etapa} onChange={(e) => setEtapa(e.target.value)} aria-label="Etapa destino">
+          <select className="auto-input" value={etapa} onChange={(e) => setEtapa(e.target.value)} aria-label="Estado del lead destino">
             {etapas.map((e) => (
               <option key={e.valor} value={e.valor}>
                 {e.valor}

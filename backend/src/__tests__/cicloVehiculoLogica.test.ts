@@ -26,8 +26,8 @@ describe("calcularEtapaVehiculo", () => {
     expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2025-01-10", km: null, hoy: HOY })).toEqual({ etapaId: "e2", motivo: "fecha" });
   });
 
-  it("km dentro del permitido de la etapa por fecha: sigue mandando la fecha", () => {
-    expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2026-05-03", km: 9000, hoy: HOY })).toEqual({ etapaId: "e1", motivo: "fecha" });
+  it("con kilometraje, manda el kilometraje (primer parámetro)", () => {
+    expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2026-05-03", km: 9000, hoy: HOY })).toEqual({ etapaId: "e1", motivo: "km" });
   });
 
   it("km por encima de la etapa 1 aunque la fecha siga en la etapa 1: pasa a la etapa 2 por km", () => {
@@ -42,12 +42,12 @@ describe("calcularEtapaVehiculo", () => {
     expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2026-09-01", km: 99999, hoy: HOY })).toEqual({ etapaId: null, motivo: "excluido_km" });
   });
 
-  it("km menor al de la etapa que marca la fecha no la cambia: gana la fecha", () => {
-    expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2025-01-10", km: 5000, hoy: HOY })).toEqual({ etapaId: "e2", motivo: "fecha" });
+  it("km bajo en un auto con más meses: manda el km", () => {
+    expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2025-01-10", km: 5000, hoy: HOY })).toEqual({ etapaId: "e1", motivo: "km" });
   });
 
   it("el máximo de km es inclusivo", () => {
-    expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2026-05-03", km: 15000, hoy: HOY })).toEqual({ etapaId: "e1", motivo: "fecha" });
+    expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2026-05-03", km: 15000, hoy: HOY })).toEqual({ etapaId: "e1", motivo: "km" });
     expect(calcularEtapaVehiculo({ etapas: ETAPAS, fecha: "2026-05-03", km: 15001, hoy: HOY })).toEqual({ etapaId: "e2", motivo: "km" });
   });
 

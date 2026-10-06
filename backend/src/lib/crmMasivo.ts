@@ -55,7 +55,7 @@ export async function ejecutarAccionMasiva(p: {
       );
       if (!etapas[0]) {
         await cliente.query("ROLLBACK");
-        return { error: "La etapa no existe." };
+        return { error: "Ese estado del lead no existe." };
       }
       const destino = etapas[0].id as string;
       const tipo = etapas[0].tipo as string;

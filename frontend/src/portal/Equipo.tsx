@@ -31,6 +31,7 @@ type EstadoSync = {
   corrio_hoy: boolean;
   alerta: string | null;
   fuente_actualizada_en: string | null;
+  es_prueba?: boolean;
 };
 type ResumenSync = {
   modo: "simulacion" | "real";
@@ -59,7 +60,7 @@ const cuando = (v: string | null) => {
 };
 
 /**
- * Sincronización con BigQuery: cuándo corrió por última vez, si la fuente está al día y botones para
+ * Sincronización de la base de clientes: cuándo corrió por última vez, si la fuente está al día y botones para
  * simular (no escribe nada) o aplicar. Solo muestra conteos: nunca datos de clientes.
  */
 function TarjetaSincronizacion({ sucursalId }: { sucursalId: string }) {
@@ -94,11 +95,16 @@ function TarjetaSincronizacion({ sucursalId }: { sucursalId: string }) {
 
   return (
     <section className="rep-tarjeta">
-      <h3>Sincronización con BigQuery</h3>
+      <h3>Sincronización de la base de clientes</h3>
+      {estado.es_prueba && (
+        <Alerta tipo="info">
+          Modo de pruebas: esta sucursal usa una base de clientes de prueba, no la cartera real.
+        </Alerta>
+      )}
       {estado.alerta && <Alerta tipo="error">{estado.alerta}</Alerta>}
       <p className="rep-ayuda">
         Última sincronización completa: <strong>{cuando(estado.ultima_real)}</strong>
-        {estado.corrio_hoy ? " (hoy)" : ""} · La fuente se refrescó: <strong>{cuando(estado.fuente_actualizada_en)}</strong> · Corre sola cada
+        {estado.corrio_hoy ? " (hoy)" : ""} · La base se actualizó: <strong>{cuando(estado.fuente_actualizada_en)}</strong> · Corre sola cada
         día a las 10:00 (hora de Hermosillo) cuando está activada en el servidor.
       </p>
       <div className="ficha-fila">
@@ -110,7 +116,7 @@ function TarjetaSincronizacion({ sucursalId }: { sucursalId: string }) {
           className="boton-guardar"
           disabled={trabajando}
           onClick={() => {
-            if (window.confirm("Se aplicarán los cambios de la fuente: oportunidades nuevas, cierres y actualizaciones. ¿Continuar?")) void correr(true);
+            if (window.confirm("Se aplicarán los cambios de la base de clientes: oportunidades nuevas, cierres y actualizaciones. ¿Continuar?")) void correr(true);
           }}
         >
           Sincronizar ahora
@@ -119,7 +125,7 @@ function TarjetaSincronizacion({ sucursalId }: { sucursalId: string }) {
       {error && <Alerta tipo="error">{error}</Alerta>}
       {resumen && (
         <Alerta tipo={resumen.conflictos.length > 0 ? "error" : "ok"}>
-          {resumen.modo === "real" ? "Sincronizado" : "Simulación"}: {resumen.activasFuente} activas en la fuente, {resumen.nuevas} nuevas,{" "}
+          {resumen.modo === "real" ? "Sincronizado" : "Simulación"}: {resumen.activasFuente} activas en la base, {resumen.nuevas} nuevas,{" "}
           {resumen.actualizadas} actualizadas, {resumen.migradas} migradas y {resumen.cerradas} cerradas.
         </Alerta>
       )}
@@ -286,7 +292,7 @@ export default function Equipo() {
             onChange={(v) => guardar({ exigir_evidencia_venta: v }, v ? "Ahora una venta exige evidencia." : "Ya no se exige evidencia para vender.")}
           />
           <p className="rep-ayuda">
-            Con la regla activa, una oportunidad solo pasa a una etapa de venta si su contrato llegó a «Certificado entregado» (o «Cobertura
+            Con la regla activa, un lead solo pasa a un estado de venta si su contrato llegó a «Certificado entregado» (o «Cobertura
             iniciada»). Una venta es pago y certificado, no interés.
           </p>
         </section>

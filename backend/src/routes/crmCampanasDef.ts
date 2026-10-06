@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../middleware/auth.js";
-import { calcularYGuardar, cambiarFuente, compararConBigQuery, guardarCampanasDef, leerCampanasDef, probarCampanas } from "../lib/campanasDefinidas.js";
+import { calcularYGuardar, guardarCampanasDef, leerCampanasDef, probarCampanas } from "../lib/campanasDefinidas.js";
 
 /** Campañas que define el admin de la sucursal (por días o por meses) y su cálculo diario. */
 export const crmCampanasDefRouter = Router();
@@ -55,29 +55,7 @@ crmCampanasDefRouter.put("/sucursales/:id/crm/campanas-def", async (req, res, ne
 
 crmCampanasDefRouter.post("/sucursales/:id/crm/campanas-def/calcular", async (req, res, next) => {
   try {
-    const calculo = await calcularYGuardar(req.params.id, "manual");
-    res.json({ ...calculo, comparacion: await compararConBigQuery(req.params.id) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-const fuenteSchema = z.object({ fuente: z.enum(["bigquery", "web"]) });
-
-/** Quién decide la campaña de cada oportunidad para los envíos. Reversible; cancela lo pendiente de enviar. */
-crmCampanasDefRouter.put("/sucursales/:id/crm/campanas-def/fuente", async (req, res, next) => {
-  const parsed = fuenteSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Datos inválidos." });
-    return;
-  }
-  try {
-    const r = await cambiarFuente(req.params.id, parsed.data.fuente, req.usuario?.id ?? null);
-    if (!r.ok) {
-      res.status(400).json({ error: r.error });
-      return;
-    }
-    res.json(r);
+    res.json(await calcularYGuardar(req.params.id, "manual"));
   } catch (err) {
     next(err);
   }
