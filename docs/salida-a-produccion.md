@@ -32,7 +32,7 @@ Marca cada paso al terminarlo. No saltes pasos: los marcados «Bloquea» impiden
 
 Textos y datos exactos en [plantillas-campanas.md](plantillas-campanas.md).
 
-- [ ] Crear `ge_48h_bienvenida`, `ge_5m_precio`, `ge_12m_reparaciones` y `ge_28m_vigencia`: categoría **Marketing**, idioma `es_MX`, sin encabezado, variables `{{1}}` (modelo) y `{{2}}` (agencia) con ejemplo, pie «Responde BAJA para no recibir más mensajes», botones de respuesta rápida «Quiero informes» y «Baja».
+- [ ] Crear `ge_48h_bienvenida`, `ge_5m_precio`, `ge_12m_reparaciones` y `ge_28m_vigencia`: categoría **Marketing**, idioma `es_MX`, sin encabezado, variables `{{1}}` (modelo) y `{{2}}` (agencia) con ejemplo, pie «Responde BAJA para no recibir más mensajes», botones de respuesta rápida «Quiero informes» y «Ahora no».
 - [ ] Esperar a que Meta las **apruebe** las cuatro.
 - [ ] En Meta, el webhook apunta a `https://<dominio del servicio>/api/webhooks/whatsapp` con el token de verificación guardado en el portal, y está suscrito a **messages** y a **message_template_status_update**. (Sin esto no llegan respuestas, bajas ni estados de entrega.)
 
@@ -82,7 +82,7 @@ Luego, en Automatizaciones → **Campañas de WhatsApp**, por cada campaña:
 - [ ] Vigilar el primer día, cada hora:
   - Envíos: enviado → entregado → leído; ningún «fallido» inexplicado.
   - Mensajes que llegan: las respuestas aparecen en el chat y en la ficha del lead.
-  - Una prueba controlada: tocar «Baja» desde un teléfono propio y confirmar que el contacto queda en baja y no recibe más.
+  - Dos pruebas controladas desde un teléfono propio: tocar «Ahora no» (deja de recibir esa campaña; en la ficha queda «Respondió «Ahora no»») y escribir «BAJA» (queda en baja y no recibe más).
   - Que el tope del día se respete (rampa).
 - [ ] Si todo está bien dos o tres días, **ampliar**: más agencias, subir la rampa, y luego encender las otras campañas **una por una**.
 
@@ -110,7 +110,7 @@ Luego, en Automatizaciones → **Campañas de WhatsApp**, por cada campaña:
 | Todo el motor (automatizaciones, reglas, cálculo de campañas, cobertura) | Railway → `CRM_MOTOR=off` |
 | Tareas del contrato | Automatizaciones → Contrato → apagar las reglas |
 | La sincronización diaria | Railway → quitar `CRM_SYNC_AUTO` |
-| Un contacto | Se da de baja solo si escribe «Baja» o «STOP» (o toca el botón «Baja» de la plantilla): queda en baja para siempre y se cancela lo que tuviera pendiente |
+| Un contacto | Se da de baja solo si escribe «BAJA» o «STOP» (el botón «Ahora no» solo pausa la campaña en curso): queda en baja para siempre y se cancela lo que tuviera pendiente |
 
 Un envío real se manda **a lo sumo una vez**: si el servidor se cae a medias, o si Meta aceptó el mensaje pero no se pudo anotar, ese envío queda como fallido y no se reenvía. Guardar una campaña o cambiar la fuente no toca un envío que está saliendo, y un mensaje (paso) que ya se mandó a clientes no se puede quitar: se apaga la campaña.
 

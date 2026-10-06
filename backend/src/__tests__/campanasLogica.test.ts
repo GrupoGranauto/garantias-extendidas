@@ -7,6 +7,7 @@ import {
   decidirEnvio,
   dentroDeVentana,
   diaSemana,
+  esAhoraNo,
   esPeticionDeBaja,
   proximoDiaPermitido,
   siguienteApertura,
@@ -75,6 +76,17 @@ describe("telefono10 y bajas", () => {
     expect(esPeticionDeBaja("No más")).toBe(true);
     expect(esPeticionDeBaja("quiero la baja de mi garantía actual")).toBe(false);
     expect(esPeticionDeBaja("hola")).toBe(false);
+  });
+
+  it("«Ahora no» pausa la campaña pero NO es baja", () => {
+    expect(esAhoraNo("Ahora no")).toBe(true);
+    expect(esAhoraNo(" ahorita NO. ")).toBe(true);
+    expect(esAhoraNo("No me interesa")).toBe(true);
+    expect(esAhoraNo(textoEntrante({ type: "button", button: { text: "Ahora no" } })!)).toBe(true);
+    expect(esPeticionDeBaja("Ahora no")).toBe(false);
+    expect(esAhoraNo("Baja")).toBe(false);
+    expect(esAhoraNo("ahora no puedo, mañana te marco")).toBe(false);
+    expect(esAhoraNo("Quiero informes")).toBe(false);
   });
 });
 

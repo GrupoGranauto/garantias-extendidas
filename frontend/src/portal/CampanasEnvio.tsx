@@ -88,6 +88,7 @@ const DIAS = [
 
 const MOTIVOS: Record<string, string> = {
   baja: "Pidió la baja",
+  ahora_no: "Respondió «Ahora no» (vuelve en la siguiente campaña)",
   sin_telefono: "Sin teléfono",
   sin_celular: "El número no es celular",
   etapa_no_permitida: "Etapa no permitida",

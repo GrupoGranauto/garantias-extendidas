@@ -42,16 +42,17 @@ const leads = await q(
      FROM crm_oportunidades o JOIN crm_contactos c ON c.id = o.contacto_id
     WHERE o.sucursal_id = $1 AND o.estado = 'abierta' AND o.estado_cartera = 'ACTIVA' AND o.campana = '5M' AND c.whatsapp_baja = false
       AND length(regexp_replace(coalesce(c.telefono, ''), '\\D', '', 'g')) >= 10
-    ORDER BY o.id LIMIT 3`,
+    ORDER BY o.id LIMIT 4`,
   [SUC],
 );
 const tel10 = (t: string) => t.replace(/\D/g, "").slice(-10);
 const convAntes = new Set((await q(`SELECT id FROM whatsapp_conversaciones WHERE sucursal_id = $1`, [SUC])).map((r) => r.id as string));
 let pasoId: string | null = null;
+let paso2Id: string | null = null;
 const idsEnvios: string[] = [];
 
 try {
-  const [A, B, C] = leads;
+  const [A, B, C, D] = leads;
   const cfgCamp = (await q(`SELECT id FROM crm_campanas_envio WHERE sucursal_id = $1 AND campana = '5M'`, [SUC]))[0].id;
   const pl = (await q(`SELECT id FROM whatsapp_plantillas WHERE sucursal_id = $1 AND estado = 'aprobada' LIMIT 1`, [SUC]))[0].id;
   pasoId = (await q(`INSERT INTO crm_campana_pasos (config_id, orden, plantilla_id) VALUES ($1, 0, $2) RETURNING id`, [cfgCamp, pl]))[0].id;
@@ -73,6 +74,16 @@ try {
     )
   )[0].id as string;
   idsEnvios.push(envEnviado);
+  // D: ya recibió el primer mensaje de 5M y tiene el segundo pendiente (otro paso), para probar «Ahora no».
+  paso2Id = (await q(`INSERT INTO crm_campana_pasos (config_id, orden, plantilla_id) VALUES ($1, 1, $2) RETURNING id`, [cfgCamp, pl]))[0].id;
+  for (const [paso, extraSql] of [[pasoId, "'enviado', now(), 'wamid.PRUEBAAHORANO'"], [paso2Id, "'pendiente', NULL, NULL"]] as const) {
+    const r = await q(
+      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, plantilla_id, programado_para, estado, enviado_en, wa_message_id, inicio)
+       VALUES ($1, $2, $3, '5M', $4, now() + interval '1 day', ${extraSql}, current_date) RETURNING id`,
+      [SUC, D.id, paso, pl],
+    );
+    idsEnvios.push(r[0].id as string);
+  }
 
   const baja = async (id: string) => (await q(`SELECT c.whatsapp_baja, o.estado_contacto FROM crm_oportunidades o JOIN crm_contactos c ON c.id = o.contacto_id WHERE o.id = $1`, [id]))[0];
   const envio = async (oid: string) => (await q(`SELECT estado, motivo FROM crm_envios WHERE oportunidad_id = $1 AND paso_id = $2`, [oid, pasoId]))[0];
@@ -123,6 +134,16 @@ try {
   await enviarWebhook(null, { id: "wamid.PRUEBAWEBHOOK1", status: "failed", timestamp: "1", errors: [{ title: "x" }] });
   e1 = (await q(`SELECT estado FROM crm_envios WHERE id = $1`, [envEnviado]))[0];
   chk("W6 «failed» sobre uno ya leído lo marca fallido", e1.estado === "fallido" || e1.estado === "leido", JSON.stringify(e1));
+
+  // 7) Botón «Ahora no»: NO es baja; se cancela lo que falta de ESA campaña y queda en la ficha.
+  st = await enviarWebhook({ from: `52${tel10(D.telefono)}`, id: "wamid.IN7", timestamp: String(Math.floor(Date.now() / 1000)), type: "button", button: { text: "Ahora no", payload: "p7" } }, null);
+  const bD = await baja(D.id);
+  const pendienteD = (await q(`SELECT estado, motivo FROM crm_envios WHERE oportunidad_id = $1 AND paso_id = $2`, [D.id, paso2Id]))[0];
+  const enviadoD = (await q(`SELECT estado FROM crm_envios WHERE oportunidad_id = $1 AND paso_id = $2`, [D.id, pasoId]))[0];
+  const actD = (await q(`SELECT count(*)::int n FROM crm_actividades WHERE oportunidad_id = $1 AND tipo = 'ahora_no' AND creado_en >= $2`, [D.id, t0]))[0].n;
+  chk("W7 «Ahora no»: responde 200 y NO es baja", st === 200 && bD.whatsapp_baja === false, JSON.stringify(bD));
+  chk("W7 «Ahora no»: el siguiente mensaje de la campaña se cancela como ahora_no", pendienteD?.estado === "omitido" && pendienteD?.motivo === "ahora_no", JSON.stringify(pendienteD));
+  chk("W7 «Ahora no»: lo ya enviado no se toca y queda en la línea de tiempo", enviadoD?.estado === "enviado" && actD === 1, JSON.stringify({ enviadoD, actD }));
 } catch (e) {
   chk("ERROR INESPERADO", false, e instanceof Error ? (e.stack ?? e.message) : String(e));
 } finally {
@@ -130,6 +151,7 @@ try {
     // Solo lo que creó la prueba (y el paso de prueba arrastra en cascada lo suyo).
     if (idsEnvios.length) await pool.query(`DELETE FROM crm_envios WHERE id = ANY($1::uuid[])`, [idsEnvios]);
     if (pasoId) await pool.query(`DELETE FROM crm_campana_pasos WHERE id = $1`, [pasoId]);
+    if (paso2Id) await pool.query(`DELETE FROM crm_campana_pasos WHERE id = $1`, [paso2Id]);
     for (const l of leads) {
       await pool.query(`UPDATE crm_contactos SET whatsapp_baja = $2, whatsapp_baja_en = $3 WHERE id = $1`, [l.contacto_id, l.whatsapp_baja, l.whatsapp_baja_en]);
       await pool.query(`UPDATE crm_oportunidades SET estado_contacto = $2 WHERE id = $1`, [l.id, l.estado_contacto]);

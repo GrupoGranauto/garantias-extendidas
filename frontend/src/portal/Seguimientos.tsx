@@ -79,6 +79,7 @@ const MOTIVOS: Record<string, string> = {
   ya_tiene_ge: "Ya compró garantía",
   excluido_etapa: "El vehículo ya no puede contratar (fuera de meses o km)",
   baja: "Pidió la baja",
+  ahora_no: "Respondió «Ahora no» (vuelve en la siguiente campaña)",
   no_cumple_condicion: "No cumplió las condiciones",
   atrasado: "Le tocaba hace más de 24 h (seguimiento apagado o motor detenido)",
 };

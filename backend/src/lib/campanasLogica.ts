@@ -250,3 +250,14 @@ const PALABRAS_BAJA = new Set(["baja", "stop", "alto", "cancelar", "no mas", "ya
 export function esPeticionDeBaja(texto: string): boolean {
   return PALABRAS_BAJA.has(normalizarTexto(texto));
 }
+
+/** El botón «Ahora no» de las plantillas y sus equivalentes escritos. No es una baja: solo pausa la campaña en curso. */
+const PALABRAS_AHORA_NO = new Set(["ahora no", "ahorita no", "por ahora no", "no por ahora", "no gracias", "no me interesa"]);
+
+/**
+ * ¿El cliente dijo «ahora no» a la campaña? Deja de recibir mensajes y seguimientos de ESA campaña y vuelve a contactarse
+ * en la siguiente (por ejemplo, de 48H a 5M). Solo coincidencias exactas: no se adivina.
+ */
+export function esAhoraNo(texto: string): boolean {
+  return PALABRAS_AHORA_NO.has(normalizarTexto(texto));
+}

@@ -12,13 +12,16 @@ Textos listos para crear en Meta (WhatsApp Manager → Plantillas de mensajes). 
 | Encabezado | Ninguno (el sistema solo envía plantillas con encabezado de texto o sin encabezado) |
 | Variables | `{{1}}` = modelo del vehículo, `{{2}}` = agencia. Meta pide un **texto de ejemplo** para cada una: `{{1}}` Versa, `{{2}}` Navojoa |
 | Pie de página | `Responde BAJA para no recibir más mensajes` |
-| Botones (respuesta rápida) | `Quiero informes` y `Baja` |
+| Botones (respuesta rápida) | `Quiero informes` y `Ahora no` |
 
 - **Por qué no se usa el nombre del cliente:** en la base viene como «Apellido Apellido Nombre» (por ejemplo «Lopez Ramirez Juan Carlos»), con casos
   de un solo apellido con punto («Lopez . Pedro») o razones sociales. Saludar con ese dato quedaría mal.
-- **El botón «Baja»** manda ese texto al responder, y el sistema lo entiende como una baja: el contacto queda en baja para siempre y se
-  cancela lo que tuviera pendiente. **Requiere desplegar el ajuste del webhook** hecho con estas plantillas: antes, un botón de plantilla se
-  guardaba como JSON crudo y no se detectaba la baja.
+- **El botón «Ahora no»** NO es una baja: el cliente deja de recibir lo que falta de **esa** campaña (mensajes, seguimientos y las
+  llamadas o tareas pendientes que estos dejaron) y vuelve a contactarse en la siguiente campaña (de 48H a 5M, de 5M a 12M, de 12M a 28M).
+  Queda en la línea de tiempo de la ficha. También cuenta si lo escribe («ahora no», «ahorita no», «no gracias», «no me interesa»).
+- **La baja definitiva** queda solo como texto en el pie («Responde BAJA…»): si el cliente escribe BAJA o STOP, queda en baja para
+  siempre y se cancela todo lo pendiente. Se respeta siempre: lo exige la ley de protección al consumidor y la política de WhatsApp, y sin
+  esa salida el cliente molesto bloquea o reporta el número, lo que baja su calidad en Meta.
 - **Quien toca «Quiero informes»** cuenta como que respondió: pasa a «Contactado», no recibe la llamada de seguimiento y el chat
   queda sin leer para el ejecutivo.
 - Después de que Meta las apruebe: Plantillas → **Sincronizar con Meta**, y en cada una **Variables**: `{{1}}` → Línea, `{{2}}` → Agencia.
@@ -31,7 +34,7 @@ Textos listos para crear en Meta (WhatsApp Manager → Plantillas de mensajes). 
 >
 > Con la Garantía Extendida Nissan puedes proteger los principales componentes mecánicos y eléctricos de tu auto hasta por 6 años o 125,000 km, con asistencia vial las 24 horas y sin límite de kilometraje durante la extensión. Es un producto de contratación opcional.
 >
-> Si quieres que un asesor te explique cómo contratarla, toca el botón.
+> Si quieres que un asesor te explique cómo contratarla, toca «Quiero informes».
 
 ## 2. `ge_5m_precio` (campaña 5M)
 
@@ -39,7 +42,7 @@ Textos listos para crear en Meta (WhatsApp Manager → Plantillas de mensajes). 
 >
 > Un dato útil: la Garantía Extendida Nissan cuesta menos mientras el auto tiene hasta 15,000 km, y puedes pagarla a 3, 6 o 9 meses sin intereses con tarjeta participante. Aplican términos y condiciones.
 >
-> ¿Quieres que un asesor te prepare tu cotización? Toca el botón.
+> ¿Quieres que un asesor te prepare tu cotización? Toca «Quiero informes».
 
 ## 3. `ge_12m_reparaciones` (campaña 12M_NURTURING)
 
@@ -47,7 +50,7 @@ Textos listos para crear en Meta (WhatsApp Manager → Plantillas de mensajes). 
 >
 > La Garantía Extendida Nissan cubre los principales componentes de tu {{1}} con partes originales y mano de obra calificada Nissan.
 >
-> ¿Platicamos? Toca el botón.
+> ¿Platicamos? Toca «Quiero informes».
 
 ## 4. `ge_28m_vigencia` (campaña 28M)
 
@@ -55,7 +58,7 @@ Textos listos para crear en Meta (WhatsApp Manager → Plantillas de mensajes). 
 >
 > La Garantía Extendida Nissan es la forma de seguir cubierto hasta por 6 años o 125,000 km, con asistencia vial incluida durante la extensión.
 >
-> ¿Quieres que un asesor te explique cómo contratarla? Toca el botón.
+> ¿Quieres que un asesor te explique cómo contratarla? Toca «Quiero informes».
 
 ---
 

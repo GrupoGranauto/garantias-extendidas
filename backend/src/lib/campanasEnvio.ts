@@ -901,6 +901,78 @@ export async function registrarEstadoEnvio(waMessageId: string, estado: "enviado
 }
 
 /**
+ * El cliente tocó «Ahora no» (o lo escribió). NO es una baja: deja de recibir lo que falta de la campaña que le escribió
+ * (mensajes y seguimientos, incluidas las tareas y llamadas aún pendientes) y vuelve a contactarse en la siguiente campaña,
+ * que es otra oportunidad (por ejemplo, de 48H pasa a 5M). La campaña es la del último mensaje real que recibió (30 días).
+ *
+ * Para que el planificador no vuelva a crear lo que falta, los pasos y seguimientos de esa campaña quedan registrados como
+ * omitidos «ahora_no» (cada envío y cada seguimiento son únicos por oportunidad). Devuelve la campaña, o null si no aplica.
+ */
+export async function procesarAhoraNo(sucursalId: string, tel: string): Promise<{ campana: string; oportunidadId: string } | null> {
+  const cliente = await getPool().connect();
+  try {
+    await cliente.query("BEGIN");
+    const { rows } = await cliente.query(
+      `SELECT e.oportunidad_id, e.campana, e.inicio FROM crm_envios e
+         JOIN crm_oportunidades o ON o.id = e.oportunidad_id
+         JOIN crm_contactos c ON c.id = o.contacto_id
+        WHERE e.sucursal_id = $1 AND right(regexp_replace(coalesce(c.telefono, ''), '\\D', '', 'g'), 10) = $2
+          AND e.estado IN ('enviado', 'entregado', 'leido') AND e.enviado_en > now() - interval '30 days'
+        ORDER BY e.enviado_en DESC LIMIT 1`,
+      [sucursalId, tel],
+    );
+    const ultimo = rows[0];
+    if (!ultimo) {
+      await cliente.query("ROLLBACK");
+      return null;
+    }
+    const opp = ultimo.oportunidad_id as string;
+    const campana = ultimo.campana as string;
+
+    // Lo pendiente de esa campaña se cancela (lo que está saliendo en este momento no se toca).
+    await cliente.query(
+      `UPDATE crm_envios SET estado = 'omitido', motivo = 'ahora_no'
+        WHERE oportunidad_id = $1 AND campana = $2 AND estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando'`,
+      [opp, campana],
+    );
+    // Los pasos que aún no se planificaban quedan cerrados para que no se creen después.
+    await cliente.query(
+      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, plantilla_id, inicio, programado_para, estado, motivo)
+       SELECT $1, $2, p.id, $3, p.plantilla_id, $4::date, now(), 'omitido', 'ahora_no'
+         FROM crm_campana_pasos p JOIN crm_campanas_envio cfg ON cfg.id = p.config_id
+        WHERE cfg.sucursal_id = $1 AND cfg.campana = $3
+       ON CONFLICT (oportunidad_id, paso_id) DO NOTHING`,
+      [sucursalId, opp, campana, ultimo.inicio],
+    );
+    // Seguimientos de esa campaña: los pendientes se omiten y los que aún no existían se crean ya omitidos.
+    await cliente.query(
+      `INSERT INTO crm_seguimiento_ejecuciones (sucursal_id, seguimiento_id, oportunidad_id, referencia_en, programado_para, estado, motivo)
+       SELECT $1, s.id, $2, now(), now(), 'omitido', 'ahora_no' FROM crm_seguimientos s WHERE s.sucursal_id = $1 AND s.campana = $3
+       ON CONFLICT (seguimiento_id, oportunidad_id) DO UPDATE SET estado = 'omitido', motivo = 'ahora_no'
+         WHERE crm_seguimiento_ejecuciones.estado = 'pendiente'`,
+      [sucursalId, opp, campana],
+    );
+    // Las tareas y llamadas que dejaron los seguimientos de esa campaña ya no tienen sentido.
+    await cliente.query(
+      `UPDATE crm_tareas t SET estado = 'cancelada' FROM crm_seguimientos s
+        WHERE t.seguimiento_id = s.id AND s.campana = $3 AND t.oportunidad_id = $2 AND t.sucursal_id = $1 AND t.estado = 'pendiente'`,
+      [sucursalId, opp, campana],
+    );
+    await cliente.query(
+      `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle) VALUES ($1, $2, 'ahora_no', $3, $4)`,
+      [sucursalId, opp, `Respondió «Ahora no» a la campaña ${campana}: sin más mensajes de esta campaña`, { campana, canal: "whatsapp" }],
+    );
+    await cliente.query("COMMIT");
+    return { campana, oportunidadId: opp };
+  } catch (err) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    cliente.release();
+  }
+}
+
+/**
  * El contacto pidió no recibir más: queda en baja (para siempre), se cancela lo que tenía pendiente y
  * sus oportunidades activas pasan a estado de contacto "Baja". Devuelve cuántos contactos tocó.
  */

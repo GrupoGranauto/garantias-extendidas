@@ -8,9 +8,9 @@ import {
   type ConfigSucursal,
 } from "../lib/whatsapp.js";
 import { emitirEventoChat } from "../lib/eventosChat.js";
-import { procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
+import { procesarAhoraNo, procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
 import { buscarVinculo, registrarEntrante, type Vinculo } from "../lib/vinculoWhatsapp.js";
-import { esPeticionDeBaja, telefono10, textoEntrante } from "../lib/campanasLogica.js";
+import { esAhoraNo, esPeticionDeBaja, telefono10, textoEntrante } from "../lib/campanasLogica.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
 
 export const webhookWhatsappRouter = Router();
@@ -376,6 +376,16 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
         await procesarBaja(config.sucursal_id, tel);
       } catch {
         console.error("[campanas] no se pudo registrar una baja");
+      }
+    }
+  } else if (escrito !== null && esAhoraNo(escrito)) {
+    // «Ahora no»: no es baja. Se pausa solo la campaña que le escribió; la siguiente campaña lo vuelve a contactar.
+    const tel = telefono10(msg.from);
+    if (tel) {
+      try {
+        await procesarAhoraNo(config.sucursal_id, tel);
+      } catch {
+        console.error("[campanas] no se pudo registrar un «Ahora no»");
       }
     }
   }
