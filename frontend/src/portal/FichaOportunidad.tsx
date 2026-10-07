@@ -303,7 +303,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
               >
                 Registrar
               </button>
-              <p className="ficha-ayuda">Suma un intento, pone hoy como último contacto y actualiza el estado de contacto. Los mensajes de WhatsApp se registran solos. El estado del lead no cambia solo.</p>
+              <p className="ficha-ayuda">Suma un intento, pone hoy como último contacto y actualiza el estado de contacto. Los mensajes de WhatsApp se registran solos. Si contestó y el lead estaba en «Por contactar», pasa a «Contactado»; los demás estados los mueve el ejecutivo.</p>
             </section>
 
             {ficha.tareas.length > 0 && (

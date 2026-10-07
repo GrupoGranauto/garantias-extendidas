@@ -41,6 +41,32 @@ export async function autorValido(cliente: Consulta, usuarioId?: string): Promis
   return (await cliente.query(`SELECT id FROM usuarios WHERE id = $1`, [usuarioId])).rows[0]?.id ?? null;
 }
 
+/**
+ * Contacto efectivo (contestó la llamada o el cliente escribió por WhatsApp): si el lead sigue en «Por contactar»,
+ * pasa solo a «Contactado». Nunca retrocede ni avanza más allá: el resto del embudo lo mueve el ejecutivo. El cambio
+ * de estado dispara las automatizaciones de «Contactado» (trigger de crm_oportunidades). Devuelve si lo movió.
+ */
+export async function avanzarPorContacto(cliente: Consulta, sucursalId: string, oportunidadId: string): Promise<boolean> {
+  const { rowCount } = await cliente.query(
+    `WITH destino AS (
+       SELECT o.id, o.etapa_id AS origen, d.id AS etapa,
+              (SELECT coalesce(max(x.posicion), 0) + 1024 FROM crm_oportunidades x WHERE x.etapa_id = d.id) AS posicion
+         FROM crm_oportunidades o
+         JOIN crm_etapas e ON e.id = o.etapa_id AND e.clave = 'por_contactar'
+         JOIN crm_etapas d ON d.embudo_id = e.embudo_id AND d.clave = 'contactado' AND d.tipo = 'abierta' AND d.activa
+        WHERE o.id = $1 AND o.sucursal_id = $2 AND o.estado = 'abierta' AND o.estado_cartera = 'ACTIVA'
+     ), movida AS (
+       UPDATE crm_oportunidades o SET etapa_id = d.etapa, posicion = d.posicion, entro_a_etapa_en = now()
+         FROM destino d WHERE o.id = d.id
+       RETURNING o.id, d.origen, d.etapa
+     )
+     INSERT INTO crm_historial_etapas (sucursal_id, oportunidad_id, etapa_origen_id, etapa_destino_id, origen)
+     SELECT $2, id, origen, etapa FROM movida`,
+    [oportunidadId, sucursalId],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
 /** Estados de contrato que prueban una venta: el certificado ya se entregó (implica pago confirmado). */
 export const CONTRATO_CON_EVIDENCIA = ["certificado_entregado", "cobertura_iniciada"];
 
@@ -281,6 +307,11 @@ export async function editarOportunidad(params: {
          VALUES ($1, $2, $3, $4, $5, $6, 'manual')`,
         [sucursalId, oportunidadId, actual.etapa_id, etapaDestinoId, tipoDestino === "perdida" ? motivoId : null, autor],
       );
+    }
+
+    // Marcarlo como «Contactado» a mano también lo saca de «Por contactar» (si no se eligió otro estado a la vez).
+    if (!etapaCambio && ESTADOS_CONTACTO[valores.estado_contacto as string] === "contactado") {
+      etapaCambio = await avanzarPorContacto(cliente, sucursalId, oportunidadId);
     }
 
     await cliente.query("COMMIT");

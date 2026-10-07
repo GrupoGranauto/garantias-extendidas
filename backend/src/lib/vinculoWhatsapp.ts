@@ -1,5 +1,6 @@
 import { getPool } from "./db.js";
 import { telefono10 } from "./campanasLogica.js";
+import { avanzarPorContacto } from "./crm.js";
 
 /**
  * Vínculo automático entre WhatsApp y la base cargada en la web.
@@ -39,7 +40,8 @@ export async function buscarVinculo(sucursalId: string, waId: string): Promise<V
 
 /**
  * El cliente escribió: queda en el historial de su oportunidad y, si seguía sin contacto efectivo
- * (sin intentar, intentando o buzón), pasa a "Contactado" con la fecha de hoy. Responder es contacto.
+ * (sin intentar, intentando o buzón), pasa a "Contactado" con la fecha de hoy. Responder es contacto:
+ * si el lead seguía en «Por contactar», también pasa a ese estado.
  */
 export async function registrarEntrante(sucursalId: string, v: Vinculo, resumen: string | null): Promise<void> {
   if (!v.oportunidad_id) return;
@@ -54,6 +56,7 @@ export async function registrarEntrante(sucursalId: string, v: Vinculo, resumen:
       WHERE id = $1 AND sucursal_id = $2 AND estado_cartera = 'ACTIVA' AND estado = 'abierta'`,
     [v.oportunidad_id, sucursalId],
   );
+  await avanzarPorContacto(getPool(), sucursalId, v.oportunidad_id);
 }
 
 /** Un ejecutivo escribió desde el chat: queda en el historial de la oportunidad activa de ese contacto. */

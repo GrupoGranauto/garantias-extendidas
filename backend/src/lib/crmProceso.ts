@@ -1,5 +1,5 @@
 import { getPool } from "./db.js";
-import { autorValido } from "./crm.js";
+import { autorValido, avanzarPorContacto } from "./crm.js";
 
 /**
  * Proceso comercial del CRM: registro de contactos, línea de tiempo, contrato (evidencia de venta),
@@ -46,7 +46,7 @@ export type ResultadoOperacion = { ok: true } | { ok: false; estado: 400 | 404; 
  * Registra un intento de contacto: lo deja en la línea de tiempo, suma un intento, pone la fecha de
  * último contacto (hoy en Hermosillo) y actualiza el estado de contacto. Quien ya está "Contactado"
  * no retrocede por un buzón o un "no contestó": el intento se cuenta, el estado se conserva.
- * No mueve la etapa: eso sigue siendo decisión del ejecutivo.
+ * Si contestó y el lead seguía en «Por contactar», pasa a «Contactado»; el resto del embudo lo mueve el ejecutivo.
  */
 export async function registrarContacto(p: {
   sucursalId: string;
@@ -79,6 +79,7 @@ export async function registrarContacto(p: {
         WHERE id = $1 AND sucursal_id = $2`,
       [p.oportunidadId, p.sucursalId, nuevo],
     );
+    if (nuevo === "contactado") await avanzarPorContacto(cliente, p.sucursalId, p.oportunidadId);
     await cliente.query(
       `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle, usuario_id) VALUES ($1, $2, $3, $4, $5, $6)`,
       [
