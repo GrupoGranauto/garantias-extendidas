@@ -61,7 +61,7 @@ export async function avanzarPorContacto(cliente: Consulta, sucursalId: string, 
        RETURNING o.id, d.origen, d.etapa
      )
      INSERT INTO crm_historial_etapas (sucursal_id, oportunidad_id, etapa_origen_id, etapa_destino_id, origen)
-     SELECT $2, id, origen, etapa FROM movida`,
+     SELECT $2, id, origen, etapa, 'automatizacion' FROM movida`,
     [oportunidadId, sucursalId],
   );
   return (rowCount ?? 0) > 0;
