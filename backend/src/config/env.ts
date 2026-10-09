@@ -36,6 +36,9 @@ const schema = z.object({
   GMAIL_CLIENT_SECRET: z.string().optional(),
   GMAIL_REFRESH_TOKEN: z.string().optional(),
   SMTP_FROM_NAME: z.string().default("Auto Insights"),
+
+  // CloudTalk: endpoint del bulk API (configurable por región/entorno).
+  CLOUDTALK_BULK_URL: z.string().url().default("https://my.cloudtalk.io/api/bulk/contacts.json"),
 });
 
 // Una variable vacia en .env (PORT=) cuenta como "no definida"

@@ -50,6 +50,20 @@ así que no hay problemas de CORS en desarrollo.
 **Regla:** todo lo que empieza con `VITE_` termina en el bundle del navegador y es visible
 para cualquiera. Nada secreto ahí.
 
+## Integración de contactos con CloudTalk
+
+Aplica la migración `db/migrations/0026_cloudtalk_config.sql` antes de usar estos endpoints.
+El administrador de plataforma configura las credenciales de cada sucursal con
+`PUT /api/admin/sucursales/:id/cloudtalk`; el secreto se cifra en backend y nunca se devuelve
+en la respuesta. `GET` sobre la misma ruta solo informa si está configurado y activo.
+
+Un administrador de sucursal o de plataforma puede crear contactos existentes del CRM con
+`POST /api/admin/sucursales/:id/cloudtalk/contactos`, enviando
+`{"contacto_ids":["uuid-del-contacto"]}`. Se admiten hasta 50 IDs por solicitud; el backend
+los envía a CloudTalk en grupos de 10 y devuelve el resultado individual de cada ID. Se envían
+el nombre, teléfono y correo que existan en `crm_contactos`; los contactos sin nombre y los
+rechazos de CloudTalk aparecen como errores por contacto. La integración no prebusca ni deduplica.
+
 ## Scripts
 
 | Comando | Qué hace |

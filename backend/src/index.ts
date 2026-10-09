@@ -28,6 +28,7 @@ import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
 import { publicoRouter } from "./routes/publico.js";
 import { perfilRouter } from "./routes/perfil.js";
 import { webhookWhatsappRouter } from "./routes/webhookWhatsapp.js";
+import { cloudtalkRouter } from "./routes/cloudtalk.js";
 import { origenPermitido } from "./lib/origenes.js";
 
 const app = express();
@@ -91,6 +92,7 @@ app.use("/api/admin", crmCicloRouter);
 app.use("/api/admin", crmCampanasDefRouter);
 app.use("/api/admin", crmSeguimientosRouter);
 app.use("/api/admin", crmReglasContratoRouter);
+app.use("/api/admin", cloudtalkRouter);
 // Routers solo-admin (adminRouter gatea con requireAdmin todo lo que le llegue).
 app.use("/api/admin", adminRouter);
 app.use("/api/admin", adminWhatsappRouter);
