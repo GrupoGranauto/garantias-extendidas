@@ -1,6 +1,5 @@
 import { getPool } from "./db.js";
-import { telefono10 } from "./campanasLogica.js";
-import { avanzarPorContacto } from "./crm.js";
+import { esPeticionDeBaja, telefono10 } from "./campanasLogica.js";
 
 /**
  * Vínculo automático entre WhatsApp y la base cargada en la web.
@@ -39,9 +38,10 @@ export async function buscarVinculo(sucursalId: string, waId: string): Promise<V
 }
 
 /**
- * El cliente escribió: queda en el historial de su oportunidad y, si seguía sin contacto efectivo
- * (sin intentar, intentando o buzón), pasa a "Contactado" con la fecha de hoy. Responder es contacto:
- * si el lead seguía en «Por contactar», también pasa a ese estado.
+ * Alguien escribió desde el teléfono del cliente: queda en el historial de su oportunidad y la respuesta cae en la cola
+ * «por clasificar» (Notion). Todavía no se sabe quién escribió, así que no cuenta como contacto efectivo: si el ejecutivo
+ * la clasifica como «Titular», ahí pasa a Contactado («Solicita info por WhatsApp»); otra persona, spam o número
+ * equivocado no lo mueven. Una petición de baja la atiende el webhook aparte y no necesita clasificarse.
  */
 export async function registrarEntrante(sucursalId: string, v: Vinculo, resumen: string | null): Promise<void> {
   if (!v.oportunidad_id) return;
@@ -49,14 +49,18 @@ export async function registrarEntrante(sucursalId: string, v: Vinculo, resumen:
     `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle) VALUES ($1, $2, 'mensaje_entrante', 'WhatsApp: el cliente escribió', $3)`,
     [sucursalId, v.oportunidad_id, { resumen: resumen ? resumen.slice(0, 140) : null }],
   );
+  if (resumen !== null && esPeticionDeBaja(resumen)) return;
+  // Si ya se identificó al titular en esta campaña, sus mensajes siguientes no se vuelven a clasificar (y la clasificación
+  // no se pierde). A una persona dada de baja no se le abre la cola.
   await getPool().query(
-    `UPDATE crm_oportunidades
-        SET estado_contacto = CASE WHEN estado_contacto IN ('sin_intentar', 'intentando', 'buzon') THEN 'contactado' ELSE estado_contacto END,
-            fecha_ultimo_contacto = (now() AT TIME ZONE '${ZONA}')::date
-      WHERE id = $1 AND sucursal_id = $2 AND estado_cartera = 'ACTIVA' AND estado = 'abierta'`,
+    `UPDATE crm_oportunidades o
+        SET fecha_ultimo_contacto = (now() AT TIME ZONE '${ZONA}')::date,
+            respuesta_por_clasificar = (o.clasificacion_respuesta IS DISTINCT FROM 'TITULAR')
+       FROM crm_contactos c
+      WHERE o.id = $1 AND o.sucursal_id = $2 AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'
+        AND c.id = o.contacto_id AND NOT c.whatsapp_baja AND o.estado_contacto <> 'baja'`,
     [v.oportunidad_id, sucursalId],
   );
-  await avanzarPorContacto(getPool(), sucursalId, v.oportunidad_id);
 }
 
 /** Un ejecutivo escribió desde el chat: queda en el historial de la oportunidad activa de ese contacto. */

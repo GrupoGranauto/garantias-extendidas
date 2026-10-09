@@ -1,5 +1,5 @@
 import { getPool } from "./db.js";
-import { autorValido, CONTRATO_CON_EVIDENCIA } from "./crm.js";
+import { ajustarResultados, autorValido, CONTRATO_CON_EVIDENCIA } from "./crm.js";
 
 /**
  * Acciones sobre varias oportunidades a la vez (selección en la tabla). Todo ocurre en una sola
@@ -64,12 +64,12 @@ export async function ejecutarAccionMasiva(p: {
       let motivoId: string | null = null;
       if (tipo === "perdida" && accion.motivo) {
         const { rows } = await cliente.query(
-          `SELECT id FROM crm_motivos_perdida WHERE sucursal_id = $1 AND nombre = $2 AND activo`,
+          `SELECT id, clave FROM crm_motivos_perdida WHERE sucursal_id = $1 AND nombre = $2 AND activo`,
           [sucursalId, accion.motivo],
         );
-        if (!rows[0]) {
+        if (!rows[0] || rows[0].clave === "pidio_baja") {
           await cliente.query("ROLLBACK");
-          return { error: "El motivo de pérdida no existe." };
+          return { error: rows[0] ? "«Pidió baja» se registra con «Pidió no ser contactado» en la ficha." : "El motivo de pérdida no existe." };
         }
         motivoId = rows[0].id as string;
       }
@@ -110,6 +110,8 @@ export async function ejecutarAccionMasiva(p: {
              FROM jsonb_to_recordset($2::jsonb) AS r(id uuid, origen uuid)`,
           [sucursalId, JSON.stringify(aMover.map((f) => ({ id: f.id, origen: f.etapa_id }))), destino, tipo === "perdida" ? motivoId : null, autor],
         );
+        // Cada lead toma el resultado BDC que corresponde a su nuevo estado.
+        await ajustarResultados(cliente, sucursalId, aMover.map((f) => f.id as string));
       }
       await cliente.query("COMMIT");
       return { afectadas: aMover.length, omitidas: omitidasPorPermiso + (filas.length - aMover.length) };
@@ -175,7 +177,8 @@ export async function resumenInicio(sucursalId: string, ejecutivo: string | null
   const filtro = ejecutivo ? " AND o.ejecutivo = $2" : "";
   const args = ejecutivo ? [sucursalId, ejecutivo] : [sucursalId];
 
-  const [cartera, tareas, contactos, ventas] = await Promise.all([
+  const fueraSla = `e.tiempo_max_horas IS NOT NULL AND o.entro_a_etapa_en < now() - make_interval(hours => e.tiempo_max_horas)`;
+  const [cartera, tareas, contactos, ventas, atender, embudo, campanas, actividad] = await Promise.all([
     pool.query(
       `SELECT count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta')::int AS cartera_abierta,
               count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND o.estado_contacto = 'sin_intentar')::int AS sin_intentar,
@@ -207,6 +210,61 @@ export async function resumenInicio(sucursalId: string, ejecutivo: string | null
           AND (h.creado_en AT TIME ZONE '${ZONA}') >= date_trunc('month', now() AT TIME ZONE '${ZONA}')${filtro}`,
       args,
     ),
+    // A quién atender ahora: primero lo que ya pasó su tiempo máximo, luego lo que nunca se ha intentado, por la ventana
+    // de campaña que cierra antes (48 horas va primero) y por antigüedad en el estado.
+    pool.query(
+      `SELECT o.id, c.nombre AS cliente, o.campana, e.nombre AS estado, e.color, o.ejecutivo, o.entro_a_etapa_en,
+              (${fueraSla}) AS fuera_sla, count(*) OVER ()::int AS total
+         FROM crm_oportunidades o
+         JOIN crm_etapas e ON e.id = o.etapa_id
+         LEFT JOIN crm_contactos c ON c.id = o.contacto_id
+        WHERE o.sucursal_id = $1 AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'
+          AND o.estado_contacto NOT IN ('baja', 'no_contactable') AND NOT coalesce(c.whatsapp_baja, false)
+          AND (o.estado_contacto = 'sin_intentar' OR (${fueraSla}))${filtro}
+        ORDER BY (${fueraSla}) DESC, o.fecha_fin_campana NULLS LAST, o.entro_a_etapa_en
+        LIMIT 8`,
+      args,
+    ),
+    pool.query(
+      `SELECT e.nombre, e.color, count(o.id)::int AS total
+         FROM crm_etapas e
+         LEFT JOIN crm_oportunidades o ON o.etapa_id = e.id AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'${filtro}
+        WHERE e.sucursal_id = $1 AND e.activa AND e.tipo = 'abierta'
+        GROUP BY e.id ORDER BY e.orden`,
+      args,
+    ),
+    pool.query(
+      `SELECT o.campana, count(*)::int AS total
+         FROM crm_oportunidades o
+         LEFT JOIN crm_campanas_def d ON d.sucursal_id = o.sucursal_id AND d.nombre = o.campana
+        WHERE o.sucursal_id = $1 AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND o.campana IS NOT NULL${filtro}
+        GROUP BY o.campana ORDER BY min(d.orden) NULLS LAST, o.campana`,
+      args,
+    ),
+    // Lo último que pasó en la cartera activa (7 días): contactos, notas, contrato y cambios de estado. Las ediciones
+    // de campos no cuentan: son ruido para el día a día.
+    pool.query(
+      `SELECT * FROM (
+         SELECT a.tipo, a.titulo, a.creado_en, a.oportunidad_id, c.nombre AS cliente, u.nombre AS autor
+           FROM crm_actividades a
+           JOIN crm_oportunidades o ON o.id = a.oportunidad_id
+           LEFT JOIN crm_contactos c ON c.id = o.contacto_id
+           LEFT JOIN usuarios u ON u.id = a.usuario_id
+          WHERE a.sucursal_id = $1 AND a.tipo <> 'edicion' AND o.estado_cartera = 'ACTIVA'
+            AND a.creado_en > now() - interval '7 days'${filtro}
+         UNION ALL
+         SELECT 'estado', 'Pasó a ' || ed.nombre || CASE WHEN h.origen = 'automatizacion' THEN ' (automático)' ELSE '' END,
+                h.creado_en, h.oportunidad_id, c.nombre, u.nombre
+           FROM crm_historial_etapas h
+           JOIN crm_etapas ed ON ed.id = h.etapa_destino_id
+           JOIN crm_oportunidades o ON o.id = h.oportunidad_id
+           LEFT JOIN crm_contactos c ON c.id = o.contacto_id
+           LEFT JOIN usuarios u ON u.id = h.usuario_id
+          WHERE h.sucursal_id = $1 AND h.origen IN ('manual', 'automatizacion') AND o.estado_cartera = 'ACTIVA'
+            AND h.creado_en > now() - interval '7 days'${filtro}
+       ) x ORDER BY creado_en DESC LIMIT 8`,
+      args,
+    ),
   ]);
 
   return {
@@ -217,6 +275,11 @@ export async function resumenInicio(sucursalId: string, ejecutivo: string | null
     contactos_hoy: contactos.rows[0].total,
     contactos_efectivos_hoy: contactos.rows[0].efectivos,
     ventas_mes: ventas.rows[0].total,
+    atender: atender.rows.map(({ total: _total, ...fila }) => fila),
+    atender_total: (atender.rows[0]?.total as number | undefined) ?? 0,
+    embudo: embudo.rows,
+    campanas: campanas.rows,
+    actividad: actividad.rows,
   };
 }
 

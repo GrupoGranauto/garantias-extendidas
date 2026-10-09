@@ -25,6 +25,8 @@ const MOTIVOS: Record<string, string> = {
   etapa_no_permitida: "Estado del lead no permitido",
   respondio: "Ya respondió",
   ya_contactado: "Ya fue contactado",
+  no_contactable: "El BDC lo marcó no contactable",
+  un_mensaje_por_dia: "Ese teléfono ya recibió un mensaje hoy",
   fuera_de_ventana: "Fuera del horario",
   tope_diario: "Tope diario alcanzado",
   descanso_entre_campanas: "Descanso entre campañas",

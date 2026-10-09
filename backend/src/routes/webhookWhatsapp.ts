@@ -358,7 +358,7 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
   const { error } = await getSupabase().from("whatsapp_mensajes").insert(fila);
   if (error) throw new Error(error.message);
 
-  // Lo que escribió el cliente queda en el historial de su oportunidad (y cuenta como contacto).
+  // Lo que escribió el cliente queda en el historial de su oportunidad y cae en la cola «por clasificar».
   if (vinculo) {
     try {
       await registrarEntrante(config.sucursal_id, vinculo, fila.tipo === "texto" ? String(fila.texto ?? "") : `(${String(fila.tipo)})`);

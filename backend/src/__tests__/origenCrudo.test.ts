@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { adaptarFilaCruda, campanaDeVehiculo, esFilaCruda, nombreCompleto } from "../lib/origenCrudoLogica.js";
-import { oportunidadWeb, planificar } from "../lib/sincronizacionCrm.js";
+import { oportunidadWeb } from "../lib/sincronizacionCrm.js";
+import { planificarLeads, type LeadExistente } from "../lib/cicloLeadLogica.js";
 import type { DefinicionCampana } from "../lib/campanasDefLogica.js";
 
 /** Las reglas de Granauto: 48H por fecha de reporte; el resto por fecha de factura. */
@@ -63,7 +64,7 @@ describe("campaña calculada por la web", () => {
   });
 });
 
-describe("planificar con el origen crudo", () => {
+describe("ciclo de leads con el origen crudo", () => {
   const filas = [
     cruda({ vin: "V1", telefono: "6623587553", fecha_factura: "2026-10-04", fecha_reporte: "2026-10-05" }),
     cruda({ vin: "V2", telefono: "6621464226", fecha_factura: "2026-05-15", fecha_reporte: "2026-05-17" }),
@@ -72,20 +73,25 @@ describe("planificar con el origen crudo", () => {
     cruda({ vin: "V5", telefono: "6620000000", fecha_factura: "2023-01-10", fecha_reporte: "2023-01-12" }), // en ninguna campaña
   ];
   const activar = (m: Record<string, unknown>) => oportunidadWeb(m, DEFS, HOY, SIN_ETAPAS);
+  const lead = (id: string, vin: string, clave: string): LeadExistente => ({
+    id, vin, ejecutivo: "Ejecutivo A", estado: "abierta", estado_contacto: "sin_intentar", estado_cartera: "ACTIVA",
+    pasoAbierto: { id: `paso-${id}`, clave, campana: clave.split("|")[1] }, pasosCerrados: [],
+  });
 
-  it("crea una oportunidad por campaña con identidad VIN|campaña|inicio", () => {
-    const p = planificar(filas, [], ["Ejecutivo A", "Ejecutivo B"], { activar, campanasValidas: null });
+  it("crea un lead por VIN con su paso VIN|campaña|inicio", () => {
+    const p = planificarLeads(filas, [], ["Ejecutivo A", "Ejecutivo B"], activar);
     expect(p.conflictos).toEqual([]);
-    expect(p.nuevas.map((n) => n.clave).sort()).toEqual(["V1|48H|2026-10-06", "V2|5M|2026-10-01", "V3|12M_NURTURING|2026-09-30", "V4|28M|2026-10-01"]);
-    expect(new Set(p.nuevas.map((n) => n.ejecutivo))).toEqual(new Set(["Ejecutivo A", "Ejecutivo B"]));
+    expect(p.leadsNuevos.map((n) => n.clave).sort()).toEqual(["V1|48H|2026-10-06", "V2|5M|2026-10-01", "V3|12M_NURTURING|2026-09-30", "V4|28M|2026-10-01"]);
+    expect(new Set(p.leadsNuevos.map((n) => n.ejecutivo))).toEqual(new Set(["Ejecutivo A", "Ejecutivo B"]));
   });
 
   it("cierra lo que ya no está en ninguna campaña, sin borrar", () => {
-    const existentes = [
-      { id: "o1", clave: "V5|5M|2022-06-01", vin: "V5", campana: "5M", estado_cartera: "ACTIVA", ejecutivo: "Ejecutivo A", estado: "abierta" },
-      { id: "o2", clave: "V9|5M|2026-10-01", vin: "V9", campana: "5M", estado_cartera: "ACTIVA", ejecutivo: "Ejecutivo A", estado: "abierta" },
-    ];
-    const p = planificar(filas, existentes, ["Ejecutivo A"], { activar, campanasValidas: null });
-    expect(p.cerradas).toEqual(expect.arrayContaining([{ id: "o1", estado: "FUERA_DE_VENTANA" }, { id: "o2", estado: "NO_EN_MAESTRA" }]));
+    const p = planificarLeads(filas, [lead("o1", "V5", "V5|5M|2022-06-01"), lead("o2", "V9", "V9|5M|2026-10-01")], ["Ejecutivo A"], activar);
+    expect(p.cerrados).toEqual(
+      expect.arrayContaining([
+        { leadId: "o1", pasoId: "paso-o1", estado: "FUERA_DE_VENTANA", motivo: "FUERA_DE_VENTANA" },
+        { leadId: "o2", pasoId: "paso-o2", estado: "NO_EN_MAESTRA", motivo: "NO_EN_MAESTRA" },
+      ]),
+    );
   });
 });

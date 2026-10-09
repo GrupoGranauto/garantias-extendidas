@@ -481,7 +481,7 @@ export async function planificarEnvios(): Promise<number> {
     `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, plantilla_id, inicio, programado_para)
      SELECT r.sucursal_id, r.oportunidad_id, r.paso_id, r.campana, r.plantilla_id, r.inicio::date, (r.local::timestamp AT TIME ZONE '${ZONA_ENVIOS}')
        FROM jsonb_to_recordset($1::jsonb) AS r(sucursal_id uuid, oportunidad_id uuid, paso_id uuid, campana text, plantilla_id uuid, inicio text, local text)
-     ON CONFLICT (oportunidad_id, paso_id) DO NOTHING`,
+     ON CONFLICT DO NOTHING`,
     [JSON.stringify(lote)],
   );
   return rowCount ?? 0;
@@ -512,6 +512,8 @@ type FilaContexto = {
   campana: string | null;
   estado_cartera: string;
   estado: string;
+  resultado_bdc: string | null;
+  estado_contacto: string;
   inicio: string;
   ejecutivo: string | null;
   etapa: string | null;
@@ -556,7 +558,7 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
                  WHEN e.seguimiento_id IS NOT NULL OR coalesce(cc.campanas_fuente, 'bigquery') = 'web'
                  THEN (CASE WHEN coalesce(v.tiene_ge, false) THEN 'YA_TIENE_GE' ELSE 'ACTIVA' END)
                  ELSE o.estado_cartera END AS estado_cartera,
-            o.estado, coalesce(e.inicio, o.fecha_inicio_campana)::text AS inicio, o.ejecutivo, et.nombre AS etapa,
+            o.estado, o.estado_contacto, o.resultado_bdc, coalesce(e.inicio, o.fecha_inicio_campana)::text AS inicio, o.ejecutivo, et.nombre AS etapa,
             c.id AS contacto_id, c.nombre AS cliente, c.telefono, c.tiene_celular, c.whatsapp_baja,
             wp.estado AS plantilla_estado, wp.nombre_tecnico, wp.idioma, wp.componentes, wp.nombre AS plantilla_nombre
        FROM crm_envios e
@@ -602,6 +604,13 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
           [f.contacto_id, e.campana, f.dias_entre_mensajes],
         )
       : { rows: [{ v: false }], rowCount: 1 };
+  // Ese teléfono ya recibió (o en simulación, «recibió») un mensaje hoy, de cualquier campaña y de cualquiera de sus autos.
+  const telefonoHoy = await cl.query(
+    `SELECT EXISTS (SELECT 1 FROM crm_envios e4 JOIN crm_oportunidades o4 ON o4.id = e4.oportunidad_id
+                     WHERE o4.contacto_id = $1 AND e4.id <> $2 AND e4.estado IN ('enviado', 'entregado', 'leido', 'simulado')
+                       AND (e4.enviado_en AT TIME ZONE '${ZONA_ENVIOS}')::date = $3::date) AS v`,
+    [f.contacto_id, e.id, ahora.fecha],
+  );
   const hoy = await cl.query(
     `SELECT count(*)::int AS n FROM crm_envios e3
       WHERE e3.sucursal_id = $1 AND e3.campana = $2 AND e3.estado IN ('enviado', 'entregado', 'leido', 'simulado')
@@ -635,13 +644,23 @@ async function armarContexto(cl: Consulta, e: { id: string; sucursal_id: string;
       diasDesdePrimerEnvio: primerReal ? diasTranscurridos(primerReal, ahora.fecha) : null,
     }),
     enviadosHoy: hoy.rows[0].n as number,
-    oportunidad: { campana: f.campana, campanaEsperada: e.campana, estadoCartera: f.estado_cartera, estado: f.estado, etapa: f.etapa, agencia: f.agencia },
+    oportunidad: {
+      campana: f.campana,
+      campanaEsperada: e.campana,
+      estadoCartera: f.estado_cartera,
+      estado: f.estado,
+      etapa: f.etapa,
+      agencia: f.agencia,
+      estadoContacto: f.estado_contacto,
+    },
     pilotoAgencias: f.piloto_agencias ?? [],
     contacto: { baja: f.whatsapp_baja, telefono10: tel, tieneCelular: f.tiene_celular },
     paso: { etapas: f.etapas ?? [], soloSinRespuesta: f.solo_sin_respuesta, soloSinContacto: f.solo_sin_contacto },
     respondio: resp.rows[0].v === true,
     yaContactado: contactado.rows[0].v === true,
+    resultadoBdc: f.resultado_bdc,
     enviadoRecienteOtraCampana: reciente.rows[0].v === true,
+    telefonoConMensajeHoy: telefonoHoy.rows[0].v === true,
     whatsappListo,
     plantillaDisponible: plantillaOk,
   };
@@ -937,11 +956,14 @@ export async function procesarAhoraNo(sucursalId: string, tel: string): Promise<
     );
     // Los pasos que aún no se planificaban quedan cerrados para que no se creen después.
     await cliente.query(
-      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, plantilla_id, inicio, programado_para, estado, motivo)
-       SELECT $1, $2, p.id, $3, p.plantilla_id, $4::date, now(), 'omitido', 'ahora_no'
+      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, campana_id, plantilla_id, inicio, programado_para, estado, motivo)
+       SELECT $1, $2, p.id, $3,
+              -- El paso de campaña del lead en esa campaña (aunque ya haya pasado a otra).
+              (SELECT oc.id FROM crm_oportunidad_campanas oc WHERE oc.oportunidad_id = $2 AND oc.campana = $3 ORDER BY oc.abierta_en DESC LIMIT 1),
+              p.plantilla_id, $4::date, now(), 'omitido', 'ahora_no'
          FROM crm_campana_pasos p JOIN crm_campanas_envio cfg ON cfg.id = p.config_id
         WHERE cfg.sucursal_id = $1 AND cfg.campana = $3
-       ON CONFLICT (oportunidad_id, paso_id) DO NOTHING`,
+       ON CONFLICT DO NOTHING`,
       [sucursalId, opp, campana, ultimo.inicio],
     );
     // Seguimientos de esa campaña: los pendientes se omiten y los que aún no existían se crean ya omitidos.
@@ -992,16 +1014,18 @@ export async function procesarBaja(sucursalId: string, tel: string): Promise<num
           WHERE e.oportunidad_id = o.id AND o.contacto_id = ANY($1::uuid[]) AND e.estado = 'pendiente'`,
         [ids],
       );
+      // Todos sus leads salvo las ventas (también los que están fuera de ventana: así el ciclo diario no los reabre).
       await cliente.query(
-        `UPDATE crm_oportunidades SET estado_contacto = 'baja' WHERE contacto_id = ANY($1::uuid[]) AND estado_cartera = 'ACTIVA' AND estado = 'abierta'`,
-        [ids],
-      );
-      await cliente.query(
-        `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle)
-         SELECT $1, o.id, 'baja', 'Pidió no recibir más mensajes', '{"canal":"whatsapp"}'::jsonb
-           FROM crm_oportunidades o WHERE o.contacto_id = ANY($2::uuid[]) AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'`,
+        `WITH marcados AS (
+           UPDATE crm_oportunidades SET estado_contacto = 'baja', respuesta_por_clasificar = false
+            WHERE contacto_id = ANY($2::uuid[]) AND estado <> 'ganada'
+           RETURNING id
+         )
+         INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle)
+         SELECT $1, m.id, 'baja', 'Pidió no recibir más mensajes', '{"canal":"whatsapp"}'::jsonb FROM marcados m`,
         [sucursalId, ids],
       );
+      await cliente.query(`UPDATE crm_contactos SET baja_canal = 'whatsapp' WHERE id = ANY($1::uuid[])`, [ids]);
     }
     await cliente.query("COMMIT");
     return ids.length;

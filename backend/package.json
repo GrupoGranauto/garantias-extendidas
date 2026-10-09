@@ -12,7 +12,8 @@
     "test": "vitest run",
     "verificar:motor": "tsx scripts/verificar-motor.ts",
     "verificar:webhook": "tsx scripts/verificar-webhook.ts",
-    "verificar:contrato": "tsx scripts/verificar-contrato.ts"
+    "verificar:contrato": "tsx scripts/verificar-contrato.ts",
+    "previsualizar:ciclo": "tsx scripts/previsualizar-ciclo.ts"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^7.9.1",

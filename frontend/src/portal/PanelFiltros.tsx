@@ -77,7 +77,7 @@ function CampoDesplegable({
       <button
         ref={anclaRef}
         type="button"
-        className={`pf-caja pf-selector${abierto ? " pf-caja-abierta" : ""}`}
+        className={`pf-caja pf-selector${abierto ? " pf-caja-abierta" : ""}${seleccion.length > 0 ? " pf-caja-activa" : ""}`}
         disabled={soloVista}
         onClick={alternar}
       >
@@ -166,11 +166,11 @@ function CampoFecha({
       <button
         ref={anclaRef}
         type="button"
-        className={`pf-caja pf-selector${abierto ? " pf-caja-abierta" : ""}`}
+        className={`pf-caja pf-selector${abierto ? " pf-caja-abierta" : ""}${texto ? " pf-caja-activa" : ""}`}
         disabled={soloVista}
         onClick={abrir}
       >
-        <span className={texto ? undefined : "pf-selector-vacio"}>{texto || "Seleccionar fecha…"}</span>
+        <span className={texto ? undefined : "pf-selector-vacio"}>{texto || "Cualquiera"}</span>
         <IconoCalendario className="pf-icono-fecha" />
       </button>
 
@@ -255,11 +255,11 @@ export default function PanelFiltros({
   return (
     <div className="panel-filtros">
       {visibilidad.filtros && filtros.length > 0 && (
-        <div className="pf-rejilla pf-rejilla-filtros">
+        <div className="pf-filtros">
           {filtros.map((item) => {
             const campo = campos.find((c) => c.nombre_tecnico === item.columna);
             return (
-              <div key={item.id} className="pf-item" style={span(item.ancho)}>
+              <div key={item.id} className={`pf-item${item.tipo === "busqueda" ? " pf-item-busqueda" : ""}`} style={span(item.ancho)}>
                 <span className="pf-etiqueta">{item.etiqueta}</span>
                 {item.tipo === "busqueda" ? (
                   <label className="pf-caja pf-busqueda">
@@ -296,24 +296,21 @@ export default function PanelFiltros({
       )}
 
       {visibilidad.insights && indicadores.length > 0 && (
-        <div className="pf-rejilla pf-rejilla-kpis">
+        <div className="pf-kpis">
           {indicadores.map((item) => {
             const k = kpis[item.id];
             return (
               <div
                 key={item.id}
-                className="pf-kpi pf-item"
-                style={{ ...span(item.ancho), ["--kpi" as string]: item.color ?? COLOR_KPI_POR_DEFECTO } as CSSProperties}
+                className="pf-kpi"
+                style={{ ["--kpi" as string]: item.color ?? COLOR_KPI_POR_DEFECTO } as CSSProperties}
                 title={k?.error}
               >
-                <div className="pf-kpi-barra" />
-                <div className="pf-kpi-cuerpo">
-                  <div className="pf-kpi-etiqueta">
-                    <span className="pf-punto" />
-                    {item.etiqueta}
-                  </div>
-                  <div className="pf-kpi-valor">{k && k.valor !== null ? k.valor.toLocaleString("es-MX") : "—"}</div>
-                </div>
+                <span className="pf-kpi-etiqueta">
+                  <span className="pf-punto" />
+                  {item.etiqueta}
+                </span>
+                <strong className="pf-kpi-valor">{k && k.valor !== null ? k.valor.toLocaleString("es-MX") : "—"}</strong>
               </div>
             );
           })}
@@ -321,21 +318,19 @@ export default function PanelFiltros({
       )}
 
       {visibilidad.rapidos && botones.length > 0 && (
-        <div className="pf-rejilla pf-rejilla-botones">
+        <div className="pf-botones" role="group" aria-label="Filtros rápidos">
           {botones.map((item) => {
             const activo = estado.botones.includes(item.id);
             return (
               <button
                 key={item.id}
                 type="button"
-                className={`pf-boton pf-item${activo ? " pf-boton-activo" : ""}`}
-                style={span(item.ancho)}
+                className={`pf-boton${activo ? " pf-boton-activo" : ""}`}
                 aria-pressed={activo}
                 disabled={soloVista}
                 onClick={() => onBoton(item.id)}
               >
-                {activo && <span className="pf-punto-activo" />}
-                <span className="pf-boton-texto">{item.etiqueta}</span>
+                {item.etiqueta}
               </button>
             );
           })}

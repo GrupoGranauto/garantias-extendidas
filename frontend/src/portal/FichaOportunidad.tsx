@@ -3,6 +3,7 @@ import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { IconoCheck, IconoReloj, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
+import GestionBdc, { FECHA_HORA_MAX, RESPUESTA_CON_PROXIMO, aLocal, proximoDesdeLocal, type Gestion } from "./GestionBdc";
 
 type Entrada = { tipo: string; titulo: string; detalle: Record<string, unknown> | null; autor: string | null; creado_en: string };
 type TareaPendiente = { id: string; tipo: "tarea" | "pregunta"; titulo: string; descripcion: string | null; vence_en: string | null };
@@ -18,14 +19,36 @@ type Emision = {
   };
   opciones: { nombre: string; plazos_meses: number[]; msi_meses: number[]; estados_circulacion: string[]; vendedores: string[]; liga_pago_horas: number };
 };
+type OpcionResultado = { valor: string; estado: string; color: string };
+/** Una vez que el VIN estuvo en una campaña (la en curso trae los datos de hoy; las cerradas, la foto al cerrarse). */
+type PasoCampana = {
+  id: string;
+  clave: string;
+  campana: string;
+  fase_campana: string | null;
+  abierta_en: string;
+  cerrada_en: string | null;
+  motivo_cierre: string | null;
+  primer_contacto_en: string | null;
+  resultado_bdc: string | null;
+  estado: string | null;
+  ejecutivo: string | null;
+  llamadas: number;
+  whatsapp: number;
+  respuestas: number;
+  masivos: number;
+};
 type Ficha = {
   oportunidad: Record<string, unknown>;
+  resultado: { actual: string; opciones: OpcionResultado[] };
   etiquetas: Record<string, string>;
   contrato: { estado: string; folio: string | null };
   emision: Emision | null;
   exigir_evidencia_venta: boolean;
   tareas: TareaPendiente[];
   linea_tiempo: Entrada[];
+  campanas: PasoCampana[];
+  gestion: Gestion;
   estados_contrato: string[];
 };
 
@@ -36,13 +59,6 @@ type Props = {
   /** Avisa a la tabla/embudo que algo cambió para que se recarguen. */
   onCambio: () => void;
 };
-
-const RESULTADOS = [
-  { valor: "contesto", texto: "Contestó" },
-  { valor: "no_contesto", texto: "No contestó" },
-  { valor: "buzon", texto: "Buzón de voz" },
-  { valor: "numero_equivocado", texto: "Número equivocado" },
-];
 
 const ETIQUETA_CONTRATO: Record<string, string> = {
   sin_contrato: "Sin contrato",
@@ -113,6 +129,48 @@ function opcionesDe(lista: Lista | undefined, o: Emision["opciones"]): { valor: 
   return null;
 }
 
+/** Estados del lead en el orden del embudo, para agrupar los resultados. */
+const ESTADOS_RESULTADO: [string, string][] = [
+  ["por_contactar", "Por contactar"],
+  ["contactado", "Contactado"],
+  ["interesado", "Interesado"],
+  ["cotizado", "Cotizado"],
+  ["vendido", "Vendido"],
+  ["perdido", "Perdido"],
+];
+
+/** «NO INTERESADO» → «No interesado»: los valores del Sheet van en mayúsculas. */
+const textoResultado = (r: string) => (r.charAt(0) + r.slice(1).toLowerCase()).replace("whatsapp", "WhatsApp");
+
+const NOMBRE_CAMPANA: Record<string, string> = {
+  "48H": "48 horas",
+  "5M": "5 meses",
+  "12M_NURTURING": "12 meses (nurturing)",
+  "28M": "28 meses",
+};
+const nombreCampana = (c: string) => NOMBRE_CAMPANA[c] ?? c.replace(/_/g, " ");
+const FASE: Record<string, string> = { ETAPA_1: "Etapa 1", ETAPA_2: "Etapa 2", NURTURING: "Nurturing", POR_DIAS: "Por días" };
+const textoFase = (f: string) => FASE[f] ?? (f.charAt(0) + f.slice(1).toLowerCase()).replace(/_/g, " ");
+
+const MOTIVO_CIERRE: Record<string, string> = {
+  CAMBIO_CAMPANA: "Pasó a la siguiente campaña",
+  FUERA_DE_VENTANA: "Terminó la ventana de la campaña",
+  YA_TIENE_GE: "Ya tiene garantía extendida",
+  NO_CONTACTABLE_FUENTE: "Quedó como no contactable en la cartera",
+  NO_EN_MAESTRA: "Salió de la cartera",
+};
+
+const DIA_MS = 86_400_000;
+/** Días completos entre dos momentos (hasta ahora si no hay fin). */
+const diasEntre = (desde: string, hasta: string | null) =>
+  Math.max(0, Math.floor(((hasta ? new Date(hasta) : new Date()).getTime() - new Date(desde).getTime()) / DIA_MS));
+const textoDias = (n: number) => (n === 0 ? "menos de un día" : n === 1 ? "1 día" : `${n} días`);
+/** Días de calendario (en Hermosillo) entre dos momentos: 23:00 de un día y 09:00 del siguiente es «al día siguiente». */
+const diaHermosillo = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Hermosillo" });
+const diasCalendario = (desde: string, hasta: string) =>
+  Math.max(0, Math.round((Date.parse(`${diaHermosillo(hasta)}T00:00:00Z`) - Date.parse(`${diaHermosillo(desde)}T00:00:00Z`)) / DIA_MS));
+const cuenta = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
+
 /** Columnas que se muestran como datos, en este orden (solo las que la ficha recibió). */
 const DATOS = [
   "telefono_principal", "correo", "vin", "agencia", "linea", "version_vehiculo", "anio_vin", "campana", "fase_campana",
@@ -138,15 +196,20 @@ function cuando(valor: string): string {
     : d.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/** Un valor anterior o nuevo de una edición, legible: sí/no, fecha y hora del próximo contacto, montos en pesos. */
+function valorEdicion(campo: unknown, v: unknown): string {
+  if (v === null || v === undefined || v === "") return "vacío";
+  if (typeof v === "boolean") return v ? "Sí" : "No";
+  if (campo === "proximo_contacto_en") return cuando(String(v)) || formato(v);
+  if (campo === "monto_cotizado" && Number.isFinite(Number(v))) return Number(v).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
+  return formato(v);
+}
+
 function detalleEntrada(e: Entrada): string | null {
   const d = e.detalle ?? {};
   if (e.tipo === "nota" && d.texto) return String(d.texto);
   if ((e.tipo === "llamada" || e.tipo === "whatsapp") && d.nota) return String(d.nota);
-  if (e.tipo === "edicion" || e.tipo === "reasignacion") {
-    const a = d.anterior === null || d.anterior === undefined || d.anterior === "" ? "vacío" : formato(d.anterior);
-    const n = d.nuevo === null || d.nuevo === undefined || d.nuevo === "" ? "vacío" : formato(d.nuevo);
-    return `${a} → ${n}`;
-  }
+  if (e.tipo === "edicion" || e.tipo === "reasignacion") return `${valorEdicion(d.campo, d.anterior)} → ${valorEdicion(d.campo, d.nuevo)}`;
   if (e.tipo === "etapa" && d.motivo) return `Motivo: ${String(d.motivo)}`;
   if (e.tipo === "tarea" && d.respuesta) return `Respuesta: ${String(d.respuesta)}`;
   if (e.tipo === "emision" && Array.isArray(d.campos)) return `Campos: ${d.campos.map(String).join(", ")}`;
@@ -163,7 +226,10 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [enviando, setEnviando] = useState(false);
 
-  const [resultado, setResultado] = useState("contesto");
+  const [resultado, setResultado] = useState("CONTESTA_TITULAR");
+  const [respuesta, setRespuesta] = useState("");
+  const [motivoNoInteres, setMotivoNoInteres] = useState("");
+  const [proximo, setProximo] = useState("");
   const [nota, setNota] = useState("");
   const [textoNota, setTextoNota] = useState("");
   const [estadoContrato, setEstadoContrato] = useState("sin_contrato");
@@ -173,10 +239,20 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
 
   const base = `/api/admin/sucursales/${sucursalId}/crm/oportunidades/${oportunidadId}`;
 
-  const cargar = useCallback(() => {
+  // Solo un administrador puede quitar un «no contactar» (corrección de captura).
+  const [esAdmin, setEsAdmin] = useState(false);
+  useEffect(() => {
+    apiFetch<{ rol: string }>("/api/perfil")
+      .then((p) => setEsAdmin(p.rol === "admin"))
+      .catch(() => setEsAdmin(false));
+  }, []);
+
+  /** Recarga la ficha. `soloFicha`: no toca lo que se está capturando en emisión, contrato y km (guardados de Gestión). */
+  const cargar = useCallback((soloFicha = false) => {
     apiFetch<Ficha>(base)
       .then((f) => {
         setFicha(f);
+        if (soloFicha) return;
         setEstadoContrato(f.contrato.estado);
         setFolio(f.contrato.folio ?? "");
         const kmActual = f.oportunidad.kilometraje;
@@ -187,7 +263,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la ficha."));
   }, [base]);
 
-  useEffect(cargar, [cargar]);
+  useEffect(() => cargar(), [cargar]);
 
   useEffect(() => {
     const alTeclear = (e: KeyboardEvent) => e.key === "Escape" && onCerrar();
@@ -195,17 +271,27 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
     return () => window.removeEventListener("keydown", alTeclear);
   }, [onCerrar]);
 
-  async function accion(ruta: string, metodo: "POST" | "PUT", cuerpo: unknown, exito: string, despues?: () => void) {
+  /** Resuelve si se guardó (los campos de la sección de gestión regresan a lo guardado si no). */
+  async function accion(
+    ruta: string,
+    metodo: "POST" | "PUT" | "DELETE",
+    cuerpo: unknown,
+    exito: string,
+    despues?: () => void,
+    soloFicha = false,
+  ): Promise<boolean> {
     setEnviando(true);
     setAviso(null);
     try {
-      await apiFetch(`${base}/${ruta}`, { method: metodo, body: JSON.stringify(cuerpo) });
+      await apiFetch(`${base}/${ruta}`, { method: metodo, ...(metodo === "DELETE" ? {} : { body: JSON.stringify(cuerpo) }) });
       setAviso({ tipo: "ok", texto: exito });
       despues?.();
-      cargar();
+      cargar(soloFicha);
       onCambio();
+      return true;
     } catch (err) {
       setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo guardar." });
+      return false;
     } finally {
       setEnviando(false);
     }
@@ -252,6 +338,45 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
   const op = ficha?.oportunidad;
   const eti = ficha?.etiquetas ?? {};
 
+  // Campos condicionales de la llamada (Notion): la respuesta solo si contestó el titular; la fecha y el motivo, si la
+  // respuesta los pide.
+  const titular = resultado === "CONTESTA_TITULAR";
+  const pideProximo = titular && RESPUESTA_CON_PROXIMO.has(respuesta);
+  const pideMotivo = titular && respuesta === "NO_INTERESADO";
+  const pideComentario = pideMotivo && motivoNoInteres === "OTRO";
+  const faltaEnLlamada = (pideProximo && !proximo) || (pideMotivo && !motivoNoInteres) || (pideComentario && !nota.trim());
+
+  function registrarLlamada() {
+    let proximoIso: string | null = null;
+    if (pideProximo) {
+      const r = proximoDesdeLocal(proximo);
+      if ("error" in r) {
+        setAviso({ tipo: "error", texto: r.error });
+        return;
+      }
+      proximoIso = r.iso;
+    }
+    accion(
+      "contacto",
+      "POST",
+      {
+        canal: "llamada",
+        resultado,
+        respuesta: titular && respuesta ? respuesta : null,
+        motivo_no_interes: pideMotivo ? motivoNoInteres : null,
+        proximo_contacto_en: proximoIso,
+        nota: nota.trim() || null,
+      },
+      "Llamada registrada.",
+      () => {
+        setNota("");
+        setRespuesta("");
+        setMotivoNoInteres("");
+        setProximo("");
+      },
+    );
+  }
+
   return (
     <div className="ficha-fondo" onClick={onCerrar}>
       <aside className="ficha" role="dialog" aria-modal="true" aria-label="Ficha de la oportunidad" onClick={(e) => e.stopPropagation()}>
@@ -276,34 +401,115 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
           <div className="ficha-cuerpo">
             {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
+            {ficha.gestion.valores.respuesta_por_clasificar && (
+              <section className="ficha-sec ficha-clasificar">
+                <h3>Respuesta por clasificar</h3>
+                <p className="ficha-ayuda">El cliente respondió por WhatsApp. ¿Quién respondió?</p>
+                <div className="ficha-botones">
+                  {ficha.gestion.catalogos.clasificacion_respuesta.map((o) => (
+                    <button
+                      key={o.clave}
+                      type="button"
+                      className="boton-secundario-claro"
+                      disabled={enviando}
+                      onClick={() => {
+                        // «Pide baja» es definitivo: la persona deja de recibir mensajes y no se puede quitar.
+                        if (o.clave === "BAJA" && !window.confirm("¿Confirmas que pidió no recibir más mensajes? No se puede deshacer.")) return;
+                        accion("clasificacion", "PUT", { clasificacion: o.clave }, "Respuesta clasificada.");
+                      }}
+                    >
+                      {o.etiqueta}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section className="ficha-sec">
+              <h3>Resultado BDC</h3>
+              <div className="ficha-resultado">
+                <span
+                  className="ficha-resultado-punto"
+                  style={{ background: ficha.resultado.opciones.find((o) => o.valor === ficha.resultado.actual)?.color }}
+                  aria-hidden="true"
+                />
+                <select
+                  className="auto-input"
+                  value={ficha.resultado.actual}
+                  disabled={enviando}
+                  aria-label="Resultado BDC"
+                  onChange={(e) => accion("resultado", "PUT", { resultado: e.target.value }, "Resultado guardado.")}
+                >
+                  {ESTADOS_RESULTADO.map(([estado, nombre]) => (
+                    <optgroup key={estado} label={nombre}>
+                      {ficha.resultado.opciones
+                        .filter((o) => o.estado === estado)
+                        .map((o) => (
+                          <option key={o.valor} value={o.valor}>
+                            {textoResultado(o.valor)}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <p className="ficha-ayuda">El resultado mueve el lead al estado que le corresponde (por ejemplo, «Precio fuera de presupuesto» lo pasa a Perdido con ese motivo).</p>
+            </section>
+
             <section className="ficha-sec">
               <h3>Registrar llamada</h3>
               <select className="auto-input" value={resultado} onChange={(e) => setResultado(e.target.value)} aria-label="Resultado de la llamada">
-                {RESULTADOS.map((r) => (
+                {ficha.gestion.llamada.map((r) => (
                   <option key={r.valor} value={r.valor}>
                     {r.texto}
                   </option>
                 ))}
               </select>
+              {titular && (
+                <select className="auto-input" value={respuesta} onChange={(e) => setRespuesta(e.target.value)} aria-label="Respuesta del titular">
+                  <option value="">Respuesta del titular (opcional)</option>
+                  {ficha.gestion.catalogos.respuesta_titular.map((o) => (
+                    <option key={o.clave} value={o.clave}>
+                      {o.etiqueta}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {pideProximo && (
+                <label className="ficha-campo">
+                  <span>¿Cuándo volver a contactarlo?</span>
+                  <input
+                    type="datetime-local"
+                    className="auto-input"
+                    value={proximo}
+                    min={aLocal(new Date().toISOString())}
+                    max={FECHA_HORA_MAX}
+                    onChange={(e) => setProximo(e.target.value)}
+                  />
+                </label>
+              )}
+              {pideMotivo && (
+                <select className="auto-input" value={motivoNoInteres} onChange={(e) => setMotivoNoInteres(e.target.value)} aria-label="Motivo de no interés">
+                  <option value="">Motivo de no interés</option>
+                  {ficha.gestion.catalogos.motivo_no_interes.map((o) => (
+                    <option key={o.clave} value={o.clave}>
+                      {o.etiqueta}
+                    </option>
+                  ))}
+                </select>
+              )}
               <input
                 type="text"
                 className="auto-input"
-                placeholder="Nota breve (opcional)"
+                placeholder={pideComentario ? "Comentario (obligatorio con «Otro»)" : "Nota breve (opcional)"}
                 maxLength={500}
                 value={nota}
                 onChange={(e) => setNota(e.target.value)}
               />
-              <button
-                type="button"
-                className="boton-guardar"
-                disabled={enviando}
-                onClick={() =>
-                  accion("contacto", "POST", { canal: "llamada", resultado, nota: nota.trim() || null }, "Llamada registrada.", () => setNota(""))
-                }
-              >
+              <button type="button" className="boton-guardar" disabled={enviando || faltaEnLlamada} onClick={registrarLlamada}>
                 Registrar
               </button>
-              <p className="ficha-ayuda">Suma un intento, pone hoy como último contacto y actualiza el estado de contacto. Los mensajes de WhatsApp se registran solos. Si contestó y el lead estaba en «Por contactar», pasa a «Contactado»; los demás estados los mueve el ejecutivo.</p>
+              <p className="ficha-ayuda">Suma un intento y pone hoy como último contacto. Solo hablar con el titular es contacto efectivo: si el lead estaba en «Por contactar», pasa a «Contactado». Su respuesta lo mueve (pide precio → Interesado; no interesado, ya tiene GE o flotilla → Perdido con ese motivo). Los mensajes de WhatsApp se registran solos.</p>
             </section>
 
             {ficha.tareas.length > 0 && (
@@ -356,6 +562,69 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                   </div>
                 ))}
               </dl>
+            </section>
+
+            <GestionBdc
+              key={JSON.stringify(ficha.gestion.valores)}
+              gestion={ficha.gestion}
+              enviando={enviando}
+              guardar={(valores, exito) => accion("gestion", "PUT", valores, exito, undefined, true)}
+              noContactar={(canal) => accion("no-contactar", "PUT", { canal }, "Registrado: no contactar.")}
+              quitarNoContactar={() => accion("no-contactar", "DELETE", null, "Se quitó «no contactar».")}
+              esAdmin={esAdmin}
+              avisar={(texto) => setAviso({ tipo: "error", texto })}
+            />
+
+            <section className="ficha-sec">
+              <h3>Campañas</h3>
+              {ficha.campanas.length === 0 && <p className="ficha-ayuda">Este vehículo todavía no ha estado en una campaña.</p>}
+              <ol className="ficha-campanas">
+                {ficha.campanas.map((p) => {
+                  const abierta = !p.cerrada_en;
+                  const color = ficha.resultado.opciones.find((o) => o.valor === p.resultado_bdc)?.color;
+                  const primer = p.primer_contacto_en ? diasCalendario(p.abierta_en, p.primer_contacto_en) : null;
+                  return (
+                    <li key={p.id} className={`ficha-campana${abierta ? " ficha-campana-abierta" : ""}`} title={`ID ${p.clave}`}>
+                      <div className="ficha-campana-cab">
+                        <strong>{nombreCampana(p.campana)}</strong>
+                        {p.fase_campana && <span className="ficha-campana-fase">{textoFase(p.fase_campana)}</span>}
+                        <span className={`ficha-campana-chip${abierta ? " ficha-campana-chip-abierta" : ""}`}>{abierta ? "En curso" : "Cerrada"}</span>
+                      </div>
+                      <small className="ficha-campana-fechas">
+                        {formato(p.abierta_en)} – {abierta ? "hoy" : formato(p.cerrada_en)} · {textoDias(diasEntre(p.abierta_en, p.cerrada_en))}
+                      </small>
+                      <dl className="ficha-campana-datos">
+                        <div>
+                          <dt>Resultado BDC</dt>
+                          <dd>
+                            <span className="ficha-resultado-punto" style={{ background: color }} aria-hidden="true" />
+                            {p.resultado_bdc ? textoResultado(p.resultado_bdc) : "—"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Estado del lead</dt>
+                          <dd>{p.estado ?? "—"}</dd>
+                        </div>
+                        <div>
+                          <dt>Ejecutivo</dt>
+                          <dd>{p.ejecutivo ?? "—"}</dd>
+                        </div>
+                        <div>
+                          <dt>Primer contacto</dt>
+                          <dd>{primer === null ? "Sin contacto efectivo" : primer === 0 ? "El mismo día" : primer === 1 ? "Al día siguiente" : `A los ${primer} días`}</dd>
+                        </div>
+                      </dl>
+                      <div className="ficha-campana-conteos">
+                        <span>{cuenta(p.llamadas, "llamada", "llamadas")}</span>
+                        <span>{cuenta(p.whatsapp, "WhatsApp", "WhatsApp")}</span>
+                        <span>{cuenta(p.masivos, "masivo", "masivos")}</span>
+                        <span>{cuenta(p.respuestas, "respuesta", "respuestas")}</span>
+                      </div>
+                      {p.motivo_cierre && <small className="ficha-campana-cierre">{MOTIVO_CIERRE[p.motivo_cierre] ?? p.motivo_cierre}</small>}
+                    </li>
+                  );
+                })}
+              </ol>
             </section>
 
             {ficha.emision && (

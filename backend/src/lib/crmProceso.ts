@@ -1,5 +1,17 @@
 import { getPool } from "./db.js";
-import { autorValido, avanzarPorContacto } from "./crm.js";
+import { ajustarResultados, autorValido, avanzarPorContacto, editarEnTransaccion, editarOportunidad } from "./crm.js";
+import { type ResultadoBdc } from "./resultadoBdcLogica.js";
+import {
+  ETIQUETA_LLAMADA,
+  RESULTADO_GRUESO,
+  efectoLlamada,
+  RESPUESTAS_CON_PROXIMO,
+  validarRespuesta,
+  type ClasificacionRespuesta,
+  type MotivoNoInteres,
+  type RespuestaTitular,
+  type ResultadoLlamada,
+} from "./gestionLogica.js";
 
 /**
  * Proceso comercial del CRM: registro de contactos, línea de tiempo, contrato (evidencia de venta),
@@ -13,84 +25,115 @@ const ZONA = "America/Hermosillo";
    ============================================================ */
 
 export const CANALES = ["llamada", "whatsapp"] as const;
-export const RESULTADOS = ["contesto", "buzon", "no_contesto", "numero_equivocado"] as const;
 export type Canal = (typeof CANALES)[number];
-export type Resultado = (typeof RESULTADOS)[number];
+export const CANALES_BAJA = ["llamada", "whatsapp", "correo", "presencial", "sms"] as const;
 
-const TITULO_CONTACTO: Record<Canal, Record<Resultado, string>> = {
-  llamada: {
-    contesto: "Llamada: contestó",
-    buzon: "Llamada: buzón de voz",
-    no_contesto: "Llamada: no contestó",
-    numero_equivocado: "Llamada: número equivocado",
-  },
-  whatsapp: {
-    contesto: "WhatsApp: el cliente respondió",
-    buzon: "WhatsApp: buzón",
-    no_contesto: "WhatsApp: sin respuesta",
-    numero_equivocado: "WhatsApp: número equivocado",
-  },
-};
-
-/** Estado de contacto que deja cada resultado. */
-const ESTADO_POR_RESULTADO: Record<Resultado, string> = {
-  contesto: "contactado",
-  buzon: "buzon",
-  no_contesto: "intentando",
-  numero_equivocado: "no_contactable",
-};
+const NOMBRE_CANAL: Record<Canal, string> = { llamada: "Llamada", whatsapp: "WhatsApp" };
 
 export type ResultadoOperacion = { ok: true } | { ok: false; estado: 400 | 404; error: string };
 
 /**
- * Registra un intento de contacto: lo deja en la línea de tiempo, suma un intento, pone la fecha de
- * último contacto (hoy en Hermosillo) y actualiza el estado de contacto. Quien ya está "Contactado"
- * no retrocede por un buzón o un "no contestó": el intento se cuenta, el estado se conserva.
- * Si contestó y el lead seguía en «Por contactar», pasa a «Contactado»; el resto del embudo lo mueve el ejecutivo.
+ * Registra un intento de contacto con su resultado detallado (los 8 de Notion): queda en la línea de tiempo, suma un
+ * intento, pone la fecha de último contacto (hoy en Hermosillo) y ajusta el estado de contacto y el resultado BDC. Solo
+ * hablar con el titular es contacto efectivo: si el lead seguía en «Por contactar», pasa a «Contactado». Si contestó el
+ * titular, su respuesta (pide precio, llamar después, no interesado…) mueve el lead en la misma transacción.
  */
 export async function registrarContacto(p: {
   sucursalId: string;
   oportunidadId: string;
   canal: Canal;
-  resultado: Resultado;
+  resultado: ResultadoLlamada;
+  respuesta?: RespuestaTitular | null;
+  motivoNoInteres?: MotivoNoInteres | null;
+  proximoContacto?: string | null;
   nota?: string | null;
   usuarioId?: string;
 }): Promise<ResultadoOperacion> {
-  if (p.canal === "whatsapp" && p.resultado === "buzon") return { ok: false, estado: 400, error: "WhatsApp no tiene buzón." };
+  if (p.canal === "whatsapp" && p.resultado === "BUZON") return { ok: false, estado: 400, error: "WhatsApp no tiene buzón." };
+  if (p.respuesta && p.resultado !== "CONTESTA_TITULAR") {
+    return { ok: false, estado: 400, error: "La respuesta del titular solo se registra cuando contestó el titular." };
+  }
+  // Solo se guarda lo que la respuesta pide: motivo con «No interesado», próximo contacto con «Llamar después» o «Lo va a pensar».
+  const motivoNoInteres = p.respuesta === "NO_INTERESADO" ? (p.motivoNoInteres ?? null) : null;
+  const proximoContacto = p.respuesta && RESPUESTAS_CON_PROXIMO.has(p.respuesta) ? (p.proximoContacto ?? null) : null;
+  if (p.respuesta) {
+    const error = validarRespuesta({
+      respuesta: p.respuesta,
+      motivoNoInteres,
+      proximoContacto,
+      comentario: p.nota ?? null,
+    });
+    if (error) return { ok: false, estado: 400, error };
+  }
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
     const { rows } = await cliente.query(
-      `SELECT estado_contacto FROM crm_oportunidades WHERE id = $1 AND sucursal_id = $2 FOR UPDATE`,
+      `SELECT o.estado_contacto, o.resultado_bdc, (SELECT k.whatsapp_baja FROM crm_contactos k WHERE k.id = o.contacto_id) AS contacto_baja
+         FROM crm_oportunidades o WHERE o.id = $1 AND o.sucursal_id = $2 FOR UPDATE OF o`,
       [p.oportunidadId, p.sucursalId],
     );
     if (!rows[0]) {
       await cliente.query("ROLLBACK");
       return { ok: false, estado: 404, error: "Registro no encontrado." };
     }
-    const actual = rows[0].estado_contacto as string;
-    const retrocede = actual === "contactado" && (p.resultado === "buzon" || p.resultado === "no_contesto");
-    const nuevo = retrocede ? actual : ESTADO_POR_RESULTADO[p.resultado];
+    // Una persona dada de baja: la llamada queda registrada, pero no mueve el lead ni cambia su resultado.
+    const dadoDeBaja = rows[0].estado_contacto === "baja" || rows[0].contacto_baja === true;
+    const calculado = efectoLlamada(p.resultado, rows[0].estado_contacto as string, rows[0].resultado_bdc as ResultadoBdc);
+    const ef = dadoDeBaja ? { ...calculado, contacto: "baja", resultado: rows[0].resultado_bdc as ResultadoBdc } : calculado;
 
     await cliente.query(
       `UPDATE crm_oportunidades
-          SET estado_contacto = $3, intentos = intentos + 1, ultimo_intento_en = now(),
-              fecha_ultimo_contacto = (now() AT TIME ZONE '${ZONA}')::date
+          SET estado_contacto = $3, resultado_bdc = $4, intentos = intentos + 1, ultimo_intento_en = now(),
+              fecha_ultimo_contacto = (now() AT TIME ZONE '${ZONA}')::date,
+              ultimo_contacto_efectivo_en = CASE WHEN $5 THEN now() ELSE ultimo_contacto_efectivo_en END
         WHERE id = $1 AND sucursal_id = $2`,
-      [p.oportunidadId, p.sucursalId, nuevo],
+      [p.oportunidadId, p.sucursalId, ef.contacto, ef.resultado, ef.efectivo],
     );
-    if (nuevo === "contactado") await avanzarPorContacto(cliente, p.sucursalId, p.oportunidadId);
+    // Hablar con el titular en una llamada registrada saca al lead de «Por contactar» aunque su campaña ya haya salido de la
+    // ventana (igual que cuando se registra su respuesta). Lo demás: el resultado se alinea con el estado del lead.
+    if (ef.efectivo && !dadoDeBaja) await avanzarPorContacto(cliente, p.sucursalId, p.oportunidadId, true);
+    await ajustarResultados(cliente, p.sucursalId, [p.oportunidadId]);
+    const etiqueta = ETIQUETA_LLAMADA[p.resultado];
     await cliente.query(
       `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle, usuario_id) VALUES ($1, $2, $3, $4, $5, $6)`,
       [
         p.sucursalId,
         p.oportunidadId,
         p.canal,
-        TITULO_CONTACTO[p.canal][p.resultado],
-        { resultado: p.resultado, nota: p.nota?.trim() || null },
+        `${NOMBRE_CANAL[p.canal]}: ${etiqueta.charAt(0).toLowerCase()}${etiqueta.slice(1)}`,
+        {
+          // «resultado» es el grueso de siempre (lo leen reportes y campañas); «resultado_llamada», el detallado.
+          resultado: RESULTADO_GRUESO[p.resultado],
+          resultado_llamada: p.resultado,
+          respuesta: p.respuesta ?? null,
+          motivo_no_interes: motivoNoInteres,
+          proximo_contacto_en: proximoContacto,
+          nota: p.nota?.trim() || null,
+        },
         await autorValido(cliente, p.usuarioId),
       ],
     );
+
+    if (p.respuesta) {
+      const r = await editarEnTransaccion(cliente, {
+        sucursalId: p.sucursalId,
+        oportunidadId: p.oportunidadId,
+        valores: {
+          respuesta_titular: p.respuesta,
+          motivo_no_interes: motivoNoInteres,
+          proximo_contacto_en: proximoContacto,
+        },
+        usuarioId: p.usuarioId,
+        canalBaja: p.canal,
+        sinMarcarContacto: true,
+        capturaDeLlamada: true,
+      });
+      if (!r.ok) {
+        await cliente.query("ROLLBACK");
+        return r;
+      }
+    }
     await cliente.query("COMMIT");
     return { ok: true };
   } catch (err) {
@@ -99,6 +142,49 @@ export async function registrarContacto(p: {
   } finally {
     cliente.release();
   }
+}
+
+/**
+ * Clasifica la respuesta de un cliente a un mensaje (Notion: «Respuesta por clasificar»). Titular es contacto efectivo;
+ * pide baja deja de contactarlo; número equivocado lo deja no contactable. Sale de la cola por clasificar.
+ */
+export async function clasificarRespuesta(p: {
+  sucursalId: string;
+  oportunidadId: string;
+  clasificacion: ClasificacionRespuesta;
+  usuarioId?: string;
+}): Promise<ResultadoOperacion> {
+  const { rows } = await getPool().query(`SELECT respuesta_por_clasificar FROM crm_oportunidades WHERE id = $1 AND sucursal_id = $2`, [
+    p.oportunidadId,
+    p.sucursalId,
+  ]);
+  if (!rows[0]) return { ok: false, estado: 404, error: "Registro no encontrado." };
+  if (!rows[0].respuesta_por_clasificar) return { ok: false, estado: 400, error: "No hay una respuesta por clasificar." };
+  return editarOportunidad({
+    sucursalId: p.sucursalId,
+    oportunidadId: p.oportunidadId,
+    valores: { clasificacion_respuesta: p.clasificacion },
+    usuarioId: p.usuarioId,
+    canalBaja: "whatsapp",
+  });
+}
+
+/** El cliente pidió no ser contactado (por cualquier canal): baja del contacto y el lead se cierra con «Pidió baja». */
+export async function registrarNoContactar(p: {
+  sucursalId: string;
+  oportunidadId: string;
+  canal: string;
+  usuarioId?: string;
+}): Promise<ResultadoOperacion> {
+  return editarOportunidad({
+    sucursalId: p.sucursalId,
+    oportunidadId: p.oportunidadId,
+    valores: { respuesta_titular: "NO_CONTACTAR" },
+    usuarioId: p.usuarioId,
+    canalBaja: p.canal,
+    sinMarcarContacto: true,
+    capturaDeLlamada: true,
+  });
 }
 
 export async function agregarNota(p: { sucursalId: string; oportunidadId: string; texto: string; usuarioId?: string }): Promise<ResultadoOperacion> {
@@ -140,6 +226,34 @@ export async function lineaDeTiempo(sucursalId: string, oportunidadId: string) {
          FROM crm_tareas t LEFT JOIN usuarios u ON u.id = t.completada_por
         WHERE t.oportunidad_id = $1 AND t.sucursal_id = $2 AND t.estado = 'hecha' AND t.completada_en IS NOT NULL
      ) x ORDER BY creado_en DESC LIMIT 200`,
+    [oportunidadId, sucursalId],
+  );
+  return rows;
+}
+
+/**
+ * Historial por campaña del lead: un renglón por cada vez que el VIN estuvo en una campaña, de la más reciente a la
+ * más vieja. La campaña en curso muestra lo que tiene el lead hoy; las cerradas, la foto que se tomó al cerrarlas.
+ * Los conteos salen de los eventos ligados a cada campaña (campana_id).
+ */
+export async function historialCampanas(sucursalId: string, oportunidadId: string) {
+  const { rows } = await getPool().query(
+    `SELECT p.id, p.clave, p.campana, p.fase_campana, p.fecha_inicio_campana, p.fecha_fin_campana,
+            p.abierta_en, p.cerrada_en, p.motivo_cierre, p.primer_contacto_en,
+            CASE WHEN p.cerrada_en IS NULL THEN o.resultado_bdc ELSE p.resultado_bdc END AS resultado_bdc,
+            CASE WHEN p.cerrada_en IS NULL THEN eo.nombre ELSE ep.nombre END AS estado,
+            CASE WHEN p.cerrada_en IS NULL THEN o.ejecutivo ELSE p.ejecutivo END AS ejecutivo,
+            (SELECT count(*) FROM crm_actividades a WHERE a.campana_id = p.id AND a.tipo = 'llamada')::int AS llamadas,
+            (SELECT count(*) FROM crm_actividades a WHERE a.campana_id = p.id AND a.tipo = 'whatsapp')::int AS whatsapp,
+            (SELECT count(*) FROM crm_actividades a WHERE a.campana_id = p.id AND a.tipo = 'mensaje_entrante')::int AS respuestas,
+            (SELECT count(*) FROM crm_envios e
+              WHERE e.campana_id = p.id AND e.estado IN ('enviado', 'entregado', 'leido', 'simulado'))::int AS masivos
+       FROM crm_oportunidad_campanas p
+       JOIN crm_oportunidades o ON o.id = p.oportunidad_id
+       LEFT JOIN crm_etapas eo ON eo.id = o.etapa_id
+       LEFT JOIN crm_etapas ep ON ep.id = p.etapa_id
+      WHERE p.oportunidad_id = $1 AND p.sucursal_id = $2
+      ORDER BY p.cerrada_en IS NULL DESC, p.abierta_en DESC`,
     [oportunidadId, sucursalId],
   );
   return rows;

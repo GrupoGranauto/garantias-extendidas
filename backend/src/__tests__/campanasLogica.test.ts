@@ -107,7 +107,9 @@ const base = (extra: Partial<ContextoEnvio> = {}): ContextoEnvio => ({
   paso: { etapas: [], soloSinRespuesta: false, soloSinContacto: false },
   respondio: false,
   yaContactado: false,
+  resultadoBdc: "PENDIENTE",
   enviadoRecienteOtraCampana: false,
+  telefonoConMensajeHoy: false,
   whatsappListo: true,
   plantillaDisponible: true,
   ...extra,
@@ -185,6 +187,39 @@ describe("topeEfectivo (rampa)", () => {
   });
   it("un incremento de 0 mantiene el valor inicial", () => {
     expect(topeEfectivo({ maxPorDia: 100, rampa: { ...rampa, incremento: 0 }, diasDesdePrimerEnvio: 9 })).toBe(20);
+  });
+});
+
+describe("resultado BDC y un mensaje por teléfono al día", () => {
+  it("un lead marcado NO CONTACTABLE ya no recibe mensajes de esa campaña", () => {
+    expect(decidirEnvio(base({ resultadoBdc: "NO CONTACTABLE" }))).toEqual({ accion: "omitir", motivo: "no_contactable" });
+  });
+  it("un número equivocado o inválido (contacto «no contactable») ya no recibe mensajes", () => {
+    const oportunidad = { ...base().oportunidad, estadoContacto: "no_contactable" };
+    expect(decidirEnvio(base({ oportunidad }))).toEqual({ accion: "omitir", motivo: "no_contactable" });
+    expect(decidirEnvio(base({ oportunidad: { ...oportunidad, estadoContacto: "intentando" } }))).toEqual({ accion: "enviar" });
+  });
+  it("lo que el BDC ya trabajó cuenta como contacto para los pasos «si no lo han contactado»", () => {
+    const paso = { etapas: [], soloSinRespuesta: false, soloSinContacto: true };
+    expect(decidirEnvio(base({ paso, resultadoBdc: "INTERESADO" }))).toEqual({ accion: "omitir", motivo: "ya_contactado" });
+    expect(decidirEnvio(base({ paso, resultadoBdc: "BUZON" }))).toEqual({ accion: "enviar" });
+    expect(decidirEnvio(base({ paso, resultadoBdc: "PENDIENTE" }))).toEqual({ accion: "enviar" });
+  });
+  it("«solicita info por WhatsApp» cuenta como respuesta", () => {
+    const paso = { etapas: [], soloSinRespuesta: true, soloSinContacto: false };
+    expect(decidirEnvio(base({ paso, resultadoBdc: "SOLICITA INFO WHATSAPP" }))).toEqual({ accion: "omitir", motivo: "respondio" });
+  });
+  it("si ese teléfono ya recibió un mensaje hoy, espera al día siguiente", () => {
+    expect(decidirEnvio(base({ telefonoConMensajeHoy: true }))).toEqual({ accion: "posponer", motivo: "un_mensaje_por_dia", hasta: "dia_siguiente" });
+  });
+  it("si la vigencia vence esperando, se omite con ese motivo", () => {
+    const vencido = base({
+      telefonoConMensajeHoy: true,
+      motivoPrevio: "un_mensaje_por_dia",
+      programadoMs: Date.parse("2026-10-01T17:00:00Z"),
+      ahoraMs: Date.parse("2026-10-05T18:00:00Z"),
+    });
+    expect(decidirEnvio(vencido)).toEqual({ accion: "omitir", motivo: "un_mensaje_por_dia" });
   });
 });
 

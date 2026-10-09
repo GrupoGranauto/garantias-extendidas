@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { DragDropContext, Draggable, Droppable, type DropResult } from "@hello-pangea/dnd";
 import Cargador from "../componentes/Cargador";
-import { IconoLlamada } from "../componentes/Iconos";
+import { IconoChat, IconoLlamada } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
+import { colorCampo, iniciales, textoCampo, type CampoValor, type VistaTarjeta } from "../lib/vistaTarjeta";
 
 type Tarjeta = Record<string, unknown> & { id: string };
 type Columna = {
@@ -15,10 +16,11 @@ type Columna = {
   total: number;
   tarjetas: Tarjeta[];
 };
-type CampoTarjeta = { nombre_tecnico: string; nombre_visible: string; tipo: string };
+type CampoTarjeta = CampoValor & { nombre_tecnico: string; nombre_visible: string };
 type Respuesta =
   | { configurado: false }
-  | { configurado: true; campos: CampoTarjeta[]; etapas: Columna[]; motivos: string[]; limite: number };
+  | { configurado: true; campos: CampoTarjeta[]; etapas: Columna[]; motivos: string[]; limite: number; vista: VistaTarjeta };
+type UltimoMensaje = { texto: string | null; tipo: string; creado_en: string } | null;
 
 type Props = {
   sucursalId: string;
@@ -33,44 +35,6 @@ type Props = {
 
 const POR_PAGINA = 30;
 
-/** Qué datos muestra la tarjeta; cada persona elige los suyos y se recuerdan en su navegador. */
-type Mostrar = { telefono: boolean; vehiculo: boolean; campana: boolean; contacto: boolean; ejecutivo: boolean };
-const MOSTRAR_INICIAL: Mostrar = { telefono: true, vehiculo: true, campana: true, contacto: true, ejecutivo: true };
-const ETIQUETAS_MOSTRAR: [keyof Mostrar, string][] = [
-  ["telefono", "Teléfono"],
-  ["vehiculo", "Vehículo"],
-  ["campana", "Campaña y fase"],
-  ["contacto", "Contacto"],
-  ["ejecutivo", "Ejecutivo"],
-];
-
-function leerMostrar(sucursalId: string): Mostrar {
-  try {
-    const crudo = localStorage.getItem(`portal.tarjeta.${sucursalId}`);
-    return crudo ? { ...MOSTRAR_INICIAL, ...(JSON.parse(crudo) as Partial<Mostrar>) } : MOSTRAR_INICIAL;
-  } catch {
-    return MOSTRAR_INICIAL;
-  }
-}
-
-/** "5 min", "3 h", "2 d"… desde un instante hasta ahora. */
-function hace(valor: unknown): string | null {
-  if (!valor) return null;
-  const t = new Date(String(valor)).getTime();
-  if (Number.isNaN(t)) return null;
-  const min = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (min < 60) return `${min} min`;
-  if (min < 60 * 24) return `${Math.round(min / 60)} h`;
-  return `${Math.round(min / 1440)} d`;
-}
-
-function fechaCorta(valor: unknown): string | null {
-  if (!valor) return null;
-  const s = String(valor);
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + "T00:00:00") : new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString();
-}
-
 type Movimiento = { origen: DropResult["source"]; destino: NonNullable<DropResult["destination"]>; id: string };
 
 /**
@@ -84,7 +48,6 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
   const [cargandoMas, setCargandoMas] = useState<string | null>(null);
   const [pendientePerdido, setPendientePerdido] = useState<Movimiento | null>(null);
   const [motivo, setMotivo] = useState("");
-  const [mostrar, setMostrar] = useState<Mostrar>(() => leerMostrar(sucursalId));
   const solicitud = useRef(0);
   const datosRef = useRef(datos);
   datosRef.current = datos;
@@ -206,37 +169,20 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
   if (!datos) return <Cargador />;
   if (!datos.configurado) return <p className="embudo-vacio">Esta sucursal todavía no tiene un embudo.</p>;
 
-  const tiene = (n: string) => datos.campos.some((c) => c.nombre_tecnico === n);
-
-  function cambiarMostrar(clave: keyof Mostrar, valor: boolean) {
-    const nuevo = { ...mostrar, [clave]: valor };
-    setMostrar(nuevo);
-    try {
-      localStorage.setItem(`portal.tarjeta.${sucursalId}`, JSON.stringify(nuevo));
-    } catch {
-      // sin persistencia; no afecta el funcionamiento
-    }
-  }
+  const vista = datos.vista;
+  const campoDe = (n: string | null) => (n ? datos.campos.find((c) => c.nombre_tecnico === n) : undefined);
 
   return (
     <>
-      <details className="embudo-config">
-        <summary>Datos de la tarjeta</summary>
-        <div className="embudo-config-lista">
-          {ETIQUETAS_MOSTRAR.map(([clave, texto]) => (
-            <label key={clave}>
-              <input type="checkbox" checked={mostrar[clave]} onChange={(e) => cambiarMostrar(clave, e.target.checked)} /> {texto}
-            </label>
-          ))}
-        </div>
-      </details>
-
       <DragDropContext onDragEnd={alSoltar}>
         <div className="embudo">
           {datos.etapas.map((col) => (
             <section key={col.id} className="embudo-col" style={{ "--etapa": col.color } as CSSProperties}>
               <header className="embudo-col-cab">
-                <span className="embudo-col-nombre">{col.nombre}</span>
+                <span className="embudo-col-nombre">
+                  <span className="embudo-col-punto" />
+                  {col.nombre}
+                </span>
                 {col.fuera_sla > 0 && (
                   <span className="embudo-col-sla" title={`Llevan más de ${col.tiempo_max_horas} h en este estado`}>
                     {col.fuera_sla} fuera de SLA
@@ -257,6 +203,18 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
                         col.tiempo_max_horas !== null &&
                         !!t.entro_a_etapa_en &&
                         Date.now() - new Date(String(t.entro_a_etapa_en)).getTime() > col.tiempo_max_horas * 3600000;
+                      const lugar = (n: string | null) => (n ? textoCampo(t[n], campoDe(n)) : null);
+                      const arriba = [lugar(vista.arriba), lugar(vista.arriba_extra)].filter(Boolean).join(", ");
+                      const esquina = lugar(vista.esquina);
+                      const subtitulo = lugar(vista.subtitulo);
+                      const titulo = lugar(vista.titulo);
+                      const detalle = lugar(vista.detalle);
+                      const pie = lugar(vista.pie);
+                      const pendientes = Number(t.tareas_pendientes) || 0;
+                      const vencidas = Number(t.tareas_vencidas) || 0;
+                      const digitos = String(t.telefono_principal ?? "").replace(/[^\d+]/g, "");
+                      const telefono = vista.llamar && digitos.replace(/\D/g, "").length >= 10 ? digitos : null;
+                      const mensaje = t.ultimo_mensaje as UltimoMensaje | undefined;
                       return (
                       <Draggable key={t.id} draggableId={t.id} index={i}>
                         {(p, s) => (
@@ -267,59 +225,77 @@ export default function Embudo({ sucursalId, parametros, version, onAviso, onAbr
                             className={`embudo-tarjeta${s.isDragging ? " embudo-tarjeta-arrastrando" : ""}${tarde ? " embudo-tarjeta-tarde" : ""}`}
                             onClick={() => onAbrir(t.id)}
                           >
-                            <strong className="embudo-tarjeta-titulo">{String(t.cliente ?? "Sin nombre")}</strong>
-                            {mostrar.vehiculo && (t.linea || t.anio_vin) && (tiene("linea") || tiene("anio_vin")) ? (
-                              <span className="embudo-tarjeta-linea">{[t.linea, t.anio_vin].filter(Boolean).join(" · ")}</span>
-                            ) : null}
-                            {mostrar.telefono && tiene("telefono_principal") && t.telefono_principal ? (
-                              <span className="embudo-tarjeta-dato">{String(t.telefono_principal)}</span>
-                            ) : null}
-                            <div className="embudo-tarjeta-chips">
-                              {mostrar.campana && tiene("campana") && t.campana ? <span className="embudo-mini">{String(t.campana)}</span> : null}
-                              {mostrar.campana && tiene("fase_campana") && t.fase_campana ? <span className="embudo-mini">{String(t.fase_campana)}</span> : null}
-                              {mostrar.contacto && tiene("estado_contacto") && t.estado_contacto && t.estado_contacto !== "Sin intentar" ? (
-                                <span className="embudo-mini embudo-mini-contacto">{String(t.estado_contacto)}</span>
-                              ) : null}
-                              {col.tipo === "perdida" && tiene("motivo_perdida") && t.motivo_perdida ? (
-                                <span className="embudo-mini embudo-mini-perdida">{String(t.motivo_perdida)}</span>
-                              ) : null}
-                            </div>
-                            {tarde && <span className="embudo-mini embudo-mini-perdida">Fuera de SLA</span>}
-                            {Number(t.tareas_pendientes) > 0 && (
-                              <span className={`embudo-mini${Number(t.tareas_vencidas) > 0 ? " embudo-mini-perdida" : " embudo-mini-contacto"}`}>
-                                {Number(t.tareas_pendientes)} {Number(t.tareas_pendientes) === 1 ? "tarea" : "tareas"}
-                                {Number(t.tareas_vencidas) > 0 ? ` (${Number(t.tareas_vencidas)} vencida${Number(t.tareas_vencidas) === 1 ? "" : "s"})` : ""}
-                              </span>
-                            )}
-                            <footer className="embudo-tarjeta-pie">
-                              <span title="Ejecutivo">{mostrar.ejecutivo ? (tiene("ejecutivo") && t.ejecutivo ? String(t.ejecutivo) : "Sin asignar") : ""}</span>
-                              {mostrar.telefono && tiene("telefono_principal") && String(t.telefono_principal ?? "").replace(/\D/g, "").length >= 10 && (
-                                <a
-                                  className="embudo-llamar"
-                                  href={`tel:${String(t.telefono_principal).replace(/[^\d+]/g, "")}`}
-                                  aria-label={`Llamar a ${String(t.cliente ?? "")}`}
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <IconoLlamada className="icono-inline" />
-                                </a>
+                            {vista.avatar && <span className="embudo-avatar">{iniciales(vista.titulo ? t[vista.titulo] : null)}</span>}
+                            <div className="embudo-tarjeta-cuerpo">
+                              {(arriba || esquina) && (
+                                <div className="embudo-tarjeta-fila">
+                                  <span className="embudo-tarjeta-arriba">{arriba}</span>
+                                  {esquina && <span className="embudo-tarjeta-esquina">{esquina}</span>}
+                                </div>
                               )}
-                              <span
-                                title={
-                                  tiene("fecha_ultimo_contacto") && fechaCorta(t.fecha_ultimo_contacto)
-                                    ? `En el estado. Último contacto: ${fechaCorta(t.fecha_ultimo_contacto)}`
-                                    : "Tiempo en el estado"
-                                }
-                              >
-                                {hace(t.entro_a_etapa_en) ?? ""}
-                              </span>
-                            </footer>
+                              {subtitulo && <span className="embudo-tarjeta-linea">{subtitulo}</span>}
+                              <strong className="embudo-tarjeta-titulo">{titulo ?? "Sin nombre"}</strong>
+                              {detalle && <span className="embudo-tarjeta-linea">{detalle}</span>}
+                              <div className="embudo-tarjeta-etiquetas">
+                                  {vista.etiquetas.map((e) => {
+                                    const texto = textoCampo(t[e], campoDe(e));
+                                    if (!texto) return null;
+                                    const color = colorCampo(t[e], campoDe(e));
+                                    return (
+                                      <span
+                                        key={e}
+                                        className={`embudo-mini${color ? " embudo-mini-color" : ""}`}
+                                        style={color ? ({ "--chip": color } as CSSProperties) : undefined}
+                                      >
+                                        {texto}
+                                      </span>
+                                    );
+                                  })}
+                                  {col.tipo === "perdida" && t.motivo_perdida ? (
+                                    <span className="embudo-mini embudo-mini-perdida">{String(t.motivo_perdida)}</span>
+                                  ) : null}
+                                  {tarde && <span className="embudo-mini embudo-mini-perdida">Fuera de tiempo</span>}
+                              </div>
+                              {(pie || vista.tareas || telefono) && (
+                              <div className="embudo-tarjeta-pie">
+                                <span className="embudo-tarjeta-responsable">{pie}</span>
+                                {(vista.tareas || telefono) && (
+                                  <span className="embudo-tarjeta-acciones">
+                                    {vista.tareas && (
+                                      <span
+                                        className={`embudo-tareas${vencidas > 0 ? " embudo-tareas-vencidas" : pendientes > 0 ? " embudo-tareas-pendientes" : ""}`}
+                                        title={pendientes > 0 ? `${pendientes} ${pendientes === 1 ? "tarea pendiente" : "tareas pendientes"}` : "Sin tareas pendientes"}
+                                      >
+                                        {vencidas > 0
+                                          ? `${vencidas} vencida${vencidas === 1 ? "" : "s"}`
+                                          : pendientes > 0
+                                            ? `${pendientes} ${pendientes === 1 ? "tarea" : "tareas"}`
+                                            : ""}
+                                      </span>
+                                    )}
+                                    {telefono && (
+                                      <a className="embudo-llamar" href={`tel:${telefono}`} aria-label={`Llamar a ${titulo ?? ""}`} onClick={(e) => e.stopPropagation()}>
+                                        <IconoLlamada className="icono-inline" />
+                                      </a>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                              )}
+                              {vista.ultimo_mensaje && mensaje && (
+                                <span className="embudo-tarjeta-mensaje" title="Último mensaje del contacto">
+                                  <IconoChat className="embudo-tarjeta-icono" />
+                                  <span>{mensaje.texto ?? `(${mensaje.tipo})`}</span>
+                                </span>
+                              )}
+                            </div>
                           </article>
                         )}
                       </Draggable>
                       );
                     })}
                     {prov.placeholder}
-                    {col.tarjetas.length === 0 && !snap.isDraggingOver && <p className="embudo-col-vacia">Sin oportunidades</p>}
+                    {col.tarjetas.length === 0 && !snap.isDraggingOver && <p className="embudo-col-vacia">Sin leads en este estado</p>}
                     {col.tarjetas.length < col.total && (
                       <button type="button" className="embudo-mas" disabled={cargandoMas === col.id} onClick={() => verMas(col)}>
                         {cargandoMas === col.id ? "Cargando…" : `Ver más (${col.total - col.tarjetas.length})`}

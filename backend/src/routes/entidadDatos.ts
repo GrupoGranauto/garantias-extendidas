@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
 import { getPool } from "../lib/db.js";
-import { requireAuth, requireAccesoSucursal } from "../middleware/auth.js";
+import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../middleware/auth.js";
 import {
   listarRegistros,
   contarRegistros,
@@ -17,8 +17,9 @@ import {
 import { OPERADORES_FECHA, filtroDeItem, filtrosDeBotones, leerPanelGuardado } from "../lib/panel.js";
 import { esEntidadCrm } from "../lib/entidades.js";
 import { ejecutivoRestringido, exigirUuid } from "../lib/permisos.js";
-import { conOpcionesDinamicas, editarOportunidad, listarEtapas, moverOportunidad, opcionesDinamicas } from "../lib/crm.js";
+import { SOLO_CON_LLAMADA, conOpcionesDinamicas, editarOportunidad, listarEtapas, moverOportunidad, opcionesDinamicas } from "../lib/crm.js";
 import { emitirBroadcast } from "../lib/realtime.js";
+import { columnasDeVista, normalizarVista, vistaSchema } from "../lib/vistaTarjetaLogica.js";
 
 /**
  * Filtros de la tabla, serializados como JSON en el query string:
@@ -107,7 +108,7 @@ const LIMITE_MAXIMO = 200;
 
 type Contexto = {
   sucursal: { id: string; subdominio: string; zona_horaria: string };
-  definicion: { id: string; nombre_tecnico: string; nombre_visible: string; columna_ejecutivo: string | null; panel: unknown };
+  definicion: { id: string; nombre_tecnico: string; nombre_visible: string; columna_ejecutivo: string | null; panel: unknown; tarjeta: unknown };
   /** Solo las columnas visibles: el portal no ve, filtra ni enumera las ocultas. */
   campos: CampoEntidad[];
 };
@@ -126,7 +127,7 @@ async function cargarContexto(sucursalId: string): Promise<Contexto | "sin_sucur
 
   const { data: definicion, error: errorDefinicion } = await supabase
     .from("entidad_definiciones")
-    .select("id, nombre_tecnico, nombre_visible, columna_ejecutivo, panel")
+    .select("id, nombre_tecnico, nombre_visible, columna_ejecutivo, panel, tarjeta")
     .eq("sucursal_id", sucursalId)
     .maybeSingle();
   if (errorDefinicion) throw new Error(errorDefinicion.message);
@@ -246,21 +247,6 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros", async (req, res, nex
   }
 });
 
-/** Columnas que puede mostrar una tarjeta del embudo; solo salen las que la sucursal deja visibles. */
-const COLUMNAS_TARJETA = [
-  "cliente",
-  "telefono_principal",
-  "linea",
-  "anio_vin",
-  "campana",
-  "fase_campana",
-  "ejecutivo",
-  "estado_contacto",
-  "intentos",
-  "fecha_ultimo_contacto",
-  "entro_a_etapa_en",
-  "motivo_perdida",
-];
 const TARJETAS_POR_ETAPA = 30;
 
 /**
@@ -293,8 +279,11 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros/embudo", async (req, r
       camposFiltro: campos,
     };
 
-    const visibles = new Set(campos.map((c) => c.nombre_tecnico));
-    const camposTarjeta = campos.filter((c) => COLUMNAS_TARJETA.includes(c.nombre_tecnico) && visibles.has(c.nombre_tecnico));
+    // La vista de la tarjeta dice qué columnas leer; solo puede usar las que la sucursal deja visibles.
+    const disponibles = campos.map((c) => c.nombre_tecnico);
+    const vista = normalizarVista(definicion.tarjeta, disponibles);
+    const columnasTarjeta = new Set(columnasDeVista(vista, disponibles));
+    const camposTarjeta = campos.filter((c) => columnasTarjeta.has(c.nombre_tecnico));
     const limite = Math.min(Math.max(Number(req.query.limite) || TARJETAS_POR_ETAPA, 1), 500);
     const desplazamiento = Math.max(Number(req.query.desplazamiento) || 0, 0);
     const soloEtapa = typeof req.query.etapa === "string" ? req.query.etapa : null;
@@ -334,8 +323,76 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros/embudo", async (req, r
       }
     }
 
+    // Último mensaje que escribió el contacto por WhatsApp (si la vista lo pide).
+    if (vista.ultimo_mensaje && idsTarjetas.length > 0) {
+      const { rows: mensajes } = await getPool().query(
+        `SELECT DISTINCT ON (o.id) o.id, m.tipo, m.texto, m.creado_en
+           FROM crm_oportunidades o
+           JOIN whatsapp_conversaciones cv ON cv.contacto_id = o.contacto_id AND cv.sucursal_id = o.sucursal_id
+           JOIN whatsapp_mensajes m ON m.conversacion_id = cv.id AND m.direccion = 'entrante'
+          WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])
+          ORDER BY o.id, m.creado_en DESC`,
+        [sucursal.id, idsTarjetas],
+      );
+      const porOp = new Map(mensajes.map((m) => [m.id as string, m]));
+      for (const c of columnas) {
+        for (const t of c.tarjetas) {
+          const m = porOp.get(t.id as string);
+          t.ultimo_mensaje = m ? { texto: m.tipo === "texto" ? m.texto : null, tipo: m.tipo, creado_en: m.creado_en } : null;
+        }
+      }
+    }
+
     const motivos = (await opcionesDinamicas(sucursal.id)).motivo_perdida.map((o) => o.valor);
-    res.json({ configurado: true, campos: camposTarjeta, etapas: columnas, motivos, limite });
+    res.json({ configurado: true, campos: camposTarjeta, etapas: columnas, motivos, limite, vista });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Vista de la tarjeta del embudo y los campos que puede usar (los visibles de la sucursal). */
+entidadDatosRouter.get("/sucursales/:id/entidad/tarjeta", requireAccesoSucursal, async (req, res, next) => {
+  try {
+    const contexto = await cargarContexto(req.params.id);
+    if (typeof contexto === "string") {
+      res.status(404).json({ error: "Esta sucursal todavía no tiene base de datos." });
+      return;
+    }
+    const { definicion, campos } = contexto;
+    const disponibles = campos.map((c) => c.nombre_tecnico);
+    res.json({
+      vista: normalizarVista(definicion.tarjeta, disponibles),
+      por_defecto: normalizarVista(null, disponibles),
+      campos: campos.map((c) => ({ nombre_tecnico: c.nombre_tecnico, nombre_visible: c.nombre_visible, tipo: c.tipo })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Guarda la vista de la tarjeta (solo un admin de la sucursal). Todos la ven al instante. */
+entidadDatosRouter.put("/sucursales/:id/entidad/tarjeta", requireAccesoSucursal, requireAdminSucursal, async (req, res, next) => {
+  const parsed = vistaSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Vista inválida." });
+    return;
+  }
+  try {
+    const contexto = await cargarContexto(req.params.id);
+    if (typeof contexto === "string") {
+      res.status(404).json({ error: "Esta sucursal todavía no tiene base de datos." });
+      return;
+    }
+    const disponibles = contexto.campos.map((c) => c.nombre_tecnico);
+    const usados = [parsed.data.arriba, parsed.data.arriba_extra, parsed.data.esquina, parsed.data.subtitulo, parsed.data.titulo, parsed.data.detalle, parsed.data.pie, ...parsed.data.etiquetas];
+    if (usados.some((c) => c !== null && !disponibles.includes(c))) {
+      res.status(400).json({ error: "La vista usa un campo que no existe en esta base de datos." });
+      return;
+    }
+    const vista = normalizarVista(parsed.data, disponibles);
+    await getPool().query(`UPDATE entidad_definiciones SET tarjeta = $2 WHERE id = $1`, [contexto.definicion.id, vista]);
+    emitirBroadcast(`datos:${req.params.id}`, "refresh", {});
+    res.json({ vista });
   } catch (err) {
     next(err);
   }
@@ -432,6 +489,10 @@ entidadDatosRouter.patch("/sucursales/:id/entidad/registros/:rowId", async (req,
     const todos = (camposFilas ?? []) as CampoEntidad[];
     const campos = esCrm ? conOpcionesDinamicas(todos, await opcionesDinamicas(req.params.id)) : todos;
 
+    if (esCrm && Object.keys(req.body ?? {}).some((k) => SOLO_CON_LLAMADA.has(k))) {
+      res.status(400).json({ error: "Este dato se registra desde la ficha del cliente (con la llamada o al clasificar su respuesta)." });
+      return;
+    }
     const resultado = construirValoresEdicion(campos, (req.body ?? {}) as Record<string, unknown>);
     if ("error" in resultado) {
       res.status(400).json({ error: resultado.error });

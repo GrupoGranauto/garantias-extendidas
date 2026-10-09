@@ -7,6 +7,7 @@ import { apiFetch } from "../lib/api";
 import { SECCIONES, type CampoPanel, type ItemPanel } from "../lib/panel";
 import { supabase } from "../lib/supabase";
 import Embudo from "./Embudo";
+import EditorTarjeta from "./EditorTarjeta";
 import FichaOportunidad from "./FichaOportunidad";
 import AccionesMasivas from "./AccionesMasivas";
 import MenuVistas from "./MenuVistas";
@@ -16,6 +17,7 @@ import {
   aParametros,
   aplicarFecha,
   cambiarSeleccion,
+  difiereDelInicio,
   estadoInicial,
   hayFiltrosActivos,
   limpiarFecha,
@@ -24,6 +26,11 @@ import {
 import { usePortal } from "./PortalProvider";
 
 type Tipo = "texto" | "entero" | "decimal" | "booleano" | "fecha" | "fecha_hora" | "uuid";
+
+function iniciales(nombre: unknown): string {
+  const partes = String(nombre ?? "").trim().split(/\s+/).filter(Boolean);
+  return ((partes[0]?.[0] ?? "") + (partes[1]?.[0] ?? "")).toUpperCase() || "?";
+}
 type Origen = "api" | "back";
 type Opcion = { valor: string; color: string; tipo?: string };
 
@@ -86,6 +93,15 @@ function formatearValor(valor: unknown, tipo: Tipo): string {
     return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
   }
   return String(valor);
+}
+
+/** 'YYYY-MM-DDTHH:mm' en hora local para <input type="datetime-local">, desde un ISO. */
+function aFechaHoraLocal(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /** 'YYYY-MM-DD' para <input type="date">, desde una fecha o datetime. */
@@ -404,6 +420,14 @@ export default function BaseDatos() {
   const [visibilidad, setVisibilidad] = useState<Visibilidad>(() => leerVisibilidad(sucursalId));
   const [menuVisibilidad, setMenuVisibilidad] = useState(false);
   const visibilidadRef = useRef<HTMLButtonElement>(null);
+  // La vista de la tarjeta del embudo la configura un admin de la sucursal (la ven todos).
+  const [esAdmin, setEsAdmin] = useState(false);
+  const [editorTarjeta, setEditorTarjeta] = useState(false);
+  useEffect(() => {
+    apiFetch<{ rol: string }>("/api/perfil")
+      .then((p) => setEsAdmin(p.rol === "admin"))
+      .catch(() => setEsAdmin(false));
+  }, []);
 
   // Vista: tabla o embudo (tablero por etapas). Se recuerda por sucursal.
   const [vista, setVista] = useState<"tabla" | "embudo">(() => {
@@ -659,6 +683,9 @@ export default function BaseDatos() {
   const hayCriterios =
     filtros.length > 0 || busquedaAplicada !== "" || orden !== null || (hayPanel && hayFiltrosActivos(estadoP));
 
+  const puedeLimpiar =
+    filtros.length > 0 || busquedaAplicada !== "" || orden !== null || (hayPanel && difiereDelInicio(estadoP, itemsPanel ?? []));
+
   const clave = (rowId: string, campo: string) => `${rowId}::${campo}`;
 
   /** Guarda un solo campo al instante (estilo hoja de cálculo). Optimista. */
@@ -696,14 +723,55 @@ export default function BaseDatos() {
     const original = valorOriginal(fila, campo);
 
     if (campo.tipo === "fecha") {
+      // Se guarda al salir del campo: mientras se teclea, el navegador entrega años a medias («0002»).
       return (
         <input
+          key={original}
           type="date"
           className="celda-editar"
-          value={original}
+          defaultValue={original}
           min="2000-01-01"
           max={HOY}
-          onChange={(e) => guardarCampo(id, campo.nombre_tecnico, e.target.value, original)}
+          onBlur={(e) => {
+            if (e.target.validity.badInput) {
+              e.target.value = original;
+              mostrarAviso("error", "La fecha está incompleta: no se guardó.");
+              return;
+            }
+            guardarCampo(id, campo.nombre_tecnico, e.target.value, original);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        />
+      );
+    }
+    if (campo.tipo === "booleano") {
+      return (
+        <select className="celda-editar" value={original} onChange={(e) => guardarCampo(id, campo.nombre_tecnico, e.target.value, original)}>
+          {original === "" && <option value="">—</option>}
+          <option value="true">Sí</option>
+          <option value="false">No</option>
+        </select>
+      );
+    }
+    if (campo.tipo === "fecha_hora") {
+      // Se guarda al salir del campo: mientras se escribe la fecha llega incompleta.
+      return (
+        <input
+          key={original}
+          type="datetime-local"
+          className="celda-editar"
+          defaultValue={aFechaHoraLocal(original)}
+          max="2100-12-31T23:59"
+          onBlur={(e) => {
+            if (e.target.value === aFechaHoraLocal(original)) return;
+            const d = e.target.value ? new Date(e.target.value) : null;
+            if (e.target.validity.badInput || (d && (Number.isNaN(d.getTime()) || d.getFullYear() > 2100))) {
+              e.target.value = aFechaHoraLocal(original);
+              mostrarAviso("error", "La fecha y hora no es válida: no se guardó.");
+              return;
+            }
+            guardarCampo(id, campo.nombre_tecnico, d ? d.toISOString() : "", original);
+          }}
         />
       );
     }
@@ -774,6 +842,13 @@ export default function BaseDatos() {
 
   const enTabla = vista === "tabla" || !(datos?.configurado && datos.embudo);
 
+  const botonTarjeta =
+    !enTabla && esAdmin ? (
+      <button type="button" className="boton-secundario-claro pf-accion" onClick={() => setEditorTarjeta(true)}>
+        Vista de la tarjeta
+      </button>
+    ) : null;
+
   const menuVistas = datos?.configurado && datos.embudo ? (
     <MenuVistas sucursalId={sucursalId} capturar={capturarVista} aplicar={aplicarVista} onError={(m) => mostrarAviso("error", m)} />
   ) : null;
@@ -822,9 +897,11 @@ export default function BaseDatos() {
           <div className="pf-barra">
             <span className="pf-conteo">
               <strong>{datos.total.toLocaleString("es-MX")}</strong> {datos.total === 1 ? "registro" : "registros"}
+              {puedeLimpiar && <span className="pf-conteo-filtrado">con filtros</span>}
             </span>
             <div className="pf-acciones">
               {selectorVista}
+              {botonTarjeta}
               {menuVistas}
               {enTabla && orden && (
                 <button type="button" className="boton-secundario-claro pf-accion" onClick={() => setOrden(null)}>
@@ -832,10 +909,12 @@ export default function BaseDatos() {
                   Quitar orden
                 </button>
               )}
-              <button type="button" className="boton-secundario-claro pf-accion" onClick={limpiarTodo}>
-                <IconoXMarca className="icono-inline" />
-                Limpiar todo
-              </button>
+              {puedeLimpiar && (
+                <button type="button" className="boton-secundario-claro pf-accion" onClick={limpiarTodo}>
+                  <IconoXMarca className="icono-inline" />
+                  Limpiar filtros
+                </button>
+              )}
               <button
                 ref={visibilidadRef}
                 type="button"
@@ -876,6 +955,7 @@ export default function BaseDatos() {
       {datos?.configurado && itemsPanel !== null && !hayPanel && (
         <div className="tabla-barra">
           {selectorVista}
+          {botonTarjeta}
           {menuVistas}
           <label className="tabla-buscar">
             <IconoBuscar className="icono-inline" />
@@ -991,7 +1071,7 @@ export default function BaseDatos() {
       {datos?.configurado && enTabla && datos.filas.length > 0 && (
         <>
           <div className={`tabla-envoltura${cargando ? " tabla-cargando" : ""}`}>
-            <table className="tabla">
+            <table className="tabla tabla-datos">
               <thead>
                 <tr>
                   {datos.embudo && (
@@ -1034,7 +1114,8 @@ export default function BaseDatos() {
                       {datos.campos.map((c) => (
                         <td key={c.nombre_tecnico} className={c.origen === "back" ? "col-editable" : undefined}>
                           {c.nombre_tecnico === "cliente" && datos.embudo ? (
-                            <button type="button" className="celda-enlace" onClick={() => setFichaId(id)}>
+                            <button type="button" className="celda-enlace celda-cliente" onClick={() => setFichaId(id)}>
+                              <span className="celda-avatar">{iniciales(fila.cliente)}</span>
                               {formatearValor(fila.cliente, "texto")}
                             </button>
                           ) : c.origen === "back"
@@ -1089,6 +1170,18 @@ export default function BaseDatos() {
           onCambio={() => {
             cargarRef.current();
             setRefrescos((n) => n + 1);
+          }}
+        />
+      )}
+
+      {editorTarjeta && (
+        <EditorTarjeta
+          sucursalId={sucursalId}
+          onCerrar={() => setEditorTarjeta(false)}
+          onGuardado={() => {
+            setEditorTarjeta(false);
+            setRefrescos((n) => n + 1);
+            mostrarAviso("ok", "Vista de la tarjeta guardada");
           }}
         />
       )}

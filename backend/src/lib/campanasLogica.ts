@@ -132,18 +132,43 @@ export type ContextoEnvio = {
   ventana: Ventana;
   maxPorDia: number;
   enviadosHoy: number;
-  oportunidad: { campana: string | null; campanaEsperada: string; estadoCartera: string; estado: string; etapa: string | null; agencia: string | null };
+  oportunidad: {
+    campana: string | null;
+    campanaEsperada: string;
+    estadoCartera: string;
+    estado: string;
+    etapa: string | null;
+    agencia: string | null;
+    /** Estado de contacto del lead: «no_contactable» (número equivocado o inválido) ya no recibe mensajes. */
+    estadoContacto?: string;
+  };
   /** Si no está vacía, la campaña solo manda a leads de estas agencias (piloto). */
   pilotoAgencias: string[];
   contacto: { baja: boolean; telefono10: string | null; tieneCelular: boolean | null };
   paso: { etapas: string[]; soloSinRespuesta: boolean; soloSinContacto: boolean };
   respondio: boolean;
   yaContactado: boolean;
+  /** «Resultado BDC» del lead: lo que el ejecutivo ya trabajó cuenta igual que un contacto registrado. */
+  resultadoBdc: string | null;
   /** Se le escribió desde OTRA campaña dentro del periodo de descanso. */
   enviadoRecienteOtraCampana: boolean;
+  /** Ese teléfono ya recibió un mensaje hoy (otro auto del mismo cliente o flotilla, de cualquier campaña). */
+  telefonoConMensajeHoy: boolean;
   whatsappListo: boolean;
   plantillaDisponible: boolean;
 };
+
+/** Resultados del Sheet que significan que el lead ya fue contactado (o trabajado) por el BDC. */
+export const RESULTADOS_CONTACTADO = new Set([
+  "CONTACTADO",
+  "SOLICITA INFO WHATSAPP",
+  "INTERESADO",
+  "PENDIENTE DECISION TERCERO",
+  "COTIZADO",
+  "VENDIDO",
+  "NO INTERESADO",
+  "PRECIO FUERA PRESUPUESTO",
+]);
 
 export type Decision =
   | { accion: "enviar" }
@@ -170,12 +195,17 @@ export function decidirEnvio(c: ContextoEnvio): Decision {
   if (o.campana !== o.campanaEsperada || o.estadoCartera !== "ACTIVA" || o.estado !== "abierta") {
     return { accion: "omitir", motivo: "ya_no_aplica" };
   }
-  if (c.contacto.baja) return { accion: "omitir", motivo: "baja" };
+  if (c.contacto.baja || o.estadoContacto === "baja") return { accion: "omitir", motivo: "baja" };
   if (!c.contacto.telefono10) return { accion: "omitir", motivo: "sin_telefono" };
   if (c.contacto.tieneCelular === false) return { accion: "omitir", motivo: "sin_celular" };
+  // El BDC lo marcó no contactable en esta campaña (número equivocado, no existe…): ya no se le escribe.
+  if (c.resultadoBdc === "NO CONTACTABLE" || o.estadoContacto === "no_contactable") return { accion: "omitir", motivo: "no_contactable" };
   if (c.paso.etapas.length > 0 && (!o.etapa || !c.paso.etapas.includes(o.etapa))) return { accion: "omitir", motivo: "etapa_no_permitida" };
-  if (c.paso.soloSinRespuesta && c.respondio) return { accion: "omitir", motivo: "respondio" };
-  if (c.paso.soloSinContacto && c.yaContactado) return { accion: "omitir", motivo: "ya_contactado" };
+  // Lo que el ejecutivo ya trabajó cuenta igual que lo registrado: «si no responde» / «si no lo han contactado» no sale.
+  const respondio = c.respondio || c.resultadoBdc === "SOLICITA INFO WHATSAPP";
+  const contactado = c.yaContactado || RESULTADOS_CONTACTADO.has(c.resultadoBdc ?? "");
+  if (c.paso.soloSinRespuesta && respondio) return { accion: "omitir", motivo: "respondio" };
+  if (c.paso.soloSinContacto && contactado) return { accion: "omitir", motivo: "ya_contactado" };
 
   // De aquí en adelante solo se espera. Si la vigencia ya venció, se cierra con el motivo que lo detenía.
   const esperar = (motivo: string, hasta: "ventana" | "dia_siguiente" | { minutos: number }): Decision =>
@@ -184,6 +214,8 @@ export function decidirEnvio(c: ContextoEnvio): Decision {
   // Piloto: fuera de las agencias elegidas se espera (si el piloto se amplía a tiempo, sale); al vencer la vigencia se omite.
   if (c.pilotoAgencias.length > 0 && !c.pilotoAgencias.includes(o.agencia ?? "")) return esperar("fuera_del_piloto", "dia_siguiente");
   if (c.enviadoRecienteOtraCampana) return esperar("descanso_entre_campanas", { minutos: 360 });
+  // Un mensaje por teléfono al día: una flotilla o una familia con varios autos no recibe varios el mismo día.
+  if (c.telefonoConMensajeHoy) return esperar("un_mensaje_por_dia", "dia_siguiente");
   if (!dentroDeVentana(c.ahora, c.ventana)) return esperar("fuera_de_ventana", "ventana");
   if (c.enviadosHoy >= c.maxPorDia) return esperar("tope_diario", "dia_siguiente");
   if (!c.whatsappListo) return esperar("whatsapp_no_configurado", { minutos: 60 });

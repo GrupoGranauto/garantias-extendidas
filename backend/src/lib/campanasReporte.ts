@@ -31,10 +31,10 @@ export async function reporteCampanas(sucursalId: string, desde: string, hasta: 
 
   // Los leads del periodo: el primer mensaje REAL de cada campaña.
   const primeros = `
-    SELECT e.campana, e.oportunidad_id, o.contacto_id, min(e.enviado_en) AS primero
+    SELECT e.campana, e.oportunidad_id, e.campana_id, o.contacto_id, min(e.enviado_en) AS primero
       FROM crm_envios e JOIN crm_oportunidades o ON o.id = e.oportunidad_id
      WHERE e.sucursal_id = $1 AND e.paso_id IS NOT NULL AND e.estado IN ('enviado', 'entregado', 'leido')${filtroEj}
-     GROUP BY e.campana, e.oportunidad_id, o.contacto_id
+     GROUP BY e.campana, e.oportunidad_id, e.campana_id, o.contacto_id
     HAVING min(e.enviado_en) >= ${ini} AND min(e.enviado_en) < ${fin}`;
 
   const [cohorte, avance, mensajes, motivos, seg] = await Promise.all([
@@ -51,6 +51,7 @@ export async function reporteCampanas(sucursalId: string, desde: string, hasta: 
               count(*) FILTER (WHERE EXISTS (
                 SELECT 1 FROM crm_actividades a WHERE a.oportunidad_id = p.oportunidad_id AND a.tipo IN ('llamada', 'whatsapp')
                    AND a.detalle->>'resultado' = 'contesto' AND a.creado_en >= p.primero
+                   AND a.campana_id IS NOT DISTINCT FROM p.campana_id
               ))::int AS contestaron
          FROM p GROUP BY p.campana`,
       args,
@@ -60,6 +61,7 @@ export async function reporteCampanas(sucursalId: string, desde: string, hasta: 
        SELECT p.campana, ed.nombre AS etapa, ed.tipo, ed.orden, count(DISTINCT p.oportunidad_id)::int AS total
          FROM p JOIN crm_historial_etapas h ON h.oportunidad_id = p.oportunidad_id AND h.creado_en >= p.primero
                                            AND h.origen IN ('manual', 'automatizacion')
+                                           AND h.campana_id IS NOT DISTINCT FROM p.campana_id
          JOIN crm_etapas ed ON ed.id = h.etapa_destino_id
         GROUP BY p.campana, ed.nombre, ed.tipo, ed.orden ORDER BY p.campana, ed.orden`,
       args,
