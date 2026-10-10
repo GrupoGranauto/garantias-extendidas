@@ -2,8 +2,6 @@ import { z } from "zod";
 import { getPool } from "./db.js";
 import { emitirBroadcast } from "./realtime.js";
 import { validarFechaCoherente } from "./entidades.js";
-import { despacharEnvios, planificarEnvios } from "./campanasEnvio.js";
-import { ejecutarSeguimientos, planificarSeguimientos } from "./seguimientos.js";
 import { ejecutarReglasContrato, iniciarCoberturasVencidas, planificarReglasContrato } from "./reglasContrato.js";
 import { vincularConversaciones } from "./vinculoWhatsapp.js";
 import { recalcularSiToca } from "./cicloVehiculo.js";
@@ -395,19 +393,12 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
           await etapa("etapas del vehículo", recalcularSiToca, 0);
           // Las campañas que define el usuario se calculan una vez al día, a la hora que eligió.
           await etapa("cálculo de campañas", calcularCampanasSiToca, 0);
-          // Pago y cierre: tareas por tiempo en un estado del contrato y cobertura automática. No mandan mensajes: no dependen de CRM_ENVIOS.
+          // Pago y cierre: tareas por tiempo en un estado del contrato y cobertura automática. No mandan mensajes.
           await etapa("planificar reglas del contrato", planificarReglasContrato, 0);
           await etapa("ejecutar reglas del contrato", ejecutarReglasContrato, 0);
           await etapa("cobertura automática", iniciarCoberturasVencidas, 0);
         }
-        // Envíos de campaña: solo en el servidor que los tenga encendidos (CRM_ENVIOS=on), nunca en una copia de desarrollo.
-        if (porTiempo && process.env.CRM_ENVIOS === "on") {
-          await etapa("planificar envíos", planificarEnvios, 0);
-          await etapa("despachar envíos", despacharEnvios, 0);
-          // Seguimientos (tarea, llamada u otro WhatsApp) de lo que ya se mandó.
-          await etapa("planificar seguimientos", planificarSeguimientos, 0);
-          await etapa("ejecutar seguimientos", ejecutarSeguimientos, 0);
-        }
+        // No hay envíos automáticos de WhatsApp: los mensajes masivos los manda el admin del grupo a mano.
         if (r.tareas + extra > 0) console.log(`[motor-crm] ${r.tareas + extra} tarea(s) creada(s)`);
       })
       .catch(() => console.error("[motor-crm] fallo la revisión de la bandeja"))

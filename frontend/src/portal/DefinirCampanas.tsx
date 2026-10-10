@@ -158,10 +158,8 @@ export default function DefinirCampanas() {
     <>
       <p className="pestana-descripcion">
         Tú decides quién entra a cada campaña. Hay dos tipos: <strong>por días</strong> (una ventana de días desde la fecha del vehículo; se recalcula todos
-        los días) y <strong>por meses</strong> (una cohorte: todo lo que tenga la fecha en el mes de hace N meses, sin importar el día; se envía el día y la
-        hora que elijas). La web calcula las campañas todos los días a la hora que definas.
+        los días) y <strong>por meses</strong> (una cohorte: todo lo que tenga la fecha en el mes de hace N meses, sin importar el día). La web calcula las campañas todos los días a la hora que definas.
       </p>
-      <Alerta tipo="info">Cada campaña sigue apagada o en simulación hasta que la enciendas en «Campañas de WhatsApp».</Alerta>
       {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
       <section className="rep-tarjeta">
@@ -193,8 +191,7 @@ export default function DefinirCampanas() {
           </button>
         </div>
         <p className="rep-ayuda">
-          Si una oportunidad cumple las reglas de varias campañas, se queda con la que esté primero en la lista. El nombre de la campaña es el que se usa en
-          la pestaña «Campañas de WhatsApp».
+          Si una oportunidad cumple las reglas de varias campañas, se queda con la que esté primero en la lista.
         </p>
 
         {filas.map((f, i) => (

@@ -34,7 +34,6 @@ import {
   reporteEmbudo,
   registrarNoContactar,
 } from "../lib/crmProceso.js";
-import { reporteCampanas } from "../lib/campanasReporte.js";
 import { guardarDatosEmision, leerDatosEmision } from "../lib/datosEmision.js";
 
 /**
@@ -458,25 +457,6 @@ crmProcesoRouter.get("/sucursales/:id/crm/reportes/embudo", async (req, res, nex
       return;
     }
     res.json(await reporteEmbudo(req.params.id, d, h, restringidoA(req)));
-  } catch (err) {
-    next(err);
-  }
-});
-
-/** Reporte del ciclo de campañas (mensajes, respuestas, avance y ventas, seguimientos). Un ejecutivo ve solo lo suyo. */
-crmProcesoRouter.get("/sucursales/:id/crm/reportes/campanas", async (req, res, next) => {
-  try {
-    const hoy = new Date().toISOString().slice(0, 10);
-    const hace30 = new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
-    const desde = fechaSchema.safeParse(req.query.desde);
-    const hasta = fechaSchema.safeParse(req.query.hasta);
-    const d = desde.success ? desde.data : hace30;
-    const h = hasta.success ? hasta.data : hoy;
-    if (d > h) {
-      res.status(400).json({ error: "La fecha inicial no puede ser posterior a la final." });
-      return;
-    }
-    res.json(await reporteCampanas(req.params.id, d, h, restringidoA(req)));
   } catch (err) {
     next(err);
   }

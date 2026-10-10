@@ -4,13 +4,13 @@ import Cargador from "../componentes/Cargador";
 import Interruptor from "../componentes/Interruptor";
 import { IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
-import CampanasEnvio from "./CampanasEnvio";
 import EtapasVehiculo from "./EtapasVehiculo";
 import DefinirCampanas from "./DefinirCampanas";
-import Seguimientos from "./Seguimientos";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
+/** Lo que se configura aquí: tareas y preguntas para el ejecutivo. Los mensajes de WhatsApp los manda el admin a mano. */
+type Pestana = "tarea" | "pregunta";
 type Cfg = Record<string, unknown>;
 
 type Evento = "entra_etapa" | "tiempo_en_etapa";
@@ -25,14 +25,13 @@ type EtapaApi = {
 };
 type Respuesta = {
   etapas: EtapaApi[];
-  plantillas: { id: string; nombre: string | null; nombre_tecnico: string; estado: string }[];
   destinos: { nombre_tecnico: string; nombre_visible: string; tipo: string }[];
   tipos_respuesta: string[];
   /** De dónde salen las campañas: «bigquery» (base maestra) o «web» (reglas de «Definir campañas»). */
   campanas_fuente: "bigquery" | "web";
 };
 
-const PESTANAS: { tipo: TipoAuto; titulo: string; ayuda: string; vacio: string }[] = [
+const PESTANAS: { tipo: Pestana; titulo: string; ayuda: string; vacio: string }[] = [
   {
     tipo: "tarea",
     titulo: "Tareas",
@@ -44,12 +43,6 @@ const PESTANAS: { tipo: TipoAuto; titulo: string; ayuda: string; vacio: string }
     titulo: "Preguntas",
     ayuda: "Preguntas que el ejecutivo debe hacerle al cliente. La respuesta puede quedar registrada en una columna de la tabla.",
     vacio: "Sin preguntas en este estado.",
-  },
-  {
-    tipo: "whatsapp",
-    titulo: "WhatsApp",
-    ayuda: "Envío de una plantilla al entrar al estado (mensajes masivos).",
-    vacio: "Sin envíos de WhatsApp en este estado.",
   },
 ];
 
@@ -64,11 +57,9 @@ const ETIQUETA_RESPUESTA: Record<string, string> = {
 let contador = 0;
 const nuevaClave = () => `n${++contador}`;
 
-function configInicial(tipo: TipoAuto): Cfg {
+function configInicial(tipo: Pestana): Cfg {
   if (tipo === "tarea") return { titulo: "", descripcion: "", vence_horas: 24, horas: null, solo_sin_contacto: false, aplicar_a_existentes: false };
-  if (tipo === "pregunta")
-    return { texto: "", tipo_respuesta: "texto", opciones: [], campo_destino: null, obligatoria: false, vence_horas: null, horas: null, solo_sin_contacto: false, aplicar_a_existentes: false };
-  return { plantilla_id: null, retraso_horas: 0 };
+  return { texto: "", tipo_respuesta: "texto", opciones: [], campo_destino: null, obligatoria: false, vence_horas: null, horas: null, solo_sin_contacto: false, aplicar_a_existentes: false };
 }
 
 function aLocal(a: EtapaApi["automatizaciones"][number]): Automatizacion {
@@ -78,8 +69,7 @@ function aLocal(a: EtapaApi["automatizaciones"][number]): Automatizacion {
 /**
  * Automatizaciones por etapa: "Cuando una oportunidad entra a esta etapa → entonces…".
  * Lo que se guarda aquí lo ejecuta el motor del servidor: tareas y preguntas para el
- * ejecutivo encargado. Los envíos de WhatsApp por campaña viven en el otro apartado
- * (Campañas de WhatsApp); la pestaña de WhatsApp por etapa solo deja configurado el envío.
+ * ejecutivo encargado. No hay envíos automáticos de WhatsApp: los manda el admin a mano.
  */
 export default function Automatizaciones() {
   const { portal } = usePortal();
@@ -88,29 +78,25 @@ export default function Automatizaciones() {
   const [datos, setDatos] = useState<Respuesta | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [etapaId, setEtapaId] = useState<string | null>(null);
-  const [pestana, setPestana] = useState<TipoAuto>("tarea");
+  const [pestana, setPestana] = useState<Pestana>("tarea");
   const [borradores, setBorradores] = useState<Record<string, Automatizacion[]>>({});
   const [sucias, setSucias] = useState<Set<string>>(new Set());
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
-  // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
-  type Apartado = "etapas" | "campanas" | "vehiculo" | "definir" | "seguimientos" | "contrato";
+  // Apartados: las automatizaciones por estado, las etapas del vehículo y, si la web define las campañas, «Definir campañas».
+  type Apartado = "etapas" | "vehiculo" | "definir";
   const [apartadoElegido, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" || guardado === "seguimientos" || guardado === "contrato"
-        ? guardado
-        : "etapas";
+      return guardado === "vehiculo" || guardado === "definir" ? guardado : "etapas";
     } catch {
       return "etapas";
     }
   });
   // «Definir campañas» solo existe cuando la web define las campañas; si vienen de la base maestra, no se muestra.
   const definirVisible = datos?.campanas_fuente === "web";
-  // «Contrato» (reglas de tareas por estado del contrato) ya no se usa en el portal.
-  const apartado: Apartado =
-    (apartadoElegido === "definir" && !definirVisible) || apartadoElegido === "contrato" ? "etapas" : apartadoElegido;
+  const apartado: Apartado = apartadoElegido === "definir" && !definirVisible ? "etapas" : apartadoElegido;
   const elegirApartado = (a: Apartado) => {
     setApartado(a);
     try {
@@ -132,12 +118,6 @@ export default function Automatizaciones() {
           Definir campañas
         </button>
       )}
-      <button type="button" role="tab" aria-selected={apartado === "campanas"} className={`vista-opcion${apartado === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("campanas")}>
-        Campañas de WhatsApp
-      </button>
-      <button type="button" role="tab" aria-selected={apartado === "seguimientos"} className={`vista-opcion${apartado === "seguimientos" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("seguimientos")}>
-        Seguimientos
-      </button>
     </div>
   );
 
@@ -215,15 +195,6 @@ export default function Automatizaciones() {
   }
 
 
-  if (apartado === "seguimientos") {
-    return (
-      <div className="pagina-formulario">
-        {apartados}
-        <Seguimientos />
-      </div>
-    );
-  }
-
   if (apartado === "definir") {
     return (
       <div className="pagina-formulario">
@@ -238,15 +209,6 @@ export default function Automatizaciones() {
       <div className="pagina-formulario">
         {apartados}
         <EtapasVehiculo />
-      </div>
-    );
-  }
-
-  if (apartado === "campanas") {
-    return (
-      <div className="pagina-formulario">
-        {apartados}
-        <CampanasEnvio />
       </div>
     );
   }
@@ -338,12 +300,6 @@ export default function Automatizaciones() {
               })}
             </div>
 
-            {pestana === "whatsapp" && (
-              <Alerta tipo="info">
-                Aquí solo se deja configurado el envío por estado; el motor todavía no lo manda. Los envíos automáticos de cada campaña (48 horas, 5 meses, 12 meses y 28 meses) se configuran en el apartado «Campañas de WhatsApp».
-              </Alerta>
-            )}
-
             {delTipo.length === 0 && <p className="auto-vacio">{info.vacio}</p>}
 
             {delTipo.map((a) => (
@@ -368,27 +324,22 @@ export default function Automatizaciones() {
                   </button>
                 </div>
 
-                {a.tipo !== "whatsapp" && (
-                  <Disparo
-                    evento={a.evento}
-                    cfg={a.config}
-                    onEvento={(evento) => actualizar(a.clave, { evento })}
-                    onCfg={(c) => actualizarCfg(a.clave, c)}
-                  />
-                )}
+                <Disparo
+                  evento={a.evento}
+                  cfg={a.config}
+                  onEvento={(evento) => actualizar(a.clave, { evento })}
+                  onCfg={(c) => actualizarCfg(a.clave, c)}
+                />
 
                 {a.tipo === "tarea" && <EditorTarea cfg={a.config} onCambio={(c) => actualizarCfg(a.clave, c)} />}
                 {a.tipo === "pregunta" && (
                   <EditorPregunta cfg={a.config} destinos={datos.destinos} onCambio={(c) => actualizarCfg(a.clave, c)} />
                 )}
-                {a.tipo === "whatsapp" && (
-                  <EditorWhatsapp cfg={a.config} plantillas={datos.plantillas} onCambio={(c) => actualizarCfg(a.clave, c)} />
-                )}
               </article>
             ))}
 
             <button type="button" className="boton-secundario-claro auto-agregar" onClick={agregar}>
-              Agregar {pestana === "tarea" ? "tarea" : pestana === "pregunta" ? "pregunta" : "envío de WhatsApp"}
+              Agregar {pestana === "tarea" ? "tarea" : "pregunta"}
             </button>
           </section>
         )}
@@ -521,37 +472,6 @@ function EditorPregunta({
       <div className="auto-campo auto-campo-casilla">
         <Interruptor etiqueta="Respuesta obligatoria" activo={cfg.obligatoria === true} onChange={(v) => onCambio({ obligatoria: v })} />
       </div>
-    </div>
-  );
-}
-
-function EditorWhatsapp({
-  cfg,
-  plantillas,
-  onCambio,
-}: {
-  cfg: Cfg;
-  plantillas: Respuesta["plantillas"];
-  onCambio: (c: Cfg) => void;
-}) {
-  return (
-    <div className="auto-cuerpo">
-      <label className="auto-campo auto-campo-ancho">
-        <span>Plantilla de WhatsApp</span>
-        <select
-          className="auto-input"
-          value={String(cfg.plantilla_id ?? "")}
-          onChange={(e) => onCambio({ plantilla_id: e.target.value || null })}
-        >
-          <option value="">Elige una plantilla</option>
-          {plantillas.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.nombre ?? p.nombre_tecnico} ({p.estado})
-            </option>
-          ))}
-        </select>
-      </label>
-      <CampoHoras etiqueta="Enviar después de (horas)" valor={cfg.retraso_horas} onChange={(v) => onCambio({ retraso_horas: v ?? 0 })} />
     </div>
   );
 }
