@@ -84,6 +84,14 @@ const MOTIVOS: Record<string, string> = {
   atrasado: "Le tocaba hace más de 24 h (seguimiento apagado o motor detenido)",
 };
 const ACCIONES: Record<Accion, string> = { tarea: "Crear una tarea", llamada: "Agendar una llamada", whatsapp: "Enviar otro WhatsApp" };
+/** Las acciones que se ofrecen (una «tarea» ya guardada se sigue mostrando, pero no se ofrece para nuevas). */
+const ACCIONES_OFRECIDAS: Accion[] = ["llamada", "whatsapp"];
+
+/** Columnas útiles para operar que se ofrecen en las condiciones, en este orden. */
+const CAMPOS_CONDICION = [
+  "resultado_bdc", "etapa_embudo", "estado_contacto", "respuesta_titular", "respondio_whatsapp", "contesto", "intentos",
+  "agencia", "etapa_vehiculo", "linea", "anio_vin", "kilometraje", "ejecutivo", "tiene_celular",
+];
 
 let contador = 0;
 const clave = () => `s${++contador}`;
@@ -278,14 +286,8 @@ export default function Seguimientos() {
   return (
     <>
       <p className="pestana-descripcion">
-        Define qué pasa después del primer mensaje automático de cada campaña: pasadas unas horas o días, y solo si se cumplen tus condiciones, se crea una tarea para el
-        ejecutivo, se agenda una llamada o se manda otro WhatsApp. Las condiciones pueden usar cualquier columna de la base; el estado del lead es la «etiqueta» del
-        cliente.
+        Después del mensaje de una campaña, si se cumplen las condiciones, agenda una llamada o manda otro WhatsApp. Nacen apagados.
       </p>
-      <Alerta tipo="info">
-        Los seguimientos nacen apagados. Solo se disparan con mensajes que ya salieron: si el primer mensaje fue una simulación, el seguimiento también se simula (se anota lo que
-        habría hecho, sin crear tareas ni mandar nada). Los WhatsApp de seguimiento respetan el horario, el tope diario y las bajas de la campaña.
-      </Alerta>
       {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
       <section className="rep-tarjeta">
@@ -358,11 +360,14 @@ export default function Seguimientos() {
                 return (
                   <div key={i} className="seg-condicion">
                     <select className="auto-input" value={c.campo} onChange={(e) => cambiarCampo(f, i, e.target.value)} aria-label="Columna">
-                      {datos.campos.map((k) => (
-                        <option key={k.nombre} value={k.nombre}>
-                          {k.etiqueta}
-                        </option>
-                      ))}
+                      {CAMPOS_CONDICION.map((n) => datos.campos.find((k) => k.nombre === n))
+                        .filter((k): k is (typeof datos.campos)[number] => Boolean(k))
+                        .concat(CAMPOS_CONDICION.includes(c.campo) ? [] : datos.campos.filter((k) => k.nombre === c.campo))
+                        .map((k) => (
+                          <option key={k.nombre} value={k.nombre}>
+                            {k.etiqueta}
+                          </option>
+                        ))}
                       {!datos.campos.some((k) => k.nombre === c.campo) && <option value={c.campo}>{c.campo} (ya no existe)</option>}
                     </select>
                     <select
@@ -400,7 +405,7 @@ export default function Seguimientos() {
                 <label className="auto-campo">
                   <span>Acción</span>
                   <select className="auto-input" value={f.accion} onChange={(e) => editar(f.clave, { accion: e.target.value as Accion, venceValor: e.target.value === "llamada" && f.venceValor === "" ? "0" : f.venceValor })}>
-                    {(Object.keys(ACCIONES) as Accion[]).map((a) => (
+                    {(ACCIONES_OFRECIDAS.includes(f.accion) ? ACCIONES_OFRECIDAS : [f.accion, ...ACCIONES_OFRECIDAS]).map((a) => (
                       <option key={a} value={a}>
                         {ACCIONES[a]}
                       </option>
