@@ -337,10 +337,10 @@ export async function revisarActivacion(sucursalId: string, campana: string) {
 
   const whatsapp = await configPorSucursalId(sucursalId).catch(() => null);
   checks.push({ clave: "whatsapp", ok: Boolean(whatsapp && whatsapp.activo), bloqueante: true, texto: "WhatsApp está configurado y activo en esta sucursal." });
-  checks.push({ clave: "motor", ok: process.env.CRM_ENVIOS === "on", bloqueante: true, texto: "El servidor tiene encendido el envío automático (variable CRM_ENVIOS=on)." });
+  checks.push({ clave: "motor", ok: process.env.CRM_ENVIOS === "on", bloqueante: true, texto: "El envío automático de WhatsApp está habilitado en la plataforma (lo habilita el administrador de Auto Insights)." });
 
   const conPlantilla = cfg.pasos.filter((p) => p.plantilla_id);
-  checks.push({ clave: "mensajes", ok: conPlantilla.length > 0 && conPlantilla.length === cfg.pasos.length, bloqueante: true, texto: "La campaña tiene al menos un mensaje y todos tienen plantilla." });
+  checks.push({ clave: "mensajes", ok: conPlantilla.length > 0 && conPlantilla.length === cfg.pasos.length, bloqueante: true, texto: "La campaña tiene al menos un mensaje y cada mensaje tiene su plantilla." });
 
   const ids = [...new Set(conPlantilla.map((p) => p.plantilla_id as string))];
   const { rows: pls } = ids.length
@@ -356,7 +356,7 @@ export async function revisarActivacion(sucursalId: string, campana: string) {
     const vars = new Set([...String(p.cuerpo ?? "").matchAll(/\{\{(\d+)\}\}/g)].map((m) => m[1])).size;
     return vars > (p.mapeadas as number);
   });
-  checks.push({ clave: "variables", ok: ids.length > 0 && sinMapear.length === 0, bloqueante: true, texto: "Las variables de cada plantilla están ligadas a una columna de la base." });
+  checks.push({ clave: "variables", ok: ids.length > 0 && sinMapear.length === 0, bloqueante: true, texto: "Los datos de cada plantilla (nombre, auto, etc.) están ligados en «Plantillas»." });
 
   // Al pasar a real lo simulado se descarta: cuenta también lo que ya salió de verdad.
   const { rows: sim } = await pool.query(
