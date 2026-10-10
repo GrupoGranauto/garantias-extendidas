@@ -11,11 +11,27 @@ export const VENTANA_MASIVOS: Ventana = { dias_semana: [1, 2, 3, 4, 5, 6, 7], ho
 /** Filas que caben en un masivo. */
 export const MAX_DESTINATARIOS = 2000;
 
-export const MOTIVOS_OMISION = ["baja", "no_contactable", "sin_telefono", "sin_celular", "mensaje_hoy", "telefono_repetido", "variable_vacia"] as const;
+export const MOTIVOS_OMISION = [
+  "otra_campana",
+  "otro_estado",
+  "otro_resultado",
+  "otra_etapa_vehiculo",
+  "baja",
+  "no_contactable",
+  "sin_telefono",
+  "sin_celular",
+  "mensaje_hoy",
+  "telefono_repetido",
+  "variable_vacia",
+] as const;
 export type MotivoOmision = (typeof MOTIVOS_OMISION)[number];
 
 /** Cómo se le explica al admin cada motivo. */
 export const TEXTO_MOTIVO: Record<string, string> = {
+  otra_campana: "la plantilla no es para su campaña",
+  otro_estado: "la plantilla no es para su estado del lead",
+  otro_resultado: "la plantilla no es para su Resultado BDC",
+  otra_etapa_vehiculo: "la plantilla no es para la etapa de su vehículo",
   baja: "pidieron no ser contactados",
   no_contactable: "están marcados como no contactables",
   sin_telefono: "no tienen teléfono válido",
@@ -27,8 +43,45 @@ export const TEXTO_MOTIVO: Record<string, string> = {
   plantilla_no_disponible: "la plantilla dejó de estar aprobada",
 };
 
+/** A quién se le puede mandar una plantilla. Cada lista vacía = cualquiera; sin campañas, la plantilla es «General». */
+export type ReglasPlantilla = { campanas: string[]; estados: string[]; resultados: string[]; etapasVehiculo: string[] };
+
+export const SIN_REGLAS: ReglasPlantilla = { campanas: [], estados: [], resultados: [], etapasVehiculo: [] };
+
+/** Lo del lead que se compara con las reglas de la plantilla. */
+export type DatosLead = { campana: string | null; estadoId: string | null; resultado: string | null; etapaVehiculoId: string | null };
+
+/** Por qué la plantilla no es para este lead, o null si sí lo es. */
+export function motivoPorReglas(r: ReglasPlantilla, d: DatosLead): MotivoOmision | null {
+  if (r.campanas.length > 0 && !r.campanas.includes(d.campana ?? "")) return "otra_campana";
+  if (r.estados.length > 0 && !r.estados.includes(d.estadoId ?? "")) return "otro_estado";
+  if (r.resultados.length > 0 && !r.resultados.includes(d.resultado ?? "")) return "otro_resultado";
+  if (r.etapasVehiculo.length > 0 && !r.etapasVehiculo.includes(d.etapaVehiculoId ?? "")) return "otra_etapa_vehiculo";
+  return null;
+}
+
+/** Nombre de una campaña para la pantalla: 48H → «48 horas», 12M_NURTURING → «12 meses». */
+export function etiquetaCampana(codigo: string): string {
+  const horas = /^(\d+)H$/i.exec(codigo);
+  if (horas) return `${horas[1]} horas`;
+  const meses = /^(\d+)M(?:_|$)/i.exec(codigo);
+  if (meses) return `${meses[1]} meses`;
+  return codigo;
+}
+
+/** Para ordenar campañas de la más corta a la más larga (48H, 5M, 6M, 12M, 28M); las demás al final, por nombre. */
+export function ordenCampana(codigo: string): number {
+  const horas = /^(\d+)H$/i.exec(codigo);
+  if (horas) return Number(horas[1]);
+  const meses = /^(\d+)M(?:_|$)/i.exec(codigo);
+  if (meses) return Number(meses[1]) * 24 * 30;
+  return Number.MAX_SAFE_INTEGER;
+}
+
 export type Candidato = {
   oportunidadId: string;
+  /** La plantilla no es para este lead (campaña, estado, resultado o etapa del vehículo). */
+  fueraDeReglas?: MotivoOmision | null;
   telefono: unknown;
   /** null = no se sabe (se intenta). */
   tieneCelular: boolean | null;
@@ -50,7 +103,9 @@ export function clasificarDestinatarios(candidatos: Candidato[], telefonosConMen
   return candidatos.map((c) => {
     const tel10 = telefono10(c.telefono);
     let motivo: MotivoOmision | null = null;
-    if (c.baja || c.estadoContacto === "baja") motivo = "baja";
+    // Primero, si la plantilla es para él: si no, ni siquiera es destinatario.
+    if (c.fueraDeReglas) motivo = c.fueraDeReglas;
+    else if (c.baja || c.estadoContacto === "baja") motivo = "baja";
     else if (c.estadoContacto === "no_contactable") motivo = "no_contactable";
     else if (!tel10) motivo = "sin_telefono";
     else if (c.tieneCelular === false) motivo = "sin_celular";

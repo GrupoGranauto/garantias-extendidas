@@ -5,6 +5,7 @@ import Cargador from "../componentes/Cargador";
 import ModalConfirmar from "../componentes/ModalConfirmar";
 import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
+import ReglasPlantilla, { resumenReglas, type CatalogoReglas, type Reglas } from "./ReglasPlantilla";
 
 type Estado = "borrador" | "pendiente" | "aprobada" | "rechazada" | "pausada" | "deshabilitada";
 
@@ -43,7 +44,10 @@ const PASTILLA_ESTADO: Record<Estado, string> = {
   deshabilitada: "neutral",
 };
 
-/** Plantillas de WhatsApp de esta sucursal. Vive en el portal de la sucursal, no en el panel de plataforma. */
+/**
+ * Plantillas de WhatsApp de esta sucursal. Vive en el portal de la sucursal, no en el panel de plataforma. Con CRM, el admin
+ * define además a quién se le puede mandar cada una en un masivo (campaña, estado del lead, resultado, etapa del vehículo).
+ */
 export default function PlantillasListado() {
   const { portal } = usePortal();
   const sucursalId = portal!.id;
@@ -54,6 +58,15 @@ export default function PlantillasListado() {
   const [enviandoId, setEnviandoId] = useState<string | null>(null);
   const [porEliminar, setPorEliminar] = useState<Plantilla | null>(null);
   const [eliminando, setEliminando] = useState(false);
+  // A quién se manda cada plantilla en un masivo. Solo si el grupo tiene CRM y quien entra es admin; si no, no se muestra.
+  const [reglas, setReglas] = useState<{ catalogo: CatalogoReglas; reglas: Record<string, Reglas> } | null>(null);
+  const [editandoReglas, setEditandoReglas] = useState<Plantilla | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ catalogo: CatalogoReglas; reglas: Record<string, Reglas> }>(`/api/admin/sucursales/${sucursalId}/crm/masivos/reglas`)
+      .then(setReglas)
+      .catch(() => setReglas(null));
+  }, [sucursalId]);
 
   function cargar() {
     apiFetch<Plantilla[]>(`/api/admin/sucursales/${sucursalId}/plantillas`)
@@ -161,6 +174,7 @@ export default function PlantillasListado() {
                 <th>Idioma</th>
                 <th>Categoría</th>
                 <th>Estado</th>
+                {reglas && <th>A quién se manda</th>}
                 <th>Acciones</th>
               </tr>
             </thead>
@@ -181,6 +195,7 @@ export default function PlantillasListado() {
                       <p className="campo-ayuda">{p.motivo_rechazo}</p>
                     )}
                   </td>
+                  {reglas && <td className="plantilla-reglas">{resumenReglas(reglas.reglas[p.id], reglas.catalogo)}</td>}
                   <td>
                     <div className="celda-acciones">
                       {(p.estado === "borrador" || p.estado === "rechazada") && (
@@ -203,6 +218,11 @@ export default function PlantillasListado() {
                           Variables
                         </Link>
                       )}
+                      {reglas && (
+                        <button type="button" className="boton-tenue" onClick={() => setEditandoReglas(p)}>
+                          A quién
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="boton-tenue boton-peligro"
@@ -217,6 +237,20 @@ export default function PlantillasListado() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {editandoReglas && reglas && (
+        <ReglasPlantilla
+          sucursalId={sucursalId}
+          plantilla={editandoReglas}
+          catalogo={reglas.catalogo}
+          inicial={reglas.reglas[editandoReglas.id]}
+          onCerrar={() => setEditandoReglas(null)}
+          onGuardado={(r) => {
+            setReglas((x) => (x ? { ...x, reglas: { ...x.reglas, [editandoReglas.id]: r } } : x));
+            setEditandoReglas(null);
+          }}
+        />
       )}
 
       <ModalConfirmar

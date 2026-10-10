@@ -2,18 +2,24 @@ import { getPool } from "./db.js";
 import { configPorSucursalId, enviarMensaje, ErrorEnvioMeta } from "./whatsapp.js";
 import { emitirEventoChat } from "./eventosChat.js";
 import { ZONA_ENVIOS, ahoraLocal, dentroDeVentana, sanearParametro, siguienteApertura, telefono10 } from "./campanasLogica.js";
+import { RESULTADOS_BDC } from "./resultadoBdcLogica.js";
 import {
   MAX_DESTINATARIOS,
   TEXTO_MOTIVO,
   VENTANA_MASIVOS,
   clasificarDestinatarios,
   contarOmitidos,
+  etiquetaCampana,
   indicesCuerpo,
   llenarCuerpo,
+  motivoPorReglas,
+  ordenCampana,
   plantillaNoUsable,
   vistaMensaje,
   type Componentes,
+  type DatosLead,
   type Destinatario,
+  type ReglasPlantilla,
 } from "./masivosLogica.js";
 
 /**
@@ -43,18 +49,60 @@ type Plantilla = {
   estado: string;
   componentes: Componentes | null;
   variables: { indice: number; columna: string }[];
+  reglas: ReglasPlantilla;
 };
 
 const SQL_PLANTILLA = `
   SELECT p.id, coalesce(p.nombre, p.nombre_tecnico) AS nombre, p.nombre_tecnico, p.idioma, p.estado, p.componentes,
          coalesce((SELECT json_agg(json_build_object('indice', v.indice, 'columna', v.columna_tecnica) ORDER BY v.indice)
-                     FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id), '[]'::json) AS variables
-    FROM whatsapp_plantillas p`;
+                     FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id), '[]'::json) AS variables,
+         coalesce(r.campanas, '{}') AS r_campanas, coalesce(r.estados::text[], '{}') AS r_estados,
+         coalesce(r.resultados, '{}') AS r_resultados, coalesce(r.etapas_vehiculo::text[], '{}') AS r_etapas_vehiculo
+    FROM whatsapp_plantillas p
+    LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id`;
 
-/** Las plantillas aprobadas del grupo, cada una con su vista y, si no sirve para un masivo, por qué. */
-export async function plantillasParaMasivo(sucursalId: string) {
-  const { rows } = await getPool().query(`${SQL_PLANTILLA} WHERE p.sucursal_id = $1 AND p.estado = 'aprobada' ORDER BY 2`, [sucursalId]);
-  return (rows as Plantilla[]).map((p) => {
+const aPlantilla = (r: Record<string, any>): Plantilla => ({
+  id: r.id,
+  nombre: r.nombre,
+  nombre_tecnico: r.nombre_tecnico,
+  idioma: r.idioma,
+  estado: r.estado,
+  componentes: r.componentes,
+  variables: r.variables,
+  reglas: { campanas: r.r_campanas, estados: r.r_estados, resultados: r.r_resultados, etapasVehiculo: r.r_etapas_vehiculo },
+});
+
+/** Lo del lead que se compara con las reglas de una plantilla. */
+const SQL_DATOS_LEAD = `o.campana AS campana_lead, o.etapa_id::text AS estado_id, o.resultado_bdc, veh.etapa_vehiculo_id::text AS etapa_vehiculo_id`;
+const aDatosLead = (r: Record<string, any>): DatosLead => ({
+  campana: r.campana_lead ?? null,
+  estadoId: r.estado_id ?? null,
+  resultado: r.resultado_bdc ?? null,
+  etapaVehiculoId: r.etapa_vehiculo_id ?? null,
+});
+
+/**
+ * Lo que necesita la ventana de envío para las filas elegidas: las plantillas aprobadas (con sus reglas, a cuántas de las
+ * filas elegidas les corresponde cada una y, si no sirve para un masivo, por qué), las campañas para el filtro rápido
+ * (con cuántas de las filas elegidas son de cada una) y los estados del lead para agrupar.
+ */
+export async function opcionesMasivo(sucursalId: string, ids: string[]) {
+  const pool = getPool();
+  const unicos = [...new Set(ids)].slice(0, MAX_DESTINATARIOS);
+  const [ps, leads, estados, etapas] = await Promise.all([
+    pool.query(`${SQL_PLANTILLA} WHERE p.sucursal_id = $1 AND p.estado = 'aprobada' ORDER BY 2`, [sucursalId]),
+    pool.query(
+      `SELECT ${SQL_DATOS_LEAD} FROM crm_oportunidades o JOIN crm_vehiculos veh ON veh.id = o.vehiculo_id
+        WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])`,
+      [sucursalId, unicos],
+    ),
+    pool.query(`SELECT id::text AS id, nombre, color FROM crm_etapas WHERE sucursal_id = $1 AND activa ORDER BY orden`, [sucursalId]),
+    pool.query(`SELECT id::text AS id, nombre FROM crm_ciclo_etapas WHERE sucursal_id = $1 ORDER BY orden`, [sucursalId]),
+  ]);
+  const etapasVehiculo = etapas.rows;
+  const datos = leads.rows.map(aDatosLead);
+
+  const plantillas = ps.rows.map(aPlantilla).map((p) => {
     const cuerpo = p.componentes?.body?.texto ?? "";
     // En la vista de la lista, cada dato se ve como [columna]: los valores reales salen de cada fila al revisar.
     const marcas = indicesCuerpo(cuerpo).map((i) => `[${p.variables.find((v) => v.indice === i)?.columna ?? `dato ${i}`}]`);
@@ -63,8 +111,85 @@ export async function plantillasParaMasivo(sucursalId: string) {
       nombre: p.nombre,
       no_usable: plantillaNoUsable(p, p.variables.map((v) => v.indice)),
       vista: p.componentes ? vistaMensaje(p.componentes, marcas) : null,
+      reglas: p.reglas,
+      coinciden: datos.filter((d) => !motivoPorReglas(p.reglas, d)).length,
     };
   });
+
+  const porCampana = new Map<string, number>();
+  for (const d of datos) if (d.campana) porCampana.set(d.campana, (porCampana.get(d.campana) ?? 0) + 1);
+  const codigos = new Set([...porCampana.keys(), ...plantillas.flatMap((p) => p.reglas.campanas)]);
+  const campanas = [...codigos]
+    .sort((a, b) => ordenCampana(a) - ordenCampana(b) || a.localeCompare(b))
+    .map((c) => ({ valor: c, etiqueta: etiquetaCampana(c), n: porCampana.get(c) ?? 0 }));
+
+  return { plantillas, campanas, estados: estados.rows, etapas_vehiculo: etapasVehiculo };
+}
+
+const capitalizar = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
+
+/** Para la pantalla Plantillas: las opciones de cada regla (campañas, estados, resultados, etapas del vehículo) y las reglas de cada plantilla. */
+export async function reglasDePlantillas(sucursalId: string) {
+  const pool = getPool();
+  const [campanas, estados, etapas, reglas] = await Promise.all([
+    pool.query(`SELECT DISTINCT campana FROM crm_oportunidades WHERE sucursal_id = $1 AND campana IS NOT NULL AND campana <> ''`, [sucursalId]),
+    pool.query(`SELECT id::text AS valor, nombre AS etiqueta, color FROM crm_etapas WHERE sucursal_id = $1 AND activa ORDER BY orden`, [sucursalId]),
+    pool.query(`SELECT id::text AS valor, nombre AS etiqueta FROM crm_ciclo_etapas WHERE sucursal_id = $1 ORDER BY orden`, [sucursalId]),
+    pool.query(
+      `SELECT plantilla_id, campanas, estados::text[] AS estados, resultados, etapas_vehiculo::text[] AS etapas_vehiculo
+         FROM crm_plantilla_reglas WHERE sucursal_id = $1`,
+      [sucursalId],
+    ),
+  ]);
+  return {
+    catalogo: {
+      campanas: campanas.rows
+        .map((r) => r.campana as string)
+        .sort((a, b) => ordenCampana(a) - ordenCampana(b) || a.localeCompare(b))
+        .map((c) => ({ valor: c, etiqueta: etiquetaCampana(c) })),
+      estados: estados.rows,
+      resultados: RESULTADOS_BDC.map((r) => ({ valor: r, etiqueta: capitalizar(r) })),
+      etapas_vehiculo: etapas.rows,
+    },
+    reglas: Object.fromEntries(
+      reglas.rows.map((r) => [
+        r.plantilla_id as string,
+        { campanas: r.campanas as string[], estados: r.estados as string[], resultados: r.resultados as string[], etapas_vehiculo: r.etapas_vehiculo as string[] },
+      ]),
+    ),
+  };
+}
+
+/** Guarda a quién se le puede mandar una plantilla. Solo acepta valores que existen en el grupo. */
+export async function guardarReglas(
+  sucursalId: string,
+  plantillaId: string,
+  r: { campanas: string[]; estados: string[]; resultados: string[]; etapas_vehiculo: string[] },
+): Promise<Resultado<null>> {
+  const pool = getPool();
+  const { rows: p } = await pool.query(`SELECT 1 FROM whatsapp_plantillas WHERE id = $1 AND sucursal_id = $2`, [plantillaId, sucursalId]);
+  if (!p[0]) return { ok: false, error: "No se encontró la plantilla." };
+  const unicos = (xs: string[]) => [...new Set(xs)];
+  const estados = unicos(r.estados);
+  const etapas = unicos(r.etapas_vehiculo);
+  const resultados = unicos(r.resultados);
+  if (resultados.some((x) => !(RESULTADOS_BDC as readonly string[]).includes(x))) return { ok: false, error: "Hay un Resultado BDC que no existe." };
+  if (estados.length > 0) {
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM crm_etapas WHERE sucursal_id = $1 AND id = ANY($2::uuid[])`, [sucursalId, estados]);
+    if (rows[0].n !== estados.length) return { ok: false, error: "Hay un estado del lead que no existe en este grupo." };
+  }
+  if (etapas.length > 0) {
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM crm_ciclo_etapas WHERE sucursal_id = $1 AND id = ANY($2::uuid[])`, [sucursalId, etapas]);
+    if (rows[0].n !== etapas.length) return { ok: false, error: "Hay una etapa del vehículo que no existe en este grupo." };
+  }
+  await pool.query(
+    `INSERT INTO crm_plantilla_reglas (plantilla_id, sucursal_id, campanas, estados, resultados, etapas_vehiculo, actualizado_en)
+     VALUES ($1, $2, $3, $4::uuid[], $5, $6::uuid[], now())
+     ON CONFLICT (plantilla_id) DO UPDATE SET campanas = excluded.campanas, estados = excluded.estados, resultados = excluded.resultados,
+            etapas_vehiculo = excluded.etapas_vehiculo, actualizado_en = now()`,
+    [plantillaId, sucursalId, unicos(r.campanas), estados, resultados, etapas],
+  );
+  return { ok: true, valor: null };
 }
 
 type Preparado = {
@@ -81,7 +206,7 @@ async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantil
   if (unicos.length > MAX_DESTINATARIOS) return { ok: false, error: `Un masivo puede llevar hasta ${MAX_DESTINATARIOS.toLocaleString("es-MX")} filas.` };
 
   const { rows: ps } = await cl.query(`${SQL_PLANTILLA} WHERE p.sucursal_id = $1 AND p.id = $2`, [sucursalId, plantillaId]);
-  const plantilla = ps[0] as Plantilla | undefined;
+  const plantilla = ps[0] ? aPlantilla(ps[0]) : undefined;
   if (!plantilla) return { ok: false, error: "No se encontró la plantilla." };
   const noUsable = plantillaNoUsable(plantilla, plantilla.variables.map((v) => v.indice));
   if (noUsable) return { ok: false, error: `Esta plantilla no se puede mandar: ${noUsable}` };
@@ -90,9 +215,10 @@ async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantil
 
   const { rows } = await cl.query(
     `SELECT o.id, coalesce(o.campana, 'MASIVO') AS campana, o.estado_contacto, c.nombre AS cliente, c.telefono, c.tiene_celular,
-            c.whatsapp_baja, to_jsonb(v) AS fila
+            c.whatsapp_baja, to_jsonb(v) AS fila, ${SQL_DATOS_LEAD}
        FROM crm_oportunidades o
        JOIN crm_contactos c ON c.id = o.contacto_id
+       JOIN crm_vehiculos veh ON veh.id = o.vehiculo_id
        JOIN crm_v_oportunidades v ON v.id = o.id
       WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])
       ORDER BY array_position($2::uuid[], o.id)`,
@@ -125,6 +251,7 @@ async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantil
   const destinatarios = clasificarDestinatarios(
     filas.map((f) => ({
       oportunidadId: f.id,
+      fueraDeReglas: motivoPorReglas(plantilla.reglas, aDatosLead(f.r)),
       telefono: f.r.telefono,
       tieneCelular: (f.r.tiene_celular as boolean | null) ?? null,
       baja: f.r.whatsapp_baja === true,

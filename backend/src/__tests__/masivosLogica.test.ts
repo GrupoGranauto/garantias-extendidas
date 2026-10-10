@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   clasificarDestinatarios,
   contarOmitidos,
+  etiquetaCampana,
   indicesCuerpo,
   llenarCuerpo,
+  motivoPorReglas,
+  ordenCampana,
   plantillaNoUsable,
+  SIN_REGLAS,
   vistaMensaje,
   type Candidato,
 } from "../lib/masivosLogica.js";
@@ -100,5 +104,41 @@ describe("vista del mensaje", () => {
       ["Ana"],
     );
     expect(v).toEqual({ encabezado: "Aviso", cuerpo: "Hola Ana", pie: "Responde BAJA", botones: ["Quiero informes"] });
+  });
+});
+
+describe("reglas de la plantilla", () => {
+  const lead = { campana: "12M_NURTURING", estadoId: "e1", resultado: "BUZON", etapaVehiculoId: "v1" };
+
+  it("sin reglas, la plantilla sirve para cualquiera (General)", () => {
+    expect(motivoPorReglas(SIN_REGLAS, lead)).toBeNull();
+  });
+
+  it("cada regla con valores limita; varias se cumplen a la vez", () => {
+    const r = { campanas: ["12M_NURTURING"], estados: ["e1", "e2"], resultados: ["BUZON"], etapasVehiculo: ["v1"] };
+    expect(motivoPorReglas(r, lead)).toBeNull();
+    expect(motivoPorReglas({ ...r, campanas: ["28M"] }, lead)).toBe("otra_campana");
+    expect(motivoPorReglas({ ...r, estados: ["e3"] }, lead)).toBe("otro_estado");
+    expect(motivoPorReglas({ ...r, resultados: ["INTERESADO"] }, lead)).toBe("otro_resultado");
+    expect(motivoPorReglas({ ...r, etapasVehiculo: ["v2"] }, lead)).toBe("otra_etapa_vehiculo");
+    expect(motivoPorReglas({ ...SIN_REGLAS, campanas: ["12M_NURTURING"] }, { ...lead, campana: null })).toBe("otra_campana");
+  });
+
+  it("quien no es para la plantilla se omite por eso antes que por cualquier otra cosa", () => {
+    const r = clasificarDestinatarios([base({ fueraDeReglas: "otra_campana", baja: true })], new Set());
+    expect(r[0].motivo).toBe("otra_campana");
+  });
+
+  it("nombra y ordena las campañas", () => {
+    expect(etiquetaCampana("48H")).toBe("48 horas");
+    expect(etiquetaCampana("12M_NURTURING")).toBe("12 meses");
+    expect(etiquetaCampana("ESPECIAL")).toBe("ESPECIAL");
+    expect(["28M", "ESPECIAL", "5M", "48H", "12M_NURTURING"].sort((a, b) => ordenCampana(a) - ordenCampana(b))).toEqual([
+      "48H",
+      "5M",
+      "12M_NURTURING",
+      "28M",
+      "ESPECIAL",
+    ]);
   });
 });

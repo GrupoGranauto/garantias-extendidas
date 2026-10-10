@@ -2,7 +2,16 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../middleware/auth.js";
 import { exigirUuid } from "../lib/permisos.js";
-import { crearMasivo, destinatariosMasivo, detenerMasivo, listarMasivos, plantillasParaMasivo, revisarMasivo } from "../lib/masivos.js";
+import {
+  crearMasivo,
+  destinatariosMasivo,
+  detenerMasivo,
+  guardarReglas,
+  listarMasivos,
+  opcionesMasivo,
+  reglasDePlantillas,
+  revisarMasivo,
+} from "../lib/masivos.js";
 import { MAX_DESTINATARIOS } from "../lib/masivosLogica.js";
 
 /** Masivos manuales de WhatsApp: solo el admin del grupo los ve y los manda. */
@@ -10,7 +19,7 @@ export const crmMasivosRouter = Router();
 
 crmMasivosRouter.use(requireAuth);
 crmMasivosRouter.use("/sucursales/:id/crm/masivos", requireAccesoSucursal, requireAdminSucursal);
-exigirUuid(crmMasivosRouter, "mid");
+exigirUuid(crmMasivosRouter, "mid", "pid");
 
 const envioSchema = z.object({
   ids: z
@@ -28,9 +37,52 @@ crmMasivosRouter.get("/sucursales/:id/crm/masivos", async (req, res, next) => {
   }
 });
 
-crmMasivosRouter.get("/sucursales/:id/crm/masivos/plantillas", async (req, res, next) => {
+const idsSchema = z.object({ ids: z.array(z.string().uuid()).max(MAX_DESTINATARIOS) });
+
+/** Para la ventana de envío: plantillas con sus reglas, campañas del filtro rápido y estados del lead. */
+crmMasivosRouter.post("/sucursales/:id/crm/masivos/opciones", async (req, res, next) => {
+  const parsed = idsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos." });
+    return;
+  }
   try {
-    res.json({ plantillas: await plantillasParaMasivo(req.params.id) });
+    res.json(await opcionesMasivo(req.params.id, parsed.data.ids));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Para la pantalla Plantillas: a quién se le puede mandar cada una. */
+crmMasivosRouter.get("/sucursales/:id/crm/masivos/reglas", async (req, res, next) => {
+  try {
+    res.json(await reglasDePlantillas(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const lista = (max: number) => z.array(z.string().trim().min(1).max(80)).max(max);
+const reglasSchema = z.object({
+  campanas: lista(30),
+  estados: z.array(z.string().uuid()).max(30),
+  resultados: lista(30),
+  etapas_vehiculo: z.array(z.string().uuid()).max(30),
+});
+
+crmMasivosRouter.put("/sucursales/:id/crm/masivos/plantillas/:pid/reglas", async (req, res, next) => {
+  const parsed = reglasSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Datos inválidos." });
+    return;
+  }
+  try {
+    const r = await guardarReglas(req.params.id, req.params.pid, parsed.data);
+    if (!r.ok) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

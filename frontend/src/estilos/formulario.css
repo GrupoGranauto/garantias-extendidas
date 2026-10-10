@@ -2313,7 +2313,22 @@ textarea.auto-input { resize: vertical; }
 .icono-arriba { transform: rotate(180deg); }
 
 /* ---------- Masivos de WhatsApp (los manda el admin) ---------- */
-.masivo-modal { max-width: 520px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.masivo-modal { max-width: 640px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.masivo-campanas { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+.masivo-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--gris-700); background: #fff; border: 1px solid var(--gris-300); border-radius: 999px; cursor: pointer; }
+.masivo-chip span { padding: 0 6px; font-size: 11px; color: var(--gris-600); background: var(--gris-100); border-radius: 999px; }
+.masivo-chip-activo { color: #fff; background: var(--marca); border-color: var(--marca); }
+.masivo-chip-activo span { color: var(--marca); background: #fff; }
+.masivo-vacio { margin-top: 12px !important; }
+.masivo-grupo { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.masivo-grupo-titulo { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--gris-500); }
+.masivo-plantilla { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 9px 12px; font: inherit; text-align: left; background: #fff; border: 1px solid var(--gris-200); border-radius: 8px; cursor: pointer; }
+.masivo-plantilla strong { font-size: 13.5px; color: var(--gris-900); }
+.masivo-plantilla span { font-size: 12px; color: var(--gris-500); }
+.masivo-plantilla:hover:not(:disabled) { border-color: var(--marca); }
+.masivo-plantilla:disabled { cursor: not-allowed; opacity: 0.6; }
+.masivo-plantilla-activa { border-color: var(--marca); box-shadow: 0 0 0 2px color-mix(in srgb, var(--marca) 25%, transparent); }
+.masivo-plantilla-reglas { color: var(--gris-600) !important; }
 .masivo-campo { margin-top: 16px; }
 .masivo-resumen { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
 .modal-tarjeta .masivo-total { font-size: 14px; color: var(--gris-900); }
@@ -2340,3 +2355,14 @@ textarea.auto-input { resize: vertical; }
 @media (max-width: 640px) {
   .masivo-banner { flex-direction: column; align-items: stretch; }
 }
+
+/* ---------- A quién se manda cada plantilla ---------- */
+.plantilla-reglas { max-width: 280px; font-size: 12.5px; color: var(--gris-600); }
+.reglas-modal { max-width: 600px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.reglas-grupo { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 0; padding: 0; border: none; }
+.reglas-grupo legend { margin-bottom: 6px; padding: 0; font-size: 12px; font-weight: 700; color: var(--gris-700); }
+.reglas-grupo small { font-size: 12px; color: var(--gris-500); }
+.reglas-opciones { display: flex; flex-wrap: wrap; gap: 6px; }
+.reglas-opcion { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12.5px; color: var(--gris-700); background: #fff; border: 1px solid var(--gris-300); border-radius: 999px; cursor: pointer; }
+.reglas-opcion input { margin: 0; accent-color: var(--marca); }
+.reglas-opcion-activa { border-color: var(--marca); background: color-mix(in srgb, var(--marca) 8%, #fff); }
