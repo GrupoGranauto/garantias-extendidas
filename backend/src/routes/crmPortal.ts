@@ -7,6 +7,7 @@ import { listarEtapas, editarOportunidad } from "../lib/crm.js";
 import { DESTINOS_PREGUNTA, TIPOS_RESPUESTA, automatizacionSchema, validarRespuesta } from "../lib/motorCrm.js";
 import { emitirBroadcast } from "../lib/realtime.js";
 import { ejecutivoRestringido, exigirUuid } from "../lib/permisos.js";
+import { leerFuente } from "../lib/campanasDefinidas.js";
 
 /**
  * Rutas del CRM para el portal de la sucursal: configuración de automatizaciones por etapa
@@ -45,6 +46,8 @@ crmPortalRouter.get("/sucursales/:id/crm/automatizaciones", requireAdminSucursal
       plantillas: plantillas ?? [],
       destinos: campos,
       tipos_respuesta: TIPOS_RESPUESTA,
+      // De dónde salen las campañas: la base maestra (lo normal) o las reglas de «Definir campañas» de la web.
+      campanas_fuente: await leerFuente(getPool(), req.params.id),
     });
   } catch (err) {
     next(err);

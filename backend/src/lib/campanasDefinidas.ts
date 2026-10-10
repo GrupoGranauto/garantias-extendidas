@@ -185,13 +185,16 @@ const aMinutos = (hora: string) => {
   return h * 60 + m;
 };
 
-/** Una vez al día, a la hora que eligió el usuario (hora de Hermosillo), calcula las campañas de cada sucursal. */
+/**
+ * Una vez al día, a la hora que eligió el usuario (hora de Hermosillo), calcula las campañas de cada sucursal. Solo
+ * donde la web es la fuente de campañas: si vienen de la base maestra, este cálculo no se usa.
+ */
 export async function calcularSiToca(): Promise<number> {
   const ahora = ahoraLocal();
   const { rows } = await getPool().query(
     `SELECT d.sucursal_id, coalesce(c.campanas_calculo_hora::text, '06:00') AS hora, c.campanas_calculo_ultimo::text AS ultimo
        FROM (SELECT DISTINCT sucursal_id FROM crm_campanas_def WHERE activa) d
-       LEFT JOIN crm_config c ON c.sucursal_id = d.sucursal_id`,
+       JOIN crm_config c ON c.sucursal_id = d.sucursal_id AND c.campanas_fuente = 'web'`,
   );
   let corridas = 0;
   for (const r of rows) {

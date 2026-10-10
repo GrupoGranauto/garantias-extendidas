@@ -8,7 +8,6 @@ import CampanasEnvio from "./CampanasEnvio";
 import EtapasVehiculo from "./EtapasVehiculo";
 import DefinirCampanas from "./DefinirCampanas";
 import Seguimientos from "./Seguimientos";
-import ReglasContrato from "./ReglasContrato";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -29,6 +28,8 @@ type Respuesta = {
   plantillas: { id: string; nombre: string | null; nombre_tecnico: string; estado: string }[];
   destinos: { nombre_tecnico: string; nombre_visible: string; tipo: string }[];
   tipos_respuesta: string[];
+  /** De dónde salen las campañas: «bigquery» (base maestra) o «web» (reglas de «Definir campañas»). */
+  campanas_fuente: "bigquery" | "web";
 };
 
 const PESTANAS: { tipo: TipoAuto; titulo: string; ayuda: string; vacio: string }[] = [
@@ -95,7 +96,7 @@ export default function Automatizaciones() {
   const [sla, setSla] = useState<Record<string, string>>({});
   // Dos apartados: las automatizaciones por etapa y los envíos de WhatsApp por campaña.
   type Apartado = "etapas" | "campanas" | "vehiculo" | "definir" | "seguimientos" | "contrato";
-  const [apartado, setApartado] = useState<Apartado>(() => {
+  const [apartadoElegido, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
       return guardado === "campanas" || guardado === "vehiculo" || guardado === "definir" || guardado === "seguimientos" || guardado === "contrato"
@@ -105,6 +106,11 @@ export default function Automatizaciones() {
       return "etapas";
     }
   });
+  // «Definir campañas» solo existe cuando la web define las campañas; si vienen de la base maestra, no se muestra.
+  const definirVisible = datos?.campanas_fuente === "web";
+  // «Contrato» (reglas de tareas por estado del contrato) ya no se usa en el portal.
+  const apartado: Apartado =
+    (apartadoElegido === "definir" && !definirVisible) || apartadoElegido === "contrato" ? "etapas" : apartadoElegido;
   const elegirApartado = (a: Apartado) => {
     setApartado(a);
     try {
@@ -121,17 +127,16 @@ export default function Automatizaciones() {
       <button type="button" role="tab" aria-selected={apartado === "vehiculo"} className={`vista-opcion${apartado === "vehiculo" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("vehiculo")}>
         Etapas del vehículo
       </button>
-      <button type="button" role="tab" aria-selected={apartado === "definir"} className={`vista-opcion${apartado === "definir" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("definir")}>
-        Definir campañas
-      </button>
+      {definirVisible && (
+        <button type="button" role="tab" aria-selected={apartado === "definir"} className={`vista-opcion${apartado === "definir" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("definir")}>
+          Definir campañas
+        </button>
+      )}
       <button type="button" role="tab" aria-selected={apartado === "campanas"} className={`vista-opcion${apartado === "campanas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("campanas")}>
         Campañas de WhatsApp
       </button>
       <button type="button" role="tab" aria-selected={apartado === "seguimientos"} className={`vista-opcion${apartado === "seguimientos" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("seguimientos")}>
         Seguimientos
-      </button>
-      <button type="button" role="tab" aria-selected={apartado === "contrato"} className={`vista-opcion${apartado === "contrato" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("contrato")}>
-        Contrato
       </button>
     </div>
   );
@@ -209,14 +214,6 @@ export default function Automatizaciones() {
     }
   }
 
-  if (apartado === "contrato") {
-    return (
-      <div className="pagina-formulario">
-        {apartados}
-        <ReglasContrato />
-      </div>
-    );
-  }
 
   if (apartado === "seguimientos") {
     return (
