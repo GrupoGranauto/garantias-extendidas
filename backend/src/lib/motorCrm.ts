@@ -211,7 +211,9 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
       // Una sola lectura de las oportunidades del lote y de las automatizaciones de sus etapas destino.
       const ids = [...new Set(eventos.map((e) => e.oportunidad_id as string))];
       const { rows: ops } = await cliente.query(
-        `SELECT id, cliente, vin, campana, agencia, ejecutivo, etapa_id, estado_fuente FROM crm_v_oportunidades WHERE id = ANY($1::uuid[])`,
+        `SELECT v.id, v.cliente, v.vin, v.campana, v.agencia, v.ejecutivo, v.etapa_id, v.estado_fuente,
+                (v.no_contactar OR o.estado_contacto = 'baja') AS baja
+           FROM crm_v_oportunidades v JOIN crm_oportunidades o ON o.id = v.id WHERE v.id = ANY($1::uuid[])`,
         [ids],
       );
       const opPorId = new Map(ops.map((o) => [o.id as string, o]));
@@ -230,7 +232,7 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
         for (const evento of eventos) {
           const destino = (evento.datos as { etapa_destino?: string }).etapa_destino;
           const op = opPorId.get(evento.oportunidad_id as string);
-          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA") {
+          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA" && !op.baja) {
             for (const a of acciones.filter((x) => x.etapa_id === destino)) candidatos.push({ a, evento, op });
           }
         }
@@ -264,8 +266,9 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
         try {
           const destino = (evento.datos as { etapa_destino?: string }).etapa_destino;
           const op = opPorId.get(evento.oportunidad_id as string);
-          // Solo cuenta si la oportunidad sigue activa y aún está en esa etapa (no se crean tareas viejas).
-          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA") {
+          // Solo cuenta si la oportunidad sigue activa y aún está en esa etapa (no se crean tareas viejas), y nunca para
+          // quien pidió no ser contactado.
+          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA" && !op.baja) {
             for (const a of acciones.filter((x) => x.etapa_id === destino)) {
               const { rowCount } = await cliente.query(
                 `INSERT INTO crm_ejecuciones (automatizacion_id, oportunidad_id, evento_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
@@ -309,7 +312,8 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
  * Reglas por tiempo ("después de N horas en la etapa"). Revisa las oportunidades activas que ya
  * cumplieron el plazo y aún no tienen la tarea de ese ciclo (el ciclo es el instante en que
  * entraron a la etapa: si salen y vuelven, la regla puede correr otra vez). Con
- * `solo_sin_contacto`, no dispara si ya hubo una llamada o WhatsApp desde que entró.
+ * `solo_sin_contacto`, no dispara si ya hubo una llamada o WhatsApp desde que entró. Nunca dispara para
+ * quien pidió no ser contactado.
  */
 export async function procesarReglasPorTiempo(maximo = 200): Promise<number> {
   const pool = getPool();
@@ -318,7 +322,8 @@ export async function procesarReglasPorTiempo(maximo = 200): Promise<number> {
             v.cliente, v.vin, v.campana, v.agencia, v.ejecutivo
        FROM crm_automatizaciones a
        JOIN crm_oportunidades o ON o.etapa_id = a.etapa_id AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'
-       JOIN crm_v_oportunidades v ON v.id = o.id
+                               AND o.estado_contacto <> 'baja'
+       JOIN crm_v_oportunidades v ON v.id = o.id AND NOT v.no_contactar
       WHERE a.activa AND a.evento = 'tiempo_en_etapa' AND a.tipo IN ('tarea', 'pregunta')
         AND o.entro_a_etapa_en + make_interval(hours => (a.config->>'horas')::int) <= now()
         AND (coalesce((a.config->>'aplicar_a_existentes')::boolean, false) OR o.entro_a_etapa_en >= a.activa_desde)

@@ -145,20 +145,31 @@ crmPortalRouter.get("/sucursales/:id/crm/tareas", async (req, res, next) => {
 
     const { rows } = await getPool().query(
       `SELECT t.id, t.tipo, t.titulo, t.descripcion, t.config, t.asignado_a, t.vence_en, t.estado, t.respuesta, t.creado_en,
-              t.completada_en, t.oportunidad_id, v.cliente, v.telefono_principal, v.etapa_embudo
+              t.completada_en, t.cierre_automatico, t.oportunidad_id, v.cliente, v.telefono_principal, v.etapa_embudo,
+              v.vin, v.campana, v.agencia
          FROM crm_tareas t JOIN crm_v_oportunidades v ON v.id = t.oportunidad_id
         WHERE t.sucursal_id = $1 AND t.estado = $2${extra}
-        ORDER BY t.vence_en NULLS LAST, t.creado_en
+        ORDER BY ${estado === "pendiente" ? "t.vence_en NULLS LAST, t.creado_en" : "t.completada_en DESC NULLS LAST"}
         LIMIT 300`,
       params,
     );
+
+    // Quien ve las tareas de todos puede filtrar por ejecutivo; el ejecutivo solo ve las suyas.
+    const ejecutivos = restringido
+      ? []
+      : (
+          await getPool().query(
+            `SELECT DISTINCT ejecutivo FROM crm_oportunidades WHERE sucursal_id = $1 AND ejecutivo IS NOT NULL AND ejecutivo <> '' ORDER BY 1`,
+            [req.params.id],
+          )
+        ).rows.map((r) => r.ejecutivo as string);
 
     const { rows: conteos } = await getPool().query(
       `SELECT count(*)::int AS n FROM crm_tareas t WHERE t.sucursal_id = $1 AND t.estado = 'pendiente'${filtroEjecutivo ? " AND t.asignado_a = $2" : ""}`,
       filtroEjecutivo ? [req.params.id, filtroEjecutivo] : [req.params.id],
     );
 
-    res.json({ tareas: rows, pendientes: conteos[0]?.n ?? 0 });
+    res.json({ tareas: rows, pendientes: conteos[0]?.n ?? 0, ejecutivos });
   } catch (err) {
     next(err);
   }

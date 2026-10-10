@@ -1980,6 +1980,10 @@ textarea.auto-input { resize: vertical; }
 .tarea-vence-tarde { font-weight: 700; color: #b42318; }
 .tarea-input { width: 100%; box-sizing: border-box; min-height: 34px; padding: 6px 10px; font: inherit; font-size: 13px; border: 1px solid var(--gris-300); border-radius: 8px; background: #fff; }
 .tarea-acciones { display: flex; gap: 8px; }
+.tarea-abrir { cursor: pointer; border-radius: 6px; }
+.tarea-abrir:hover .tarea-titulo { color: var(--marca); text-decoration: underline; }
+.tarea-abrir:focus-visible { outline: 2px solid color-mix(in srgb, var(--marca) 40%, transparent); outline-offset: 4px; }
+.tareas-filtro { width: auto; min-width: 220px; }
 
 @media (max-width: 820px) {
   .auto { grid-template-columns: 1fr; }

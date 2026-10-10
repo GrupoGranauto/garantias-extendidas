@@ -3,6 +3,7 @@ import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 import { supabase } from "../lib/supabase";
+import FichaOportunidad from "./FichaOportunidad";
 import { usePortal } from "./PortalProvider";
 
 type Tarea = {
@@ -16,9 +17,14 @@ type Tarea = {
   estado: "pendiente" | "hecha" | "cancelada";
   respuesta: string | null;
   completada_en: string | null;
+  cierre_automatico: "contacto" | "lead_cerrado" | "baja" | null;
+  oportunidad_id: string;
   cliente: string | null;
   telefono_principal: string | null;
   etapa_embudo: string | null;
+  vin: string | null;
+  campana: string | null;
+  agencia: string | null;
 };
 
 type Filtro = "pendiente" | "hecha";
@@ -30,7 +36,10 @@ function vencimiento(valor: string | null): { texto: string; vencida: boolean } 
   return { texto: d.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }), vencida: d.getTime() < Date.now() };
 }
 
-/** Bandeja de tareas y preguntas del ejecutivo (las crean las automatizaciones por etapa). */
+/**
+ * Bandeja de tareas y preguntas del ejecutivo (las crean las automatizaciones por etapa). Tocar una tarea abre la ficha
+ * del cliente. Se cierran solas al registrar una llamada o un WhatsApp, al vender o perder el lead y con la baja.
+ */
 export default function Tareas() {
   const { portal } = usePortal();
   const sucursalId = portal!.id;
@@ -38,20 +47,25 @@ export default function Tareas() {
   const [filtro, setFiltro] = useState<Filtro>("pendiente");
   const [tareas, setTareas] = useState<Tarea[] | null>(null);
   const [pendientes, setPendientes] = useState(0);
+  const [ejecutivos, setEjecutivos] = useState<string[]>([]);
+  const [ejecutivo, setEjecutivo] = useState("");
+  const [fichaId, setFichaId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [respuestas, setRespuestas] = useState<Record<string, string>>({});
   const [enviando, setEnviando] = useState<string | null>(null);
   const [errorTarea, setErrorTarea] = useState<{ id: string; texto: string } | null>(null);
 
   const cargar = useCallback(() => {
-    apiFetch<{ tareas: Tarea[]; pendientes: number }>(`/api/admin/sucursales/${sucursalId}/crm/tareas?estado=${filtro}`)
+    const porEjecutivo = ejecutivo ? `&ejecutivo=${encodeURIComponent(ejecutivo)}` : "";
+    apiFetch<{ tareas: Tarea[]; pendientes: number; ejecutivos: string[] }>(`/api/admin/sucursales/${sucursalId}/crm/tareas?estado=${filtro}${porEjecutivo}`)
       .then((d) => {
         setTareas(d.tareas);
         setPendientes(d.pendientes);
+        setEjecutivos(d.ejecutivos ?? []);
         setError(null);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudieron cargar las tareas."));
-  }, [sucursalId, filtro]);
+  }, [sucursalId, filtro, ejecutivo]);
 
   useEffect(cargar, [cargar]);
 
@@ -137,6 +151,16 @@ export default function Tareas() {
             Hechas
           </button>
         </div>
+        {ejecutivos.length > 0 && (
+          <select className="tarea-input tareas-filtro" aria-label="Ejecutivo" value={ejecutivo} onChange={(e) => setEjecutivo(e.target.value)}>
+            <option value="">Todos los ejecutivos</option>
+            {ejecutivos.map((e) => (
+              <option key={e} value={e}>
+                {e}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {error && <Alerta tipo="error">{error}</Alerta>}
@@ -144,7 +168,7 @@ export default function Tareas() {
 
       {tareas && tareas.length === 0 && (
         <div className="marcador">
-          <strong>{filtro === "pendiente" ? "No tienes tareas pendientes" : "Todavía no hay tareas hechas"}</strong>
+          <strong>{filtro === "pendiente" ? "No hay tareas pendientes" : "Todavía no hay tareas hechas"}</strong>
           <span>Las tareas aparecen cuando un lead entra a un estado con automatizaciones activas.</span>
         </div>
       )}
@@ -155,7 +179,19 @@ export default function Tareas() {
           const esPregunta = t.tipo === "pregunta";
           return (
             <article key={t.id} className="tarea">
-              <div className="tarea-cuerpo">
+              <div
+                className="tarea-cuerpo tarea-abrir"
+                role="button"
+                tabIndex={0}
+                title="Abrir la ficha del cliente"
+                onClick={() => setFichaId(t.oportunidad_id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setFichaId(t.oportunidad_id);
+                  }
+                }}
+              >
                 <span className="tarea-tipo">{esPregunta ? "Pregunta" : t.config.llamada === true ? "Llamada" : t.config.contrato === true ? "Contrato" : "Tarea"}</span>
                 <strong className="tarea-titulo">{t.titulo}</strong>
                 {t.descripcion && <p className="tarea-desc">{t.descripcion}</p>}
@@ -165,12 +201,14 @@ export default function Tareas() {
                   {t.etapa_embudo ? ` · ${t.etapa_embudo}` : ""}
                   {t.asignado_a ? ` · ${t.asignado_a}` : ""}
                 </p>
+                {(t.vin || t.campana || t.agencia) && <p className="tarea-meta">{[t.vin, t.campana, t.agencia].filter(Boolean).join(" · ")}</p>}
                 {t.config.llamada === true && t.telefono_principal && filtro === "pendiente" && (
-                  <a className="boton-secundario-claro tarea-llamar" href={`tel:${t.telefono_principal.replace(/[^\d+]/g, "")}`}>
+                  <a className="boton-secundario-claro tarea-llamar" href={`tel:${t.telefono_principal.replace(/[^\d+]/g, "")}`} onClick={(e) => e.stopPropagation()}>
                     Llamar
                   </a>
                 )}
                 {filtro === "hecha" && t.respuesta && <p className="tarea-respuesta">Respuesta: {t.respuesta}</p>}
+                {filtro === "hecha" && t.cierre_automatico === "contacto" && <p className="tarea-respuesta">Se cerró sola al registrar una llamada o un WhatsApp.</p>}
                 {errorTarea?.id === t.id && <Alerta tipo="error">{errorTarea.texto}</Alerta>}
               </div>
 
@@ -194,6 +232,8 @@ export default function Tareas() {
           );
         })}
       </div>
+
+      {fichaId && <FichaOportunidad sucursalId={sucursalId} oportunidadId={fichaId} onCerrar={() => setFichaId(null)} onCambio={cargar} />}
     </div>
   );
 }
