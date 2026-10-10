@@ -56,13 +56,6 @@ type Activacion = {
 };
 type Borrador = Omit<Campana, "pasos"> & { pasos: Paso[] };
 
-type VistaPrevia = {
-  oportunidades: number;
-  bajas: number;
-  sin_telefono: number;
-  alcanzables: number;
-  pasos: { orden: number; plantilla_id: string | null; programacion: { fecha: string; hora: string; oportunidades: number; vigente: boolean }[] }[];
-};
 type Registro = {
   por_estado: { estado: string; n: number }[];
   por_motivo: { motivo: string; estado: string; n: number }[];
@@ -133,14 +126,13 @@ const clave = () => `p${++contador}`;
 
 const aBorrador = (c: Campana): Borrador => ({ ...c, pasos: c.pasos.map((p) => ({ ...p, clave: p.id ?? clave() })) });
 
-const fechaCorta = (f: string) => new Date(`${f}T00:00:00`).toLocaleDateString("es-MX", { weekday: "short", day: "2-digit", month: "short" });
 const cuando = (v: string | null) =>
   v ? new Date(v).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 
 /**
  * Envíos automáticos de WhatsApp por campaña: qué plantilla sale, cuántos días después de que empieza
- * la campaña, a qué hora y bajo qué condiciones; el horario permitido, el tope por día y el descanso
- * entre campañas. Una campaña nace apagada y en simulación: primero se revisa qué haría.
+ * la campaña y a qué hora; el horario permitido, el tope por día y el descanso entre campañas.
+ * Lo condicional va en Seguimientos.
  */
 export default function CampanasEnvio() {
   const { portal } = usePortal();
@@ -154,7 +146,6 @@ export default function CampanasEnvio() {
   const [sucias, setSucias] = useState<Set<string>>(new Set());
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
-  const [previa, setPrevia] = useState<VistaPrevia | null>(null);
   const [registro, setRegistro] = useState<Registro | null>(null);
   const [activacion, setActivacion] = useState<Activacion | null>(null);
 
@@ -179,7 +170,6 @@ export default function CampanasEnvio() {
       .catch(() => setRegistro(null));
   }, [base, sel]);
   useEffect(() => {
-    setPrevia(null);
     setRegistro(null);
     cargarRegistro();
   }, [cargarRegistro]);
@@ -198,7 +188,6 @@ export default function CampanasEnvio() {
     setBorradores((b) => ({ ...b, [sel]: fn(b[sel]) }));
     setSucias((s) => new Set(s).add(sel));
     setAviso(null);
-    setPrevia(null);
   }
   const cambiarPaso = (k: string, cambios: Partial<Paso>) => cambiar((b) => ({ ...b, pasos: b.pasos.map((p) => (p.clave === k ? { ...p, ...cambios } : p)) }));
 
@@ -221,15 +210,16 @@ export default function CampanasEnvio() {
           rampa_activa: c.rampa_activa,
           rampa_inicial: c.rampa_inicial,
           rampa_incremento: c.rampa_incremento,
-          pasos: c.pasos.map((p) => ({
+          pasos: c.pasos.map((p, i) => ({
             ...(p.id ? { id: p.id } : {}),
             plantilla_id: p.plantilla_id,
             dias_despues: p.dias_despues,
             hora: p.hora || null,
             vigencia_dias: p.vigencia_dias,
-            solo_sin_respuesta: p.solo_sin_respuesta,
-            solo_sin_contacto: p.solo_sin_contacto,
-            etapas: p.etapas,
+            // Reglas fijas: del segundo mensaje en adelante solo a quien no ha respondido; lo demás va en Seguimientos.
+            solo_sin_respuesta: i > 0,
+            solo_sin_contacto: false,
+            etapas: [],
           })),
         }),
       });
@@ -242,30 +232,16 @@ export default function CampanasEnvio() {
     }
   }
 
-  async function verPrevia() {
-    if (!sel) return;
-    setAviso(null);
-    try {
-      setPrevia(await apiFetch<VistaPrevia>(`${base}/campanas/${sel}/vista-previa`));
-    } catch (err) {
-      setAviso({ tipo: "error", texto: err instanceof Error ? err.message : "No se pudo calcular la vista previa." });
-    }
-  }
-
   if (error) return <Alerta tipo="error">{error}</Alerta>;
   if (!datos) return <Cargador />;
 
   const sucia = sel ? sucias.has(sel) : false;
-  const nombrePlantilla = (id: string | null) => {
-    const p = datos.plantillas.find((x) => x.id === id);
-    return p ? (p.nombre ?? p.nombre_tecnico) : "Sin plantilla";
-  };
 
   return (
     <>
       <p className="pestana-descripcion">
-        Define qué mensaje de WhatsApp recibe cada campaña, en qué día y hora, y bajo qué condiciones. Quien pide la baja deja de
-        recibir mensajes para siempre.
+        Define qué mensaje de WhatsApp recibe cada campaña y en qué día y hora. Lo condicional (resultado, agencia, etapa…) va en
+        Seguimientos. Quien pide la baja deja de recibir mensajes para siempre.
       </p>
       {!datos.motor_encendido && (
         <Alerta tipo="info">
@@ -447,40 +423,12 @@ export default function CampanasEnvio() {
                       <input type="time" className="auto-input" value={p.hora ?? ""} onChange={(e) => cambiarPaso(p.clave, { hora: e.target.value || null })} />
                       <small>Vacío = en cuanto abra el horario.</small>
                     </label>
-                    <label className="auto-campo">
-                      <span>Sigue vigente (días)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        className="auto-input"
-                        value={p.vigencia_dias}
-                        onChange={(e) => cambiarPaso(p.clave, { vigencia_dias: Math.max(1, Math.floor(Number(e.target.value) || 0)) })}
-                      />
-                      <small>Si no pudo salir en ese plazo, se descarta en vez de mandarse tarde.</small>
-                    </label>
-                  </div>
-
-                  <div className="camp-condiciones">
-                    <Interruptor etiqueta="Solo si el cliente no ha respondido" activo={p.solo_sin_respuesta} onChange={(v) => cambiarPaso(p.clave, { solo_sin_respuesta: v })} />
-                    <Interruptor etiqueta="Solo si nadie lo ha contactado ya" activo={p.solo_sin_contacto} onChange={(v) => cambiarPaso(p.clave, { solo_sin_contacto: v })} />
-                  </div>
-                  <div className="camp-etapas">
-                    <span>Solo si la oportunidad está en:</span>
-                    {datos.etapas.map((e) => (
-                      <button
-                        key={e}
-                        type="button"
-                        aria-pressed={p.etapas.includes(e)}
-                        className={`camp-etapa${p.etapas.includes(e) ? " camp-etapa-activa" : ""}`}
-                        onClick={() => cambiarPaso(p.clave, { etapas: p.etapas.includes(e) ? p.etapas.filter((x) => x !== e) : [...p.etapas, e] })}
-                      >
-                        {e}
-                      </button>
-                    ))}
-                    <small>{p.etapas.length === 0 ? "Cualquier estado abierto." : ""}</small>
                   </div>
                 </article>
               ))}
+              {c.pasos.length > 1 && (
+                <p className="rep-ayuda">Del segundo mensaje en adelante solo se envía a quien no ha respondido. Si un mensaje no pudo salir en 2 días, se descarta.</p>
+              )}
               {c.pasos.length < 6 && (
                 <button
                   type="button"
@@ -506,48 +454,6 @@ export default function CampanasEnvio() {
                 >
                   Agregar mensaje
                 </button>
-              )}
-            </div>
-
-            {/* ---- Vista previa ---- */}
-            <div className="camp-bloque">
-              <h3>Vista previa</h3>
-              <p className="rep-ayuda">Lo que pasaría con la configuración guardada. No manda ni cambia nada.</p>
-              {(sucia || c.pasos.length === 0) && (
-                <p className="rep-ayuda">
-                  {c.pasos.length === 0 ? "Agrega al menos un mensaje a la campaña para ver la vista previa." : "Guarda la campaña primero para que la vista previa refleje tus cambios."}
-                </p>
-              )}
-              <button type="button" className="boton-secundario-claro" onClick={verPrevia} disabled={sucia || c.pasos.length === 0}>
-                Ver qué pasaría
-              </button>
-              {previa && (
-                <div className="camp-previa">
-                  <ul className="camp-cifras">
-                    <li><strong>{previa.oportunidades}</strong> oportunidades activas</li>
-                    <li><strong>{previa.alcanzables}</strong> con celular y sin baja</li>
-                    <li><strong>{previa.sin_telefono}</strong> sin celular válido</li>
-                    <li><strong>{previa.bajas}</strong> en baja</li>
-                  </ul>
-                  {previa.pasos.map((p) => (
-                    <div key={p.orden} className="camp-previa-paso">
-                      <strong>
-                        Mensaje {p.orden} · {nombrePlantilla(p.plantilla_id)}
-                      </strong>
-                      {p.programacion.length === 0 ? (
-                        <span className="rep-ayuda">Sin oportunidades.</span>
-                      ) : (
-                        <ul>
-                          {p.programacion.map((x) => (
-                            <li key={`${x.fecha}${x.hora}`} className={x.vigente ? undefined : "camp-vencido"}>
-                              {fechaCorta(x.fecha)} a las {x.hora}: {x.oportunidades} oportunidades{x.vigente ? "" : " (ya pasó su vigencia: se descartarían)"}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
-                </div>
               )}
             </div>
 
