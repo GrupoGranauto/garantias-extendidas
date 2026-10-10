@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getPool } from "./db.js";
+import { despacharMasivos } from "./masivos.js";
 import { emitirBroadcast } from "./realtime.js";
 import { validarFechaCoherente } from "./entidades.js";
 import { ejecutarReglasContrato, iniciarCoberturasVencidas, planificarReglasContrato } from "./reglasContrato.js";
@@ -398,7 +399,9 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
           await etapa("ejecutar reglas del contrato", ejecutarReglasContrato, 0);
           await etapa("cobertura automática", iniciarCoberturasVencidas, 0);
         }
-        // No hay envíos automáticos de WhatsApp: los mensajes masivos los manda el admin del grupo a mano.
+        // No hay envíos automáticos de WhatsApp: el admin del grupo arma los masivos a mano y aquí solo se despachan, en
+        // cada vuelta, para que salgan en cuanto se confirman.
+        await etapa("despachar masivos", despacharMasivos, 0);
         if (r.tareas + extra > 0) console.log(`[motor-crm] ${r.tareas + extra} tarea(s) creada(s)`);
       })
       .catch(() => console.error("[motor-crm] fallo la revisión de la bandeja"))

@@ -606,7 +606,7 @@ crmProcesoRouter.get("/sucursales/:id/crm/resumen", async (req, res, next) => {
    ============================================================ */
 
 const masivoSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(MAX_MASIVO),
+  ids: z.array(z.string().uuid()).min(1).max(MAX_MASIVO, `Esta acción se aplica a lo más a ${MAX_MASIVO} filas a la vez.`),
   accion: z.discriminatedUnion("accion", [
     z.object({ accion: z.literal("etapa"), etapa: z.string().trim().min(1).max(80), motivo: z.string().trim().max(80).nullable().optional() }),
     z.object({ accion: z.literal("ejecutivo"), ejecutivo: z.string().trim().min(1).max(80) }),

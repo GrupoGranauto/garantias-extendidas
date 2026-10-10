@@ -10,6 +10,8 @@ import Embudo from "./Embudo";
 import EditorTarjeta from "./EditorTarjeta";
 import FichaOportunidad from "./FichaOportunidad";
 import AccionesMasivas from "./AccionesMasivas";
+import EnviarMasivo from "./EnviarMasivo";
+import MasivosEnCurso from "./MasivosEnCurso";
 import MenuVistas from "./MenuVistas";
 import PanelFiltros, { type ValorKpi, type Visibilidad } from "./PanelFiltros";
 import {
@@ -442,6 +444,20 @@ export default function BaseDatos() {
   const [fichaId, setFichaId] = useState<string | null>(null);
   // Filas elegidas con la casilla (acciones masivas).
   const [seleccion, setSeleccion] = useState<string[]>([]);
+  // Masivo de WhatsApp (solo el admin): la ventana para mandarlo y el aviso de cómo va.
+  const [enviarMasivo, setEnviarMasivo] = useState(false);
+  const [refrescoMasivos, setRefrescoMasivos] = useState(0);
+
+  /** Elige TODAS las filas que cumplen el filtro y la búsqueda actuales, no solo las de la página. */
+  async function elegirTodasDelFiltro() {
+    try {
+      const r = await apiFetch<{ ids: string[]; total: number }>(`/api/admin/sucursales/${sucursalId}/entidad/registros/ids?${parametrosFiltro().toString()}`);
+      setSeleccion(r.ids);
+      if (r.total > r.ids.length) mostrarAviso("error", `Se eligieron las primeras ${r.ids.length.toLocaleString("es-MX")} de ${r.total.toLocaleString("es-MX")}.`);
+    } catch (err) {
+      mostrarAviso("error", err instanceof Error ? err.message : "No se pudieron elegir las filas del filtro.");
+    }
+  }
   function elegirVista(v: "tabla" | "embudo") {
     setVista(v);
     try {
@@ -1050,10 +1066,15 @@ export default function BaseDatos() {
         />
       )}
 
+      {esAdmin && datos?.configurado && datos.embudo && <MasivosEnCurso sucursalId={sucursalId} refresco={refrescoMasivos} />}
+
       {datos?.configurado && enTabla && datos.embudo && seleccion.length > 0 && (
         <AccionesMasivas
           sucursalId={sucursalId}
           ids={seleccion}
+          total={datos.total}
+          onElegirTodas={elegirTodasDelFiltro}
+          onEnviarPlantilla={esAdmin ? () => setEnviarMasivo(true) : undefined}
           etapas={campoOpciones("etapa_embudo")}
           motivos={campoOpciones("motivo_perdida")}
           ejecutivos={campoOpciones("ejecutivo")}
@@ -1170,6 +1191,20 @@ export default function BaseDatos() {
           onCambio={() => {
             cargarRef.current();
             setRefrescos((n) => n + 1);
+          }}
+        />
+      )}
+
+      {enviarMasivo && (
+        <EnviarMasivo
+          sucursalId={sucursalId}
+          ids={seleccion}
+          onCerrar={() => setEnviarMasivo(false)}
+          onEnviado={(m) => {
+            setEnviarMasivo(false);
+            setSeleccion([]);
+            mostrarAviso("ok", m);
+            setRefrescoMasivos((n) => n + 1);
           }}
         />
       )}

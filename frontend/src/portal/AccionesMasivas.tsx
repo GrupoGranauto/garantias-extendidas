@@ -13,6 +13,11 @@ type Props = {
   onListo: (mensaje: string) => void;
   onError: (mensaje: string) => void;
   onLimpiar: () => void;
+  /** Filas que cumplen el filtro actual: si son más que las elegidas, se ofrece elegirlas todas. */
+  total?: number;
+  onElegirTodas?: () => void;
+  /** Solo el admin: manda una plantilla de WhatsApp a las filas elegidas. */
+  onEnviarPlantilla?: () => void;
 };
 
 type Panel = "etapa" | "ejecutivo" | "tarea" | null;
@@ -20,8 +25,21 @@ type Panel = "etapa" | "ejecutivo" | "tarea" | null;
 /**
  * Barra de acciones sobre las filas elegidas: cambiar de etapa, reasignar ejecutivo o crear una tarea
  * para cada una. Se aplica todo o nada; las filas que el usuario no puede tocar se cuentan como omitidas.
+ * El admin además puede mandarles una plantilla de WhatsApp (masivo).
  */
-export default function AccionesMasivas({ sucursalId, ids, etapas, motivos, ejecutivos, onListo, onError, onLimpiar }: Props) {
+export default function AccionesMasivas({
+  sucursalId,
+  ids,
+  etapas,
+  motivos,
+  ejecutivos,
+  onListo,
+  onError,
+  onLimpiar,
+  total,
+  onElegirTodas,
+  onEnviarPlantilla,
+}: Props) {
   const [panel, setPanel] = useState<Panel>(null);
   const [etapa, setEtapa] = useState(etapas[0]?.valor ?? "");
   const [motivo, setMotivo] = useState("");
@@ -53,8 +71,18 @@ export default function AccionesMasivas({ sucursalId, ids, etapas, motivos, ejec
     <div className="masivo" role="region" aria-label="Acciones sobre la selección">
       <div className="masivo-fila">
         <strong>
-          {ids.length} {ids.length === 1 ? "seleccionada" : "seleccionadas"}
+          {ids.length.toLocaleString("es-MX")} {ids.length === 1 ? "seleccionada" : "seleccionadas"}
         </strong>
+        {onElegirTodas && total !== undefined && total > ids.length && (
+          <button type="button" className="boton-tenue" onClick={onElegirTodas}>
+            Elegir las {total.toLocaleString("es-MX")} del filtro
+          </button>
+        )}
+        {onEnviarPlantilla && (
+          <button type="button" className="boton-guardar" onClick={onEnviarPlantilla}>
+            Enviar plantilla
+          </button>
+        )}
         <button type="button" className="boton-secundario-claro" onClick={() => setPanel(panel === "etapa" ? null : "etapa")}>
           Cambiar estado del lead
         </button>

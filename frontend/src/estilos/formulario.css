@@ -2311,3 +2311,32 @@ textarea.auto-input { resize: vertical; }
 .camp-check-mal { color: #b91c1c; }
 .camp-check-aviso { color: #b45309; }
 .icono-arriba { transform: rotate(180deg); }
+
+/* ---------- Masivos de WhatsApp (los manda el admin) ---------- */
+.masivo-modal { max-width: 520px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.masivo-campo { margin-top: 16px; }
+.masivo-resumen { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.modal-tarjeta .masivo-total { font-size: 14px; color: var(--gris-900); }
+.masivo-omitidos { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--gris-600); }
+.masivo-ejemplo-titulo { font-size: 12px; font-weight: 600; color: var(--gris-600); }
+.masivo-chat { display: flex; padding: 12px; background: #efeae2; border-radius: 10px; }
+.masivo-chat .burbuja-whatsapp { max-width: 100%; }
+.masivo-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; padding: 10px 14px; background: #fff; border: 1px solid var(--gris-200); border-left: 3px solid #25d366; border-radius: 10px; }
+.masivo-banner-texto { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; color: var(--gris-600); }
+.masivo-banner-texto strong { color: var(--gris-900); }
+.masivo-barra { display: block; width: min(360px, 100%); height: 6px; overflow: hidden; background: var(--gris-100); border-radius: 999px; }
+.masivo-barra span { display: block; height: 100%; background: #25d366; transition: width 0.3s ease; }
+.masivos-fila { cursor: pointer; }
+.masivos-fila:hover td { background: var(--gris-50, #f9fafb); }
+.masivos-fila small { color: var(--gris-500); }
+.masivos-detalle td { background: var(--gris-50, #f9fafb); }
+.masivos-destinatarios { display: flex; flex-direction: column; gap: 6px; max-height: 360px; margin: 0; padding: 0; overflow-y: auto; list-style: none; font-size: 12.5px; }
+.masivos-destinatarios li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.masivos-dato { color: var(--gris-500); }
+.masivos-estado { min-width: 72px; padding: 1px 8px; font-size: 11px; font-weight: 700; text-align: center; color: var(--gris-600); background: var(--gris-100); border-radius: 999px; }
+.masivos-estado-enviado, .masivos-estado-entregado, .masivos-estado-leido { color: #067647; background: #ecfdf3; }
+.masivos-estado-fallido { color: #b42318; background: #fef3f2; }
+.masivos-estado-pendiente { color: #175cd3; background: #eff8ff; }
+@media (max-width: 640px) {
+  .masivo-banner { flex-direction: column; align-items: stretch; }
+}

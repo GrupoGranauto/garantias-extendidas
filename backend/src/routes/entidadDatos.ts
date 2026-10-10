@@ -247,6 +247,50 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros", async (req, res, nex
   }
 });
 
+/** Tope de filas que se pueden elegir de golpe con «Elegir todas las del filtro». */
+const MAX_IDS_FILTRO = 5000;
+
+/**
+ * Los ids de TODAS las filas que cumplen los filtros y la búsqueda de la tabla, para elegirlas de golpe (no solo las de la
+ * página). Misma restricción por ejecutivo que el listado.
+ */
+entidadDatosRouter.get("/sucursales/:id/entidad/registros/ids", async (req, res, next) => {
+  try {
+    const contexto = await cargarContexto(req.params.id);
+    if (contexto === "sin_sucursal") {
+      res.status(404).json({ error: "Sucursal no encontrada." });
+      return;
+    }
+    if (contexto === "sin_entidad") {
+      res.json({ ids: [], total: 0 });
+      return;
+    }
+    const { sucursal, definicion, campos } = contexto;
+    const filtros = leerFiltros(req.query.filtros);
+    if ("error" in filtros) {
+      res.status(400).json({ error: filtros.error });
+      return;
+    }
+    const opciones: OpcionesListado = {
+      sucursalId: sucursal.id,
+      restriccion: restriccionDe(req.perfil, definicion.columna_ejecutivo),
+      filtros: filtrosCompletos(contexto, filtros, leerBotones(req.query.botones)),
+      busquedas: leerBusquedas(req.query.q),
+      zona: sucursal.zona_horaria,
+      // Solo se piden los ids; los filtros y la búsqueda se validan contra todas las columnas.
+      camposFiltro: campos,
+    };
+    const r = await listarRegistros(sucursal.subdominio, definicion.nombre_tecnico, [], MAX_IDS_FILTRO, 0, opciones);
+    if ("error" in r) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    res.json({ ids: r.filas.map((f) => f.id as string), total: r.total });
+  } catch (err) {
+    next(err);
+  }
+});
+
 const TARJETAS_POR_ETAPA = 30;
 
 /**

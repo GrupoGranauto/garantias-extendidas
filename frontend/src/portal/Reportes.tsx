@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
+import HistorialMasivos from "./HistorialMasivos";
 import { usePortal } from "./PortalProvider";
 
 type EtapaActual = { id: string; nombre: string; color: string; tipo: string; tiempo_max_horas: number | null; total: number; horas_promedio: number; fuera_sla: number };
@@ -50,7 +51,10 @@ function Barras({ filas, color }: { filas: { clave: string; etiqueta: string; va
   );
 }
 
-/** Reporte del embudo: dónde está la cartera, qué se movió en el periodo y cómo trabaja cada ejecutivo. */
+/**
+ * Reporte del embudo: dónde está la cartera, qué se movió en el periodo y cómo trabaja cada ejecutivo. El admin ve además
+ * sus masivos de WhatsApp.
+ */
 export default function Reportes() {
   const { portal } = usePortal();
   const sucursalId = portal!.id;
@@ -60,6 +64,28 @@ export default function Reportes() {
   const [datos, setDatos] = useState<Reporte | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
+  const [esAdmin, setEsAdmin] = useState(false);
+  const [vista, setVista] = useState<"embudo" | "masivos">(() => {
+    try {
+      return sessionStorage.getItem("portal.reportes.vista") === "masivos" ? "masivos" : "embudo";
+    } catch {
+      return "embudo";
+    }
+  });
+  const elegirVista = (v: "embudo" | "masivos") => {
+    setVista(v);
+    try {
+      sessionStorage.setItem("portal.reportes.vista", v);
+    } catch {
+      // sin persistencia; no afecta el funcionamiento
+    }
+  };
+  useEffect(() => {
+    apiFetch<{ rol: string }>("/api/perfil")
+      .then((p) => setEsAdmin(p.rol === "admin"))
+      .catch(() => setEsAdmin(false));
+  }, []);
+  const verMasivos = esAdmin && vista === "masivos";
 
   useEffect(() => {
     if (desde > hasta) {
@@ -83,6 +109,17 @@ export default function Reportes() {
   return (
     <div className="pagina-formulario">
       <div className="pf-barra">
+        {esAdmin && (
+          <div className="vista-selector" role="tablist" aria-label="Reporte">
+            <button type="button" role="tab" aria-selected={!verMasivos} className={`vista-opcion${!verMasivos ? " vista-opcion-activa" : ""}`} onClick={() => elegirVista("embudo")}>
+              Embudo
+            </button>
+            <button type="button" role="tab" aria-selected={verMasivos} className={`vista-opcion${verMasivos ? " vista-opcion-activa" : ""}`} onClick={() => elegirVista("masivos")}>
+              Masivos
+            </button>
+          </div>
+        )}
+        {!verMasivos && (
         <div className="rep-rango">
           <label>
             Desde
@@ -93,12 +130,20 @@ export default function Reportes() {
             <input type="date" className="auto-input" value={hasta} min={desde} max={dia(new Date())} onChange={(e) => setHasta(e.target.value)} />
           </label>
         </div>
+        )}
       </div>
 
-      {error && <Alerta tipo="error">{error}</Alerta>}
-      {!datos && !error && <Cargador />}
+      {verMasivos && (
+        <section className="rep-tarjeta">
+          <h3>Masivos de WhatsApp</h3>
+          <HistorialMasivos sucursalId={sucursalId} />
+        </section>
+      )}
 
-      {datos && (
+      {!verMasivos && error && <Alerta tipo="error">{error}</Alerta>}
+      {!verMasivos && !datos && !error && <Cargador />}
+
+      {!verMasivos && datos && (
         <div className={`rep${cargando ? " tabla-cargando" : ""}`}>
           <div className="rep-kpis">
             <div className="rep-kpi">

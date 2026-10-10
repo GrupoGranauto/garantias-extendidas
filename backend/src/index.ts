@@ -17,6 +17,7 @@ import { crmPortalRouter } from "./routes/crmPortal.js";
 import { crmProcesoRouter } from "./routes/crmProceso.js";
 import { crmCicloRouter } from "./routes/crmCiclo.js";
 import { crmCampanasDefRouter } from "./routes/crmCampanasDef.js";
+import { crmMasivosRouter } from "./routes/crmMasivos.js";
 import { crmReglasContratoRouter } from "./routes/crmReglasContrato.js";
 import { iniciarMotorCrm } from "./lib/motorCrm.js";
 import { iniciarSyncProgramadoCrm } from "./lib/sincronizacionCrm.js";
@@ -87,6 +88,7 @@ app.use("/api/admin", crmPortalRouter);
 app.use("/api/admin", crmProcesoRouter);
 app.use("/api/admin", crmCicloRouter);
 app.use("/api/admin", crmCampanasDefRouter);
+app.use("/api/admin", crmMasivosRouter);
 app.use("/api/admin", crmReglasContratoRouter);
 app.use("/api/admin", cloudtalkRouter);
 // Routers solo-admin (adminRouter gatea con requireAdmin todo lo que le llegue).
