@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import Flotante from "../componentes/Flotante";
-import { IconoBuscar, IconoChevron, IconoFiltro, IconoVistaEmbudo, IconoVistaTabla, IconoXMarca } from "../componentes/Iconos";
+import { IconoBuscar, IconoChevron, IconoFiltro, IconoMensaje, IconoVistaEmbudo, IconoVistaTabla, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
 import { SECCIONES, type CampoPanel, type ItemPanel } from "../lib/panel";
 import { supabase } from "../lib/supabase";
@@ -444,9 +444,35 @@ export default function BaseDatos() {
   const [fichaId, setFichaId] = useState<string | null>(null);
   // Filas elegidas con la casilla (acciones masivas).
   const [seleccion, setSeleccion] = useState<string[]>([]);
-  // Masivo de WhatsApp (solo el admin): la ventana para mandarlo y el aviso de cómo va.
-  const [enviarMasivo, setEnviarMasivo] = useState(false);
+  // Masivo de WhatsApp (solo el admin): a quién va (las filas elegidas o, si no hay, todas las del filtro) y el aviso de
+  // cómo va.
+  const [masivo, setMasivo] = useState<{ ids: string[]; descripcion: string } | null>(null);
   const [refrescoMasivos, setRefrescoMasivos] = useState(0);
+
+  /** Abre el masivo: para las filas elegidas, o para todas las que cumplen el filtro si no se eligió ninguna. */
+  async function abrirMasivo() {
+    // Lo elegido con las casillas solo cuenta en la tabla; en el embudo va a todo el filtro.
+    if (seleccion.length > 0 && vista === "tabla") {
+      setMasivo({ ids: seleccion, descripcion: `${seleccion.length.toLocaleString("es-MX")} ${seleccion.length === 1 ? "fila elegida" : "filas elegidas"}.` });
+      return;
+    }
+    try {
+      const r = await apiFetch<{ ids: string[]; total: number }>(`/api/admin/sucursales/${sucursalId}/entidad/registros/ids?${parametrosFiltro().toString()}`);
+      if (r.ids.length === 0) {
+        mostrarAviso("error", "No hay filas con el filtro actual.");
+        return;
+      }
+      setMasivo({
+        ids: r.ids,
+        descripcion:
+          r.total > r.ids.length
+            ? `Las primeras ${r.ids.length.toLocaleString("es-MX")} de ${r.total.toLocaleString("es-MX")} filas del filtro actual.`
+            : `Las ${r.ids.length.toLocaleString("es-MX")} filas del filtro actual. Para mandarlo solo a algunas, márcalas primero en la tabla.`,
+      });
+    } catch (err) {
+      mostrarAviso("error", err instanceof Error ? err.message : "No se pudieron leer las filas del filtro.");
+    }
+  }
 
   /** Elige TODAS las filas que cumplen el filtro y la búsqueda actuales, no solo las de la página. */
   async function elegirTodasDelFiltro() {
@@ -865,6 +891,21 @@ export default function BaseDatos() {
       </button>
     ) : null;
 
+  // Masivo de WhatsApp, a la vista en la barra: a las filas elegidas o, si no hay, a todas las del filtro.
+  const botonMasivo =
+    esAdmin && datos?.configurado && datos.embudo ? (
+      <button
+        type="button"
+        className="boton-guardar pf-accion"
+        disabled={datos.total === 0}
+        title="Manda una plantilla de WhatsApp a las filas elegidas o, si no eliges ninguna, a todas las del filtro."
+        onClick={abrirMasivo}
+      >
+        <IconoMensaje className="icono-inline" />
+        {enTabla && seleccion.length > 0 ? `Enviar WhatsApp a ${seleccion.length.toLocaleString("es-MX")}` : "Enviar WhatsApp"}
+      </button>
+    ) : null;
+
   const menuVistas = datos?.configurado && datos.embudo ? (
     <MenuVistas sucursalId={sucursalId} capturar={capturarVista} aplicar={aplicarVista} onError={(m) => mostrarAviso("error", m)} />
   ) : null;
@@ -916,6 +957,7 @@ export default function BaseDatos() {
               {puedeLimpiar && <span className="pf-conteo-filtrado">con filtros</span>}
             </span>
             <div className="pf-acciones">
+              {botonMasivo}
               {selectorVista}
               {botonTarjeta}
               {menuVistas}
@@ -1074,7 +1116,7 @@ export default function BaseDatos() {
           ids={seleccion}
           total={datos.total}
           onElegirTodas={elegirTodasDelFiltro}
-          onEnviarPlantilla={esAdmin ? () => setEnviarMasivo(true) : undefined}
+          onEnviarPlantilla={esAdmin ? abrirMasivo : undefined}
           etapas={campoOpciones("etapa_embudo")}
           motivos={campoOpciones("motivo_perdida")}
           ejecutivos={campoOpciones("ejecutivo")}
@@ -1195,13 +1237,14 @@ export default function BaseDatos() {
         />
       )}
 
-      {enviarMasivo && (
+      {masivo && (
         <EnviarMasivo
           sucursalId={sucursalId}
-          ids={seleccion}
-          onCerrar={() => setEnviarMasivo(false)}
+          ids={masivo.ids}
+          descripcion={masivo.descripcion}
+          onCerrar={() => setMasivo(null)}
           onEnviado={(m) => {
-            setEnviarMasivo(false);
+            setMasivo(null);
             setSeleccion([]);
             mostrarAviso("ok", m);
             setRefrescoMasivos((n) => n + 1);

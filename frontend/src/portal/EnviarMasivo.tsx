@@ -16,6 +16,8 @@ type Revision = {
 type Props = {
   sucursalId: string;
   ids: string[];
+  /** A quién va, dicho para el admin (las filas elegidas o las del filtro). */
+  descripcion?: string;
   onCerrar: () => void;
   /** El masivo quedó en cola: recarga y muestra el mensaje. */
   onEnviado: (mensaje: string) => void;
@@ -49,7 +51,7 @@ export function BurbujaMensaje({ vista }: { vista: Vista }) {
  * Masivo manual: el admin elige una plantilla aprobada para las filas que marcó. Antes de mandar ve a cuántos les llega,
  * a quién se omite y por qué, y el mensaje con los datos de una persona real. Al confirmar, la web lo manda en segundo plano.
  */
-export default function EnviarMasivo({ sucursalId, ids, onCerrar, onEnviado }: Props) {
+export default function EnviarMasivo({ sucursalId, ids, descripcion, onCerrar, onEnviado }: Props) {
   const base = `/api/admin/sucursales/${sucursalId}/crm/masivos`;
   const [plantillas, setPlantillas] = useState<Plantilla[] | null>(null);
   const [plantillaId, setPlantillaId] = useState("");
@@ -105,9 +107,10 @@ export default function EnviarMasivo({ sucursalId, ids, onCerrar, onEnviado }: P
   return (
     <div className="modal-fondo" onClick={enviando ? undefined : onCerrar}>
       <div className="modal-tarjeta masivo-modal" role="dialog" aria-modal="true" aria-labelledby="masivo-titulo" onClick={(e) => e.stopPropagation()}>
-        <h2 id="masivo-titulo">Enviar plantilla por WhatsApp</h2>
+        <h2 id="masivo-titulo">Enviar WhatsApp</h2>
         <p>
-          {ids.length.toLocaleString("es-MX")} {ids.length === 1 ? "fila elegida" : "filas elegidas"}. Solo se pueden mandar plantillas aprobadas por Meta.
+          {descripcion ?? `${ids.length.toLocaleString("es-MX")} ${ids.length === 1 ? "fila elegida" : "filas elegidas"}.`} Solo se pueden mandar plantillas
+          aprobadas por Meta.
         </p>
 
         {!plantillas && !error && <Cargador />}

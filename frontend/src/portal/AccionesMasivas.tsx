@@ -80,7 +80,7 @@ export default function AccionesMasivas({
         )}
         {onEnviarPlantilla && (
           <button type="button" className="boton-guardar" onClick={onEnviarPlantilla}>
-            Enviar plantilla
+            Enviar WhatsApp
           </button>
         )}
         <button type="button" className="boton-secundario-claro" onClick={() => setPanel(panel === "etapa" ? null : "etapa")}>
