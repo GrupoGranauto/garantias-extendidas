@@ -111,7 +111,16 @@ export async function descargarMedia(
 type EnvioTexto = { tipo: "texto"; texto: string };
 type EnvioImagen = { tipo: "imagen"; url: string; caption?: string };
 type EnvioDocumento = { tipo: "documento"; url: string; nombreArchivo: string; caption?: string };
-type EnvioPlantilla = { tipo: "plantilla"; nombreTecnico: string; idioma: string; parametrosBody: string[] };
+/** Archivo del encabezado de una plantilla (imagen, video o documento), por URL pública que Meta descarga al enviar. */
+export type EncabezadoArchivo = { tipo: "imagen" | "video" | "documento"; url: string; nombreArchivo?: string | null };
+type EnvioPlantilla = {
+  tipo: "plantilla";
+  nombreTecnico: string;
+  idioma: string;
+  parametrosBody: string[];
+  /** Solo si la plantilla lleva imagen, video o documento en el encabezado. */
+  encabezado?: EncabezadoArchivo | null;
+};
 export type EnvioMensaje = EnvioTexto | EnvioImagen | EnvioDocumento | EnvioPlantilla;
 
 /**
@@ -139,15 +148,26 @@ export async function enviarMensaje(
     cuerpo.document = { link: envio.url, filename: envio.nombreArchivo, caption: envio.caption };
   } else {
     cuerpo.type = "template";
-    // Sin variables, Meta exige que "components" ni siquiera venga en el
+    const componentes: Record<string, unknown>[] = [];
+    // Un encabezado con archivo se manda en cada envío: Meta lo descarga de la URL.
+    if (envio.encabezado) {
+      const e = envio.encabezado;
+      const parametro =
+        e.tipo === "imagen"
+          ? { type: "image", image: { link: e.url } }
+          : e.tipo === "video"
+            ? { type: "video", video: { link: e.url } }
+            : { type: "document", document: { link: e.url, ...(e.nombreArchivo ? { filename: e.nombreArchivo } : {}) } };
+      componentes.push({ type: "header", parameters: [parametro] });
+    }
+    if (envio.parametrosBody.length) {
+      componentes.push({ type: "body", parameters: envio.parametrosBody.map((texto) => ({ type: "text", text: texto })) });
+    }
+    // Sin variables ni archivo, Meta exige que "components" ni siquiera venga en el
     // cuerpo — un arreglo vacío lo rechaza con (#131008) Required parameter
     // is missing.
-    cuerpo.template = envio.parametrosBody.length
-      ? {
-          name: envio.nombreTecnico,
-          language: { code: envio.idioma },
-          components: [{ type: "body", parameters: envio.parametrosBody.map((texto) => ({ type: "text", text: texto })) }],
-        }
+    cuerpo.template = componentes.length
+      ? { name: envio.nombreTecnico, language: { code: envio.idioma }, components: componentes }
       : { name: envio.nombreTecnico, language: { code: envio.idioma } };
   }
 

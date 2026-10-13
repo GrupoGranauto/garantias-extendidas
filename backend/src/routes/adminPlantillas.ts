@@ -162,6 +162,9 @@ async function obtenerConfigWhatsapp(sucursalId: string) {
   return data;
 }
 
+/** Tamaño máximo que acepta Meta para el archivo del encabezado (en MB). */
+const MB_MAXIMO: Record<"imagen" | "video" | "documento", number> = { imagen: 5, video: 16, documento: 20 };
+
 const MIME_PERMITIDO: Record<"imagen" | "video" | "documento", string[]> = {
   imagen: ["image/jpeg", "image/png"],
   video: ["video/mp4"],
@@ -202,6 +205,12 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/subir-media", async (req,
 
     const base64Puro = parsed.data.contenido_base64.replace(/^data:[^;]+;base64,/, "");
     const archivo = Buffer.from(base64Puro, "base64");
+    const maximo = MB_MAXIMO[parsed.data.tipo];
+    if (archivo.length > maximo * 1024 * 1024) {
+      const nombre = parsed.data.tipo === "imagen" ? "La imagen" : parsed.data.tipo === "video" ? "El video" : "El documento";
+      res.status(400).json({ error: `${nombre} pesa más de ${maximo} MB, que es lo máximo que acepta WhatsApp. Usa uno más ligero.` });
+      return;
+    }
 
     const handle = await subirMediaPlantilla(config.app_id, config.access_token, archivo, parsed.data.tipo_mime);
 

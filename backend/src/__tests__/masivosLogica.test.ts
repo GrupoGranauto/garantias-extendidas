@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clasificarDestinatarios,
   contarOmitidos,
+  encabezadoArchivo,
   etiquetaCampana,
   indicesCuerpo,
   llenarCuerpo,
@@ -78,7 +79,7 @@ describe("plantillaNoUsable", () => {
 
   it("rechaza las no aprobadas, con archivo o datos en el encabezado y con datos sin ligar", () => {
     expect(plantillaNoUsable({ estado: "pendiente", componentes: cuerpo }, [1, 2])).toMatch(/aprobada/);
-    expect(plantillaNoUsable({ estado: "aprobada", componentes: { ...cuerpo, header: { tipo: "imagen" } } }, [1, 2])).toMatch(/imagen/);
+    expect(plantillaNoUsable({ estado: "aprobada", componentes: { ...cuerpo, header: { tipo: "imagen" } } }, [1, 2])).toMatch(/archivo/);
     expect(plantillaNoUsable({ estado: "aprobada", componentes: { ...cuerpo, header: { tipo: "texto", texto: "Hola {{1}}" } } }, [1, 2])).toMatch(
       /encabezado/,
     );
@@ -103,7 +104,7 @@ describe("vista del mensaje", () => {
       },
       ["Ana"],
     );
-    expect(v).toEqual({ encabezado: "Aviso", cuerpo: "Hola Ana", pie: "Responde BAJA", botones: ["Quiero informes"] });
+    expect(v).toEqual({ encabezado: "Aviso", archivo: null, cuerpo: "Hola Ana", pie: "Responde BAJA", botones: ["Quiero informes"] });
   });
 });
 
@@ -140,5 +141,27 @@ describe("reglas de la plantilla", () => {
       "28M",
       "ESPECIAL",
     ]);
+  });
+});
+
+describe("encabezado con archivo", () => {
+  const cuerpo = { body: { texto: "Hola {{1}}" } };
+
+  it("acepta una imagen guardada en la plataforma y la manda en cada envío", () => {
+    const c = { ...cuerpo, header: { tipo: "imagen", media_url: "https://x/img.png" } };
+    expect(plantillaNoUsable({ estado: "aprobada", componentes: c }, [1])).toBeNull();
+    expect(encabezadoArchivo(c)).toEqual({ tipo: "imagen", url: "https://x/img.png", nombreArchivo: null });
+    expect(vistaMensaje(c, ["Ana"]).archivo).toEqual({ tipo: "imagen", url: "https://x/img.png", nombre: null });
+  });
+
+  it("un documento conserva su nombre de archivo", () => {
+    const c = { ...cuerpo, header: { tipo: "documento", media_url: "https://x/lista.pdf", nombre_archivo: "Lista.pdf" } };
+    expect(encabezadoArchivo(c)).toEqual({ tipo: "documento", url: "https://x/lista.pdf", nombreArchivo: "Lista.pdf" });
+  });
+
+  it("sin archivo guardado no se puede mandar; con encabezado de texto no hay archivo", () => {
+    expect(plantillaNoUsable({ estado: "aprobada", componentes: { ...cuerpo, header: { tipo: "video" } } }, [1])).toMatch(/archivo/);
+    expect(encabezadoArchivo({ ...cuerpo, header: { tipo: "texto", texto: "Aviso" } })).toBeNull();
+    expect(encabezadoArchivo(cuerpo)).toBeNull();
   });
 });

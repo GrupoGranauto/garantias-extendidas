@@ -125,7 +125,7 @@ export function contarOmitidos(destinatarios: Destinatario[]): Partial<Record<Mo
 }
 
 export type Componentes = {
-  header?: { tipo: string; texto?: string | null } | null;
+  header?: { tipo: string; texto?: string | null; media_url?: string | null; nombre_archivo?: string | null } | null;
   body?: { texto: string } | null;
   footer?: string | { texto?: string } | null;
   botones?: { tipo: string; texto: string }[] | null;
@@ -144,11 +144,26 @@ export function plantillaNoUsable(p: { estado: string; componentes: Componentes 
   if (p.estado !== "aprobada") return "Todavía no está aprobada por Meta.";
   const c = p.componentes;
   if (!c?.body?.texto) return "No tiene texto.";
-  if (c.header && c.header.tipo !== "texto") return "Lleva una imagen o un archivo en el encabezado; los masivos solo mandan texto.";
+  if (c.header && c.header.tipo !== "texto" && !esUrlPublica(c.header.media_url)) {
+    return "Su encabezado lleva un archivo que no está guardado en la plataforma; vuelve a subirlo en «Plantillas».";
+  }
   if (c.header?.texto && /\{\{\d+\}\}/.test(c.header.texto)) return "Su encabezado lleva datos; los masivos solo los llenan en el cuerpo.";
   const faltan = indicesCuerpo(c.body.texto).filter((i) => !indicesLigados.includes(i));
   if (faltan.length > 0) return `Falta ligar ${faltan.map((i) => `{{${i}}}`).join(", ")} a una columna en «Plantillas».`;
   return null;
+}
+
+/** Meta descarga el archivo del encabezado de esta URL: tiene que ser pública (no una vista previa local del navegador). */
+export function esUrlPublica(url: string | null | undefined): url is string {
+  return typeof url === "string" && /^https:\/\//i.test(url);
+}
+
+/** El archivo del encabezado (imagen, video o documento) que se manda con cada mensaje, o null si no lleva. */
+export function encabezadoArchivo(c: Componentes | null): { tipo: "imagen" | "video" | "documento"; url: string; nombreArchivo: string | null } | null {
+  const h = c?.header;
+  if (!h || !h.media_url || !esUrlPublica(h.media_url)) return null;
+  if (h.tipo !== "imagen" && h.tipo !== "video" && h.tipo !== "documento") return null;
+  return { tipo: h.tipo, url: h.media_url, nombreArchivo: h.nombre_archivo ?? null };
 }
 
 /** El texto del cuerpo con los valores puestos. */
@@ -160,8 +175,10 @@ export function llenarCuerpo(cuerpo: string, indices: number[], parametros: stri
 export function vistaMensaje(c: Componentes, parametros: string[]) {
   const cuerpo = c.body?.texto ?? "";
   const pie = typeof c.footer === "string" ? c.footer : (c.footer?.texto ?? null);
+  const archivo = encabezadoArchivo(c);
   return {
     encabezado: c.header?.tipo === "texto" ? (c.header.texto ?? null) : null,
+    archivo: archivo ? { tipo: archivo.tipo, url: archivo.url, nombre: archivo.nombreArchivo } : null,
     cuerpo: llenarCuerpo(cuerpo, indicesCuerpo(cuerpo), parametros),
     pie: pie || null,
     botones: (c.botones ?? []).map((b) => b.texto),

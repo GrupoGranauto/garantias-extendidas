@@ -9,6 +9,7 @@ import {
   VENTANA_MASIVOS,
   clasificarDestinatarios,
   contarOmitidos,
+  encabezadoArchivo,
   etiquetaCampana,
   indicesCuerpo,
   llenarCuerpo,
@@ -439,19 +440,22 @@ async function registrarEnChat(
   waMessageId: string,
   texto: string,
   plantilla: string,
+  archivo: ReturnType<typeof encabezadoArchivo>,
 ) {
   const pool = getPool();
+  // Con archivo en el encabezado, el chat lo muestra como imagen (o video, o documento) con el texto debajo.
+  const tipo = archivo ? archivo.tipo : "texto";
   try {
     await pool.query(
-      `INSERT INTO whatsapp_mensajes (conversacion_id, sucursal_id, wa_message_id, direccion, tipo, texto, estado)
-       VALUES ($1, $2, $3, 'saliente', 'texto', $4, 'enviado')`,
-      [conversacionId, e.sucursal_id, waMessageId, texto],
+      `INSERT INTO whatsapp_mensajes (conversacion_id, sucursal_id, wa_message_id, direccion, tipo, texto, media_url, media_nombre_archivo, estado)
+       VALUES ($1, $2, $3, 'saliente', $4, $5, $6, $7, 'enviado')`,
+      [conversacionId, e.sucursal_id, waMessageId, tipo, texto, archivo?.url ?? null, archivo?.nombreArchivo ?? null],
     );
     await pool.query(
-      `UPDATE whatsapp_conversaciones SET ultimo_mensaje_en = now(), ultimo_mensaje_tipo = 'texto', ultimo_mensaje_texto = $2,
+      `UPDATE whatsapp_conversaciones SET ultimo_mensaje_en = now(), ultimo_mensaje_tipo = $4, ultimo_mensaje_texto = $2,
               ultimo_mensaje_direccion = 'saliente', ultimo_mensaje_wa_message_id = $3, ultimo_mensaje_estado = 'enviado'
         WHERE id = $1`,
-      [conversacionId, texto, waMessageId],
+      [conversacionId, texto, waMessageId, tipo],
     );
     await pool.query(
       `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle) VALUES ($1, $2, 'envio_masivo', $3, $4)`,
@@ -539,6 +543,7 @@ async function procesarUno(): Promise<boolean> {
 
     const parametros = (Array.isArray(e.parametros) ? e.parametros : []) as string[];
     const cuerpo = e.componentes.body.texto as string;
+    const archivo = encabezadoArchivo(e.componentes);
     const texto = llenarCuerpo(cuerpo, indicesCuerpo(cuerpo), parametros);
     const pool = getPool();
 
@@ -563,7 +568,13 @@ async function procesarUno(): Promise<boolean> {
         );
         conversacionId = nueva.rows[0].id as string;
       }
-      const r = await enviarMensaje(config, waId, { tipo: "plantilla", nombreTecnico: e.nombre_tecnico, idioma: e.idioma, parametrosBody: parametros });
+      const r = await enviarMensaje(config, waId, {
+        tipo: "plantilla",
+        nombreTecnico: e.nombre_tecnico,
+        idioma: e.idioma,
+        parametrosBody: parametros,
+        encabezado: archivo,
+      });
       enviado = { waMessageId: r.id, conversacionId };
     } catch (err) {
       const mensaje = (err instanceof Error ? err.message : String(err)).slice(0, 300);
@@ -596,7 +607,7 @@ async function procesarUno(): Promise<boolean> {
       console.error("[masivos] el mensaje salió pero no se pudo anotar como enviado; queda marcado «enviando» y no se reenvía");
       return true;
     }
-    await registrarEnChat(e, enviado.conversacionId, enviado.waMessageId, texto, e.plantilla_nombre as string);
+    await registrarEnChat(e, enviado.conversacionId, enviado.waMessageId, texto, e.plantilla_nombre as string, archivo);
     return true;
   } catch (err) {
     await cliente.query("ROLLBACK").catch(() => {});

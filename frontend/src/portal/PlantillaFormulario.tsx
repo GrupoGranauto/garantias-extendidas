@@ -36,6 +36,9 @@ type Componentes = {
   botones: BotonForm[];
 };
 
+/** Lo máximo que acepta WhatsApp para el archivo del encabezado (MB). */
+const MB_MAXIMO: Record<"imagen" | "video" | "documento", number> = { imagen: 5, video: 16, documento: 20 };
+
 const MIME_POR_TIPO: Record<"imagen" | "video" | "documento", string> = {
   imagen: "image/jpeg,image/png",
   video: "video/mp4",
@@ -43,7 +46,6 @@ const MIME_POR_TIPO: Record<"imagen" | "video" | "documento", string> = {
 };
 
 type CampoEntidad = { nombre_tecnico: string; nombre_visible: string };
-type EntidadRegistros = { configurado: boolean; campos?: CampoEntidad[] };
 type VariableMapeo = { indice: number; columna_tecnica: string };
 
 type PlantillaDetalle = {
@@ -174,8 +176,9 @@ export default function PlantillaFormulario() {
   }, [sucursalId, pid]);
 
   useEffect(() => {
-    apiFetch<EntidadRegistros>(`/api/admin/sucursales/${sucursalId}/entidad/registros?limite=1`)
-      .then((info) => setCampos(info.configurado ? (info.campos ?? []) : []))
+    // Todas las columnas, también las ocultas en la tabla (nombre para saludar, fechas de 6 meses y 3 años…).
+    apiFetch<{ campos: CampoEntidad[] }>(`/api/admin/sucursales/${sucursalId}/entidad/registros/campos`)
+      .then((info) => setCampos(info.campos ?? []))
       .catch(() => {
         // sin Base de Datos configurada: el mapeo de variables queda vacío
       });
@@ -211,6 +214,12 @@ export default function PlantillaFormulario() {
 
   async function subirArchivoHeader(tipo: "imagen" | "video" | "documento", archivo: File | undefined) {
     if (!archivo) return;
+    // Meta rechaza archivos más pesados que esto: se avisa antes de subirlo.
+    const maximoMb = MB_MAXIMO[tipo];
+    if (archivo.size > maximoMb * 1024 * 1024) {
+      setAvisoHeader(`El archivo pesa más de ${maximoMb} MB, que es lo máximo que acepta WhatsApp. Usa uno más ligero.`);
+      return;
+    }
 
     // La vista previa no depende de que la subida a Meta funcione: se ve de
     // inmediato con el archivo local, aunque la sucursal no tenga WhatsApp
@@ -590,9 +599,10 @@ export default function PlantillaFormulario() {
                   )}
                   {avisoHeader && <Alerta tipo="info">{avisoHeader}</Alerta>}
                   <p className="campo-ayuda">
-                    {headerTipo === "imagen" && "JPG o PNG."}
-                    {headerTipo === "video" && "MP4."}
-                    {headerTipo === "documento" && "PDF."}
+                    {headerTipo === "imagen" && "JPG o PNG, hasta 5 MB. Mejor horizontal (por ejemplo 1200 × 628). "}
+                    {headerTipo === "video" && "MP4, hasta 16 MB. "}
+                    {headerTipo === "documento" && "PDF, hasta 20 MB. "}
+                    Se manda el mismo archivo en cada mensaje, en masivos y desde el chat.
                   </p>
                 </div>
               )}

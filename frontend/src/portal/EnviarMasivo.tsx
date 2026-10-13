@@ -3,7 +3,14 @@ import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 
-type Vista = { encabezado: string | null; cuerpo: string; pie: string | null; botones: string[] };
+type Vista = {
+  encabezado: string | null;
+  /** Imagen, video o documento del encabezado. */
+  archivo?: { tipo: "imagen" | "video" | "documento"; url: string; nombre: string | null } | null;
+  cuerpo: string;
+  pie: string | null;
+  botones: string[];
+};
 type Reglas = { campanas: string[]; estados: string[]; resultados: string[]; etapasVehiculo: string[] };
 type Plantilla = { id: string; nombre: string; no_usable: string | null; vista: Vista | null; reglas: Reglas; coinciden: number };
 type Opciones = {
@@ -41,6 +48,17 @@ export function BurbujaMensaje({ vista }: { vista: Vista }) {
   return (
     <div className="masivo-chat">
       <div className="burbuja-whatsapp">
+        {vista.archivo?.tipo === "imagen" && (
+          <div className="burbuja-media">
+            <img src={vista.archivo.url} alt="" />
+          </div>
+        )}
+        {vista.archivo?.tipo === "video" && (
+          <div className="burbuja-media">
+            <video src={vista.archivo.url} controls />
+          </div>
+        )}
+        {vista.archivo?.tipo === "documento" && <div className="burbuja-media">{vista.archivo.nombre ?? "Documento"}</div>}
         {vista.encabezado && <div className="burbuja-header">{vista.encabezado}</div>}
         <div className="burbuja-cuerpo">{vista.cuerpo}</div>
         {vista.pie && <div className="burbuja-footer">{vista.pie}</div>}

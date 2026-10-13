@@ -247,6 +247,31 @@ entidadDatosRouter.get("/sucursales/:id/entidad/registros", async (req, res, nex
   }
 });
 
+/**
+ * Todas las columnas de la tabla, también las ocultas (como el nombre para saludar o las fechas de 6 meses y 3 años): son
+ * las que se pueden ligar a las variables de una plantilla de WhatsApp.
+ */
+entidadDatosRouter.get("/sucursales/:id/entidad/registros/campos", async (req, res, next) => {
+  try {
+    const supabase = getSupabase();
+    const { data: definicion, error } = await supabase.from("entidad_definiciones").select("id").eq("sucursal_id", req.params.id).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!definicion) {
+      res.json({ campos: [] });
+      return;
+    }
+    const { data: campos, error: errorCampos } = await supabase
+      .from("entidad_campos")
+      .select("nombre_tecnico, nombre_visible")
+      .eq("entidad_id", definicion.id)
+      .order("posicion");
+    if (errorCampos) throw new Error(errorCampos.message);
+    res.json({ campos: campos ?? [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** Tope de filas que se pueden elegir de golpe con «Elegir todas las del filtro». */
 const MAX_IDS_FILTRO = 5000;
 

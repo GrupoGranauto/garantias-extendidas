@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
+import { esUrlPublica } from "../lib/masivosLogica.js";
 import { requireAuth, requireAccesoSucursal } from "../middleware/auth.js";
 import { configPorSucursalId, enviarMensaje } from "../lib/whatsapp.js";
 import { emitirEventoChat, suscribirEventosChat } from "../lib/eventosChat.js";
@@ -381,13 +382,15 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
   }
 });
 
-type ComponentesPlantilla = { header: { tipo: string; texto?: string } | null; body: { texto: string } };
+type ComponentesPlantilla = {
+  header: { tipo: string; texto?: string; media_url?: string | null; nombre_archivo?: string | null } | null;
+  body: { texto: string };
+};
 
 /**
- * Plantillas listas para mandar con "/" desde el chat: aprobadas, con
- * encabezado de texto (o sin encabezado) — uno con imagen/video/documento
- * necesitaría ese archivo en cada envío, no lo soporta este atajo — y, si
- * tiene variables, con TODAS mapeadas a una columna de la Base de Datos.
+ * Plantillas listas para mandar con "/" desde el chat: aprobadas, con encabezado de texto, sin encabezado o con un archivo
+ * (imagen, video o documento) guardado en la plataforma — se manda el mismo en cada envío —, y, si tiene variables, con
+ * TODAS mapeadas a una columna de la Base de Datos.
  */
 whatsappChatRouter.get("/sucursales/:id/whatsapp/plantillas-disponibles", async (req, res, next) => {
   try {
@@ -413,7 +416,7 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/plantillas-disponibles", async 
     const disponibles = (plantillas ?? [])
       .filter((p) => {
         const componentes = p.componentes as ComponentesPlantilla;
-        if (componentes.header && componentes.header.tipo !== "texto") return false;
+        if (componentes.header && componentes.header.tipo !== "texto" && !esUrlPublica(componentes.header.media_url)) return false;
         const numVariables = contarVariablesBody(componentes.body.texto);
         if (numVariables === 0) return true;
         const indices = indicesPorPlantilla.get(p.id);
@@ -423,7 +426,8 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/plantillas-disponibles", async 
       })
       .map((p) => {
         const componentes = p.componentes as ComponentesPlantilla;
-        const encabezado = componentes.header?.tipo === "texto" ? componentes.header.texto ?? "" : "";
+        const h = componentes.header;
+        const encabezado = h?.tipo === "texto" ? h.texto ?? "" : h ? `[${h.tipo === "imagen" ? "Imagen" : h.tipo === "video" ? "Video" : "Documento"}]` : "";
         const preview = [encabezado, componentes.body.texto].filter(Boolean).join("\n");
         return { id: p.id, nombre: p.nombre, nombre_tecnico: p.nombre_tecnico, idioma: p.idioma, preview };
       });
@@ -483,8 +487,13 @@ whatsappChatRouter.post(
       }
 
       const componentes = plantilla.componentes as ComponentesPlantilla;
-      if (componentes.header && componentes.header.tipo !== "texto") {
-        res.status(400).json({ error: "Esta plantilla tiene un encabezado de imagen/video/documento; no se puede mandar así." });
+      const h = componentes.header;
+      const archivo =
+        h && (h.tipo === "imagen" || h.tipo === "video" || h.tipo === "documento") && esUrlPublica(h.media_url)
+          ? { tipo: h.tipo as "imagen" | "video" | "documento", url: h.media_url, nombreArchivo: h.nombre_archivo ?? null }
+          : null;
+      if (h && h.tipo !== "texto" && !archivo) {
+        res.status(400).json({ error: "El archivo del encabezado de esta plantilla no está guardado; vuelve a subirlo en Plantillas." });
         return;
       }
 
@@ -540,8 +549,11 @@ whatsappChatRouter.post(
         nombreTecnico: plantilla.nombre_tecnico,
         idioma: plantilla.idioma,
         parametrosBody: parametros,
+        encabezado: archivo,
       });
 
+      // Con archivo en el encabezado, el chat lo muestra como imagen (o video, o documento) con el texto debajo.
+      const tipoMensaje = archivo ? archivo.tipo : "texto";
       const [{ data: mensaje, error: errorInsert }] = await Promise.all([
         supabase
           .from("whatsapp_mensajes")
@@ -550,17 +562,19 @@ whatsappChatRouter.post(
             sucursal_id: req.params.id,
             wa_message_id: enviado.id,
             direccion: "saliente",
-            tipo: "texto",
+            tipo: tipoMensaje,
             texto: textoRenderizado,
+            media_url: archivo?.url ?? null,
+            media_nombre_archivo: archivo?.nombreArchivo ?? null,
             estado: "enviado",
           })
-          .select("id, wa_message_id, direccion, tipo, texto, estado, creado_en")
+          .select("id, wa_message_id, direccion, tipo, texto, media_url, media_mime_type, media_nombre_archivo, estado, creado_en")
           .single(),
         supabase
           .from("whatsapp_conversaciones")
           .update({
             ultimo_mensaje_en: new Date().toISOString(),
-            ultimo_mensaje_tipo: "texto",
+            ultimo_mensaje_tipo: tipoMensaje,
             ultimo_mensaje_texto: textoRenderizado,
             ultimo_mensaje_direccion: "saliente",
             ultimo_mensaje_wa_message_id: enviado.id,
