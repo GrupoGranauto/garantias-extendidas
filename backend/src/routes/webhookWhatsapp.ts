@@ -129,7 +129,8 @@ async function procesarActualizacionPlantilla(valor: ValorPlantilla, cuerpoCrudo
     .from("whatsapp_plantillas")
     .update({
       estado: estadoDesdeMeta(valor.event),
-      motivo_rechazo: valor.reason ?? null,
+      // Meta manda "NONE" cuando no hay motivo (al aprobar).
+      motivo_rechazo: valor.reason && valor.reason !== "NONE" ? valor.reason : null,
       actualizado_en: new Date().toISOString(),
     })
     .eq("id", plantilla.id);

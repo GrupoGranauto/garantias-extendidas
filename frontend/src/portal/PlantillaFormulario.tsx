@@ -13,6 +13,7 @@ import {
   IconoVideollamada,
 } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
+import { formatoWhatsApp } from "../lib/formatoWhatsApp";
 import { usePortal } from "./PortalProvider";
 
 type Categoria = "marketing" | "utility" | "authentication";
@@ -108,6 +109,7 @@ export default function PlantillaFormulario() {
   const navigate = useNavigate();
   const editando = Boolean(pid);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const avisoRef = useRef<HTMLDivElement>(null);
 
   const [cargando, setCargando] = useState(editando);
   const [nombre, setNombre] = useState("");
@@ -140,6 +142,11 @@ export default function PlantillaFormulario() {
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Los botones de guardar están al final y el aviso arriba: sin esto parece que el botón no hizo nada.
+  useEffect(() => {
+    if (error) avisoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [error]);
+
   const variables = useMemo(() => {
     const numeros = [...bodyTexto.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]));
     return Array.from(new Set(numeros)).sort((a, b) => a - b);
@@ -152,8 +159,11 @@ export default function PlantillaFormulario() {
 
   useEffect(() => {
     if (!pid) return;
+    // Una respuesta que llega tarde (de una carga anterior) no pisa lo que ya se está editando.
+    let vigente = true;
     apiFetch<PlantillaDetalle>(`/api/admin/sucursales/${sucursalId}/plantillas/${pid}`)
       .then((p) => {
+        if (!vigente) return;
         setNombre(p.nombre);
         setNombreTecnico(p.nombre_tecnico);
         setIdioma(p.idioma);
@@ -171,14 +181,21 @@ export default function PlantillaFormulario() {
         setFooterTexto(p.componentes.footer ?? "");
         setBotones(p.componentes.botones);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar la plantilla."))
-      .finally(() => setCargando(false));
+      .catch((err) => {
+        if (vigente) setError(err instanceof Error ? err.message : "No se pudo cargar la plantilla.");
+      })
+      .finally(() => {
+        if (vigente) setCargando(false);
+      });
+    return () => {
+      vigente = false;
+    };
   }, [sucursalId, pid]);
 
   useEffect(() => {
     // Todas las columnas, también las ocultas en la tabla (nombre para saludar, fechas de 6 meses y 3 años…).
     apiFetch<{ campos: CampoEntidad[] }>(`/api/admin/sucursales/${sucursalId}/entidad/registros/campos`)
-      .then((info) => setCampos(info.campos ?? []))
+      .then((info) => setCampos([...(info.campos ?? [])].sort((a, b) => a.nombre_visible.localeCompare(b.nombre_visible, "es"))))
       .catch(() => {
         // sin Base de Datos configurada: el mapeo de variables queda vacío
       });
@@ -190,7 +207,8 @@ export default function PlantillaFormulario() {
       .then((filas) => {
         const mapa: Record<number, string> = {};
         for (const f of filas) mapa[f.indice] = f.columna_tecnica;
-        setVariableColumnas(mapa);
+        // Si ya eligió algo mientras cargaba, gana lo que eligió.
+        setVariableColumnas((elegidas) => ({ ...mapa, ...elegidas }));
       })
       .catch(() => {
         // sin mapeo guardado todavía
@@ -344,12 +362,13 @@ export default function PlantillaFormulario() {
       setError("Espera a que termine de subirse el archivo del encabezado.");
       return;
     }
-    if (
-      enviarDespues &&
-      (headerTipo === "imagen" || headerTipo === "video" || headerTipo === "documento") &&
-      !headerMediaHandle
-    ) {
-      setError("El archivo del encabezado no se pudo subir a Meta; revisa la configuración de WhatsApp o vuelve a intentar.");
+    if ((headerTipo === "imagen" || headerTipo === "video" || headerTipo === "documento") && !headerMediaHandle) {
+      // Sin archivo subido el encabezado no se guarda: mejor avisar que perderlo sin decir nada.
+      setError(
+        headerNombreArchivo
+          ? "El archivo del encabezado no se pudo subir a Meta: vuelve a subirlo o elige «Ninguno» en el tipo de encabezado."
+          : "Sube el archivo del encabezado o elige «Ninguno» en el tipo de encabezado.",
+      );
       return;
     }
 
@@ -375,6 +394,15 @@ export default function PlantillaFormulario() {
           }),
         });
         plantillaId = creada.id;
+      }
+
+      if (plantillaId && variables.some((v) => variableColumnas[v])) {
+        await apiFetch(`/api/admin/sucursales/${sucursalId}/plantillas/${plantillaId}/variables`, {
+          method: "PUT",
+          body: JSON.stringify(
+            variables.filter((v) => variableColumnas[v]).map((v) => ({ indice: v, columna_tecnica: variableColumnas[v] })),
+          ),
+        });
       }
 
       if (enviarDespues && plantillaId) {
@@ -447,7 +475,7 @@ export default function PlantillaFormulario() {
       </header>
 
       {error && (
-        <div className="aviso-formulario">
+        <div className="aviso-formulario" ref={avisoRef}>
           <Alerta tipo="error">{error}</Alerta>
         </div>
       )}
@@ -644,7 +672,7 @@ export default function PlantillaFormulario() {
                     type="text"
                     value={ejemplos[i] ?? ""}
                     onChange={(e) => setEjemplos((prev) => prev.map((val, idx) => (idx === i ? e.target.value : val)))}
-                    placeholder={`Ejemplo para {{${v}}}, ej. Juan Pérez`}
+                    placeholder={`Ejemplo para {{${v}}}`}
                   />
                 </div>
               ))}
@@ -659,18 +687,17 @@ export default function PlantillaFormulario() {
               <div className="seccion-info">
                 <h2>Variables automáticas</h2>
                 <p>
-                  Qué columna de la Base de Datos llena cada variable al mandar esta plantilla con "/" desde el chat.
-                  Si falta alguna, esta plantilla no aparece ahí.
+                  Qué columna de la Base de Datos llena cada variable al mandar esta plantilla, desde el chat con "/" o en un
+                  masivo. Si falta alguna, no se puede mandar.
                 </p>
               </div>
 
               <div className="seccion-campos">
-                {!editando && <Alerta tipo="info">Guarda la plantilla primero para poder mapear sus variables.</Alerta>}
-                {editando && campos.length === 0 && (
+                {campos.length === 0 && (
                   <Alerta tipo="info">Esta sucursal todavía no tiene Base de Datos configurada.</Alerta>
                 )}
 
-                {editando &&
+                {campos.length > 0 &&
                   variables.map((v) => (
                     <div className="fila-variable" key={v}>
                       <span>{`{{${v}}}`}</span>
@@ -883,7 +910,7 @@ export default function PlantillaFormulario() {
                   {headerTipo === "documento" && (
                     <div className="burbuja-media">{headerNombreArchivo ?? "Documento"}</div>
                   )}
-                  <div className="burbuja-cuerpo">{textoPreview}</div>
+                  <div className="burbuja-cuerpo">{formatoWhatsApp(textoPreview)}</div>
                   {footerActivo && footerTexto && <div className="burbuja-footer">{footerTexto}</div>}
                   {botones.length > 0 && (
                     <div className="burbuja-botones">

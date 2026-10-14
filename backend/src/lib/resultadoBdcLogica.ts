@@ -23,6 +23,22 @@ export type ResultadoBdc = (typeof RESULTADOS_BDC)[number];
 
 export const esResultadoBdc = (v: unknown): v is ResultadoBdc => typeof v === "string" && (RESULTADOS_BDC as readonly string[]).includes(v);
 
+/** Cómo se lee cada resultado en pantalla; el valor guardado sigue siendo el del Sheet. */
+export const ETIQUETA_RESULTADO: Record<ResultadoBdc, string> = {
+  PENDIENTE: "Pendiente",
+  BUZON: "Buzón",
+  "CONTACTO NO DISPONIBLE": "Contacto no disponible",
+  "NO CONTACTABLE": "No contactable",
+  CONTACTADO: "Contactado",
+  "SOLICITA INFO WHATSAPP": "Solicita info por WhatsApp",
+  INTERESADO: "Interesado",
+  "PENDIENTE DECISION TERCERO": "Pendiente de decisión de un tercero",
+  COTIZADO: "Cotizado",
+  VENDIDO: "Vendido",
+  "NO INTERESADO": "No interesado",
+  "PRECIO FUERA PRESUPUESTO": "Precio fuera de presupuesto",
+};
+
 type Destino = { etapa: string; motivo?: string; contacto?: string };
 
 /** Estado del lead (clave de la etapa), motivo de pérdida (clave) y estado de contacto que deja cada resultado. */

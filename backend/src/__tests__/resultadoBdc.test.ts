@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DESTINO_DE_RESULTADO, RESULTADOS_BDC, esResultadoBdc, resultadoDeEstado } from "../lib/resultadoBdcLogica.js";
+import { DESTINO_DE_RESULTADO, ETIQUETA_RESULTADO, RESULTADOS_BDC, esResultadoBdc, resultadoDeEstado } from "../lib/resultadoBdcLogica.js";
 
 describe("Resultado BDC", () => {
+  it("cada resultado se lee en español, con acentos", () => {
+    for (const r of RESULTADOS_BDC) expect(ETIQUETA_RESULTADO[r]).toBeTruthy();
+    expect(ETIQUETA_RESULTADO.BUZON).toBe("Buzón");
+    expect(ETIQUETA_RESULTADO["PENDIENTE DECISION TERCERO"]).toBe("Pendiente de decisión de un tercero");
+  });
+
   it("tiene los 12 valores del Sheet y cada uno lleva a un estado del lead", () => {
     expect(RESULTADOS_BDC).toHaveLength(12);
     for (const r of RESULTADOS_BDC) expect(DESTINO_DE_RESULTADO[r].etapa).toBeTruthy();

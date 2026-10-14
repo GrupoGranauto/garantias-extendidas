@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
+import { formatoWhatsApp } from "../lib/formatoWhatsApp";
 
 type Vista = {
   encabezado: string | null;
@@ -60,7 +61,7 @@ export function BurbujaMensaje({ vista }: { vista: Vista }) {
         )}
         {vista.archivo?.tipo === "documento" && <div className="burbuja-media">{vista.archivo.nombre ?? "Documento"}</div>}
         {vista.encabezado && <div className="burbuja-header">{vista.encabezado}</div>}
-        <div className="burbuja-cuerpo">{vista.cuerpo}</div>
+        <div className="burbuja-cuerpo">{formatoWhatsApp(vista.cuerpo)}</div>
         {vista.pie && <div className="burbuja-footer">{vista.pie}</div>}
         {vista.botones.length > 0 && (
           <div className="burbuja-botones">

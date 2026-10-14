@@ -2,7 +2,7 @@ import { getPool } from "./db.js";
 import { configPorSucursalId, enviarMensaje, ErrorEnvioMeta } from "./whatsapp.js";
 import { emitirEventoChat } from "./eventosChat.js";
 import { ZONA_ENVIOS, ahoraLocal, dentroDeVentana, sanearParametro, siguienteApertura, telefono10 } from "./campanasLogica.js";
-import { RESULTADOS_BDC } from "./resultadoBdcLogica.js";
+import { ETIQUETA_RESULTADO, RESULTADOS_BDC } from "./resultadoBdcLogica.js";
 import {
   MAX_DESTINATARIOS,
   TEXTO_MOTIVO,
@@ -127,8 +127,6 @@ export async function opcionesMasivo(sucursalId: string, ids: string[]) {
   return { plantillas, campanas, estados: estados.rows, etapas_vehiculo: etapasVehiculo };
 }
 
-const capitalizar = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
-
 /** Para la pantalla Plantillas: las opciones de cada regla (campañas, estados, resultados, etapas del vehículo) y las reglas de cada plantilla. */
 export async function reglasDePlantillas(sucursalId: string) {
   const pool = getPool();
@@ -149,7 +147,7 @@ export async function reglasDePlantillas(sucursalId: string) {
         .sort((a, b) => ordenCampana(a) - ordenCampana(b) || a.localeCompare(b))
         .map((c) => ({ valor: c, etiqueta: etiquetaCampana(c) })),
       estados: estados.rows,
-      resultados: RESULTADOS_BDC.map((r) => ({ valor: r, etiqueta: capitalizar(r) })),
+      resultados: RESULTADOS_BDC.map((r) => ({ valor: r, etiqueta: ETIQUETA_RESULTADO[r] })),
       etapas_vehiculo: etapas.rows,
     },
     reglas: Object.fromEntries(
