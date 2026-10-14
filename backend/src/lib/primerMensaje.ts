@@ -35,13 +35,14 @@ async function baseActualizadaHoy(sucursalId: string): Promise<boolean> {
 export async function leerPrimerMensaje(sucursalId: string) {
   const pool = getPool();
   const hoy = ahoraLocal();
-  const [{ rows: cfgs }, { rows: plantillas }, { rows: pendientes }, { rows: ultimas }, base] = await Promise.all([
+  const [{ rows: cfgs }, { rows: plantillas }, { rows: pendientes }, { rows: ultimas }, base, { rows: porContactar }] = await Promise.all([
     pool.query(
       `SELECT campana, activa, plantilla_id, dias_semana, hora::text AS hora, telefonos_prueba FROM crm_primer_mensaje_config WHERE sucursal_id = $1`,
       [sucursalId],
     ),
     pool.query(
       `SELECT p.id, coalesce(p.nombre, p.nombre_tecnico) AS nombre, p.estado, p.componentes, coalesce(r.campanas, '{}') AS campanas,
+              coalesce(r.estados::text[], '{}') AS estados,
               coalesce((SELECT array_agg(v.indice) FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id), '{}') AS indices
          FROM whatsapp_plantillas p
          LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id
@@ -72,14 +73,18 @@ export async function leerPrimerMensaje(sucursalId: string) {
       [sucursalId],
     ),
     baseActualizadaHoy(sucursalId),
+    pool.query(`SELECT id::text AS id FROM crm_etapas WHERE sucursal_id = $1 AND clave = 'por_contactar'`, [sucursalId]),
   ]);
 
   const porCampana = new Map(cfgs.map((c) => [c.campana as string, c]));
   const campanas = [...new Set<string>([...CAMPANAS_CONOCIDAS, ...cfgs.map((c) => c.campana as string)])].sort(
     (a, b) => ordenCampana(a) - ordenCampana(b),
   );
+  // Un primer mensaje es para leads «Por contactar»: las plantillas de otro estado (pago, póliza…) nunca les llegarían.
+  const idsPorContactar = new Set(porContactar.map((e) => e.id as string));
   const usables = plantillas
     .filter((p) => !plantillaNoUsable({ estado: p.estado, componentes: p.componentes as Componentes }, (p.indices as number[]).map(Number)))
+    .filter((p) => (p.estados as string[]).length === 0 || (p.estados as string[]).some((id) => idsPorContactar.has(id)))
     .map((p) => ({ id: p.id as string, nombre: p.nombre as string, campanas: p.campanas as string[] }));
 
   return {

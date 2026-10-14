@@ -3,6 +3,7 @@ import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { IconoCheck, IconoReloj, IconoXMarca } from "../componentes/Iconos";
 import { apiFetch } from "../lib/api";
+import { textoResultado } from "../lib/resultadoBdc";
 import GestionBdc, { FECHA_HORA_MAX, RESPUESTA_CON_PROXIMO, aLocal, proximoDesdeLocal, type Gestion } from "./GestionBdc";
 
 type Entrada = { tipo: string; titulo: string; detalle: Record<string, unknown> | null; autor: string | null; creado_en: string };
@@ -140,7 +141,6 @@ const ESTADOS_RESULTADO: [string, string][] = [
 ];
 
 /** «NO INTERESADO» → «No interesado»: los valores del Sheet van en mayúsculas. */
-const textoResultado = (r: string) => (r.charAt(0) + r.slice(1).toLowerCase()).replace("whatsapp", "WhatsApp");
 
 const NOMBRE_CAMPANA: Record<string, string> = {
   "48H": "48 horas",

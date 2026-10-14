@@ -3,6 +3,7 @@ import Alerta from "../componentes/Alerta";
 import Cargador from "../componentes/Cargador";
 import { apiFetch } from "../lib/api";
 import { formatoWhatsApp } from "../lib/formatoWhatsApp";
+import { textoResultado } from "../lib/resultadoBdc";
 
 type Vista = {
   encabezado: string | null;
@@ -23,7 +24,6 @@ type Opciones = {
 
 /** El filtro rápido «Generales»: plantillas sin campaña, sirven para cualquiera. */
 const GENERALES = "__generales";
-const capitalizar = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
 type Revision = {
   enviar: number;
   omitidos: { motivo: string; texto: string; n: number }[];
@@ -163,7 +163,7 @@ export default function EnviarMasivo({ sucursalId, ids, descripcion, onCerrar, o
 
   const otrasReglas = (r: Reglas) =>
     [
-      r.resultados.length > 0 ? `Resultado: ${r.resultados.map(capitalizar).join(", ")}` : null,
+      r.resultados.length > 0 ? `Resultado: ${r.resultados.map(textoResultado).join(", ")}` : null,
       r.etapasVehiculo.length > 0 ? `Vehículo: ${r.etapasVehiculo.map((e) => nombreEtapa.get(e) ?? "Etapa").join(", ")}` : null,
     ]
       .filter(Boolean)
