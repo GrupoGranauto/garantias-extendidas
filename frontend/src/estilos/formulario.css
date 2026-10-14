@@ -1620,6 +1620,14 @@
   color: var(--gris-500);
 }
 .chat-burbuja-error { color: #d92d20; }
+.chat-burbuja-motivo {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(217, 45, 32, 0.2);
+  font-size: 11px;
+  line-height: 1.35;
+  color: #b42318;
+}
 .chat-burbuja-estado { display: inline-flex; align-items: center; color: var(--gris-500); }
 .chat-burbuja-estado svg { width: 15px; height: 11px; }
 .chat-burbuja-estado-leido { color: #53bdeb; }

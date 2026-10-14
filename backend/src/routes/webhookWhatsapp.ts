@@ -8,6 +8,7 @@ import {
   type ConfigSucursal,
 } from "../lib/whatsapp.js";
 import { emitirEventoChat } from "../lib/eventosChat.js";
+import { motivoFallaWhatsApp } from "../lib/erroresMeta.js";
 import { procesarAhoraNo, procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
 import { buscarVinculo, registrarEntrante, type Vinculo } from "../lib/vinculoWhatsapp.js";
 import { esAhoraNo, esPeticionDeBaja, telefono10, textoEntrante } from "../lib/campanasLogica.js";
@@ -80,7 +81,7 @@ type MensajeEntrante = {
 type EstadoMensaje = {
   id: string;
   status: "sent" | "delivered" | "read" | "failed";
-  errors?: { title: string; message?: string }[];
+  errors?: { code?: number; title: string; message?: string }[];
 };
 
 type ValorWebhook = {
@@ -96,6 +97,12 @@ type ValorPlantilla = {
   message_template_name: string;
   message_template_language: string;
   reason?: string | null;
+};
+
+/** Meta cambió la categoría de una plantilla ya registrada (por ejemplo, de Utilidad a Marketing). */
+type ValorCategoria = {
+  message_template_id: number;
+  new_category?: string;
 };
 
 /**
@@ -134,6 +141,28 @@ async function procesarActualizacionPlantilla(valor: ValorPlantilla, cuerpoCrudo
       actualizado_en: new Date().toISOString(),
     })
     .eq("id", plantilla.id);
+}
+
+/** Igual que el cambio de estado: llega a nivel de WABA y se identifica por el id de plantilla de Meta. */
+async function procesarCambioCategoria(valor: ValorCategoria, cuerpoCrudo: Buffer, firmaHeader: string | undefined) {
+  const categoria = valor.new_category?.toLowerCase();
+  if (categoria !== "marketing" && categoria !== "utility" && categoria !== "authentication") return;
+
+  const supabase = getSupabase();
+  const { data: plantilla } = await supabase
+    .from("whatsapp_plantillas")
+    .select("id, sucursal_id")
+    .eq("meta_template_id", String(valor.message_template_id))
+    .maybeSingle();
+  if (!plantilla) return;
+
+  const { data: config } = await supabase.from("whatsapp_config").select("app_secret").eq("sucursal_id", plantilla.sucursal_id).maybeSingle();
+  if (!config?.app_secret || !firmaValida(cuerpoCrudo, firmaHeader, config.app_secret)) {
+    console.warn(`Webhook de categoría de plantilla sin firma válida (sucursal ${plantilla.sucursal_id}): se ignora`);
+    return;
+  }
+
+  await supabase.from("whatsapp_plantillas").update({ categoria, actualizado_en: new Date().toISOString() }).eq("id", plantilla.id);
 }
 
 const MAPA_ESTADO: Record<EstadoMensaje["status"], string> = {
@@ -396,16 +425,16 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
 
 async function procesarActualizacionEstado(estado: EstadoMensaje) {
   const cambios: Record<string, unknown> = { estado: MAPA_ESTADO[estado.status] };
-  if (estado.status === "failed" && estado.errors?.[0]) {
-    cambios.error_detalle = estado.errors[0].message ?? estado.errors[0].title;
-  }
+  const falla = estado.status === "failed" && estado.errors?.[0] ? estado.errors[0] : null;
+  const motivo = falla ? motivoFallaWhatsApp(falla.code, falla.message ?? falla.title) : null;
+  if (motivo) cambios.error_detalle = motivo;
 
   // Si el mensaje era de una campaña, su envío también pasa a entregado / leído / fallido.
   try {
     await registrarEstadoEnvio(
       estado.id,
       MAPA_ESTADO[estado.status] as "enviado" | "entregado" | "leido" | "fallido",
-      estado.status === "failed" ? ((estado.errors?.[0]?.message ?? estado.errors?.[0]?.title ?? null) as string | null) : null,
+      motivo,
     );
   } catch {
     console.error("[campanas] no se pudo actualizar el estado del envío");
@@ -456,6 +485,10 @@ webhookWhatsappRouter.post("/", async (req, res) => {
     for (const cambio of cambios) {
       if (cambio.field === "message_template_status_update") {
         await procesarActualizacionPlantilla(cambio.value as ValorPlantilla, cuerpoCrudo, firmaHeader);
+        continue;
+      }
+      if (cambio.field === "template_category_update") {
+        await procesarCambioCategoria(cambio.value as unknown as ValorCategoria, cuerpoCrudo, firmaHeader);
         continue;
       }
 

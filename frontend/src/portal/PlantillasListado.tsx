@@ -88,7 +88,7 @@ export default function PlantillasListado() {
         r.importadas > 0
           ? `Se importaron ${r.importadas} plantilla(s) que ya existían en Meta. Liga sus variables a datos de la base para poder usarlas en campañas.`
           : r.actualizadas > 0
-            ? `Se actualizó el estado de ${r.actualizadas} plantilla(s).`
+            ? `Se actualizaron ${r.actualizadas} plantilla(s) con el estado y la categoría que tienen en Meta.`
             : "Todo está al día con Meta.",
       );
       cargar();

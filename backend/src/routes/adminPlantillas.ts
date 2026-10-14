@@ -358,6 +358,12 @@ adminPlantillasRouter.patch("/sucursales/:id/plantillas/:pid", async (req, res, 
   }
 });
 
+/** La categoría de Meta (MARKETING, UTILITY, AUTHENTICATION) como se guarda aquí; null si no es ninguna de esas. */
+function categoriaLocal(categoriaMeta: string | null | undefined): "marketing" | "utility" | "authentication" | null {
+  const c = categoriaMeta?.toLowerCase();
+  return c === "marketing" || c === "utility" || c === "authentication" ? c : null;
+}
+
 /** Plantillas de muestra que Meta crea en toda cuenta de WhatsApp Business: no se importan y Meta no permite borrarlas. */
 const PLANTILLAS_MUESTRA_META = new Set(["hello_world"]);
 
@@ -440,12 +446,14 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/:pid/enviar", async (req,
     });
 
     const nuevoEstado = estadoDesdeMeta(resultado.status);
+    const categoriaMeta = categoriaLocal(resultado.category);
     const { error: errorUpdate } = await supabase
       .from("whatsapp_plantillas")
       .update({
         meta_template_id: resultado.id,
         estado: nuevoEstado,
         motivo_rechazo: null,
+        ...(categoriaMeta ? { categoria: categoriaMeta } : {}),
         actualizado_en: new Date().toISOString(),
       })
       .eq("id", plantilla.id);
@@ -516,7 +524,7 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, n
     const supabase = getSupabase();
     const { data: locales, error } = await supabase
       .from("whatsapp_plantillas")
-      .select("id, nombre_tecnico, idioma, estado")
+      .select("id, nombre_tecnico, idioma, estado, categoria")
       .eq("sucursal_id", req.params.id)
       .neq("estado", "borrador");
     if (error) throw new Error(error.message);
@@ -534,8 +542,8 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, n
       if (existentes.has(`${remota.name}__${remota.language}`)) continue;
       // La plantilla de muestra que Meta crea en toda cuenta no sirve aquí (y Meta no deja borrarla): no se trae.
       if (PLANTILLAS_MUESTRA_META.has(remota.name)) continue;
-      const categoria = remota.category?.toLowerCase();
-      if (categoria !== "marketing" && categoria !== "utility" && categoria !== "authentication") continue;
+      const categoria = categoriaLocal(remota.category);
+      if (!categoria) continue;
       const componentes = componentesDesdeMeta(remota.components ?? []);
       if (!componentes) continue; // sin cuerpo de texto no hay nada que mandar
       const { error: errorImportar } = await supabase.from("whatsapp_plantillas").insert({
@@ -556,10 +564,11 @@ adminPlantillasRouter.post("/sucursales/:id/plantillas/sync", async (req, res, n
       const remota = porNombreIdioma.get(`${local.nombre_tecnico}__${local.idioma}`);
       if (!remota) continue;
       const nuevoEstado = estadoDesdeMeta(remota.status);
-      if (nuevoEstado === local.estado) continue;
+      const nuevaCategoria = categoriaLocal(remota.category) ?? local.categoria;
+      if (nuevoEstado === local.estado && nuevaCategoria === local.categoria) continue;
       await supabase
         .from("whatsapp_plantillas")
-        .update({ meta_template_id: remota.id, estado: nuevoEstado, actualizado_en: new Date().toISOString() })
+        .update({ meta_template_id: remota.id, estado: nuevoEstado, categoria: nuevaCategoria, actualizado_en: new Date().toISOString() })
         .eq("id", local.id);
       actualizadas++;
     }

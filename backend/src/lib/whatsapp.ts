@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { motivoFallaWhatsApp } from "./erroresMeta.js";
 import { getSupabase } from "./supabase.js";
 
 import { clasificarErrorMeta, type ResultadoFallo } from "./campanasLogica.js";
@@ -193,7 +194,8 @@ export async function enviarMensaje(
   const cuerpoRespuesta = (await res.json().catch(() => ({}))) as { messages?: { id: string }[]; error?: { message?: string; code?: number } };
 
   if (!res.ok || !cuerpoRespuesta.messages?.[0]) {
-    throw new ErrorEnvioMeta(cuerpoRespuesta.error?.message ?? `Envío falló: HTTP ${res.status}`, res.status, cuerpoRespuesta.error?.code ?? null, clasificarErrorMeta(res.status, cuerpoRespuesta.error?.code ?? null));
+    const codigo = cuerpoRespuesta.error?.code ?? null;
+    throw new ErrorEnvioMeta(motivoFallaWhatsApp(codigo, cuerpoRespuesta.error?.message) ?? `Envío falló: HTTP ${res.status}`, res.status, codigo, clasificarErrorMeta(res.status, codigo));
   }
 
   return { id: cuerpoRespuesta.messages[0].id };
@@ -289,7 +291,7 @@ export async function crearPlantillaMeta(
   wabaId: string,
   accessToken: string,
   plantilla: { name: string; language: string; category: string; components: ComponentePlantilla[] },
-): Promise<{ id: string; status: string }> {
+): Promise<{ id: string; status: string; category: string | null }> {
   const res = await fetch(`${GRAPH_API}/${wabaId}/message_templates`, {
     method: "POST",
     headers: {
@@ -299,13 +301,14 @@ export async function crearPlantillaMeta(
     body: JSON.stringify(plantilla),
   });
 
-  const cuerpo = (await res.json()) as RespuestaErrorMeta & { id?: string; status?: string };
+  const cuerpo = (await res.json()) as RespuestaErrorMeta & { id?: string; status?: string; category?: string };
 
   if (!res.ok || !cuerpo.id) {
     throw new Error(mensajeErrorMeta(cuerpo, res.status));
   }
 
-  return { id: cuerpo.id, status: cuerpo.status ?? "PENDING" };
+  // Meta puede cambiar la categoría al recibirla (por ejemplo, de Utilidad a Marketing).
+  return { id: cuerpo.id, status: cuerpo.status ?? "PENDING", category: cuerpo.category ?? null };
 }
 
 /** Plantilla tal como la devuelve Meta (con sus componentes crudos). */

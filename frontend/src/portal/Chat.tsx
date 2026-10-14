@@ -694,6 +694,9 @@ export default function Chat() {
                           <span>{formatearHora(m.creado_en)}</span>
                           {m.direccion === "saliente" && iconoEstadoEnvio(m.estado, m.error_detalle)}
                         </div>
+                        {m.direccion === "saliente" && m.estado === "fallido" && m.error_detalle && (
+                          <div className="chat-burbuja-motivo">Motivo: {m.error_detalle}</div>
+                        )}
                       </div>,
                     );
                   }

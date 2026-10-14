@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { getSupabase } from "../lib/supabase.js";
 import { esUrlPublica } from "../lib/masivosLogica.js";
+import { motivoFallaWhatsApp } from "../lib/erroresMeta.js";
 import { requireAuth, requireAccesoSucursal } from "../middleware/auth.js";
 import { configPorSucursalId, enviarMensaje } from "../lib/whatsapp.js";
 import { emitirEventoChat, suscribirEventosChat } from "../lib/eventosChat.js";
@@ -155,7 +156,8 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones/:conversacionId/
       .order("creado_en", { ascending: true });
     if (error) throw new Error(error.message);
 
-    res.json(data ?? []);
+    // Los que se guardaron antes con el texto de Meta en inglés también se leen en español.
+    res.json((data ?? []).map((m) => (m.error_detalle ? { ...m, error_detalle: motivoFallaWhatsApp(null, m.error_detalle) } : m)));
   } catch (err) {
     next(err);
   }
