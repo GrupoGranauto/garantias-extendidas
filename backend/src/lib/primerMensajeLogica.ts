@@ -20,6 +20,19 @@ export type ConfigPrimerMensaje = {
 /** Si a esta hora la base de hoy todavía no se actualiza, sale con la que haya para no perder el día. */
 export const HORA_SIN_BASE = "18:00";
 
+/**
+ * Si la base lleva más de estas horas sin actualizarse (la misma alerta de Equipo), esperarla no sirve: no va a llegar.
+ * Entonces el primer mensaje sale a su hora con la base que hay.
+ */
+export const HORAS_BASE_VENCIDA = 36;
+
+/** Si hoy hay que esperar la actualización de la base antes de mandar el primer mensaje. */
+export function hayQueEsperarBase(b: { usaActualizacion: boolean; actualizadaHoy: boolean; horasDesdeUltima: number | null }): boolean {
+  if (!b.usaActualizacion || b.actualizadaHoy) return false;
+  // Sin actualizaciones recientes (o nunca): no hay nada que esperar.
+  return b.horasDesdeUltima !== null && b.horasDesdeUltima <= HORAS_BASE_VENCIDA;
+}
+
 /** Código de Meta del límite de mensajes de marketing por persona: el único fallo que se reintenta (una vez). */
 export const CODIGO_LIMITE_MARKETING = 131049;
 

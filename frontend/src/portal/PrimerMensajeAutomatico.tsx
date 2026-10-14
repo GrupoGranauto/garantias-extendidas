@@ -112,7 +112,8 @@ export default function PrimerMensajeAutomatico() {
           sola vez por campaña, aunque la base se reemplace cada día.
         </p>
         <p className="campo-ayuda">
-          Espera a que la base del día se actualice; si a las {datos.hora_sin_base} no se ha actualizado, sale con la que haya. Nunca
+          Espera a que la base del día se actualice; si a las {datos.hora_sin_base} no se ha actualizado, sale con la que haya (si la
+          base lleva más de 36 horas sin actualizarse, no la espera). Nunca
           sale fuera del horario de {datos.horario.inicio} a {datos.horario.fin}. Si Meta no lo entrega por su límite de mensajes de
           marketing, se reintenta una sola vez el siguiente día permitido.
         </p>

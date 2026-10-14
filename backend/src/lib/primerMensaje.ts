@@ -2,7 +2,7 @@ import { getPool } from "./db.js";
 import { CAMPANAS_CONOCIDAS, ZONA_ENVIOS, ahoraLocal } from "./campanasLogica.js";
 import { crearMasivoAutomatico, type Resultado } from "./masivos.js";
 import { etiquetaCampana, ordenCampana, plantillaNoUsable, VENTANA_MASIVOS, type Componentes } from "./masivosLogica.js";
-import { HORA_SIN_BASE, proximoEnvio, tocaCorrer, validarConfig, type ConfigPrimerMensaje } from "./primerMensajeLogica.js";
+import { HORA_SIN_BASE, hayQueEsperarBase, proximoEnvio, tocaCorrer, validarConfig, type ConfigPrimerMensaje } from "./primerMensajeLogica.js";
 
 /**
  * Primer mensaje automático por campaña. Lo único que sale solo: cada día permitido, a partir de su hora, el motor arma un
@@ -19,16 +19,25 @@ const aConfig = (r: Record<string, any> | undefined): ConfigPrimerMensaje => ({
   telefonosPrueba: (r?.telefonos_prueba as string[] | null) ?? [],
 });
 
-/** Si ya corrió hoy la actualización de la base (o el grupo no la usa, y entonces no hay que esperarla). */
+/**
+ * Si ya no hay que esperar la actualización de la base de hoy: ya corrió, el grupo no la usa, o lleva tanto sin correr
+ * que no va a llegar (entonces sale a su hora con la base que hay).
+ */
 async function baseActualizadaHoy(sucursalId: string): Promise<boolean> {
   const { rows } = await getPool().query(
     `SELECT coalesce((SELECT sync_bigquery FROM crm_config WHERE sucursal_id = $1), false) AS usa,
-            EXISTS (SELECT 1 FROM crm_sync_corridas
-                     WHERE sucursal_id = $1 AND modo = 'real' AND estado = 'ok'
-                       AND (creado_en AT TIME ZONE '${ZONA_ENVIOS}')::date = (now() AT TIME ZONE '${ZONA_ENVIOS}')::date) AS hoy`,
+            u.creado_en IS NOT NULL AND (u.creado_en AT TIME ZONE '${ZONA_ENVIOS}')::date = (now() AT TIME ZONE '${ZONA_ENVIOS}')::date AS hoy,
+            extract(epoch FROM now() - u.creado_en) / 3600 AS horas
+       FROM (SELECT max(creado_en) AS creado_en FROM crm_sync_corridas
+              WHERE sucursal_id = $1 AND modo = 'real' AND estado = 'ok') u`,
     [sucursalId],
   );
-  return rows[0]?.usa !== true || rows[0]?.hoy === true;
+  const r = rows[0];
+  return !hayQueEsperarBase({
+    usaActualizacion: r?.usa === true,
+    actualizadaHoy: r?.hoy === true,
+    horasDesdeUltima: r?.horas === null || r?.horas === undefined ? null : Number(r.horas),
+  });
 }
 
 /** Para la pantalla: cada campaña con su configuración, sus plantillas posibles, cuántos esperan y cómo le fue la última vez. */

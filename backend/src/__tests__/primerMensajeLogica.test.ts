@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { proximoEnvio, puedeReintentar, tocaCorrer, validarConfig, type ConfigPrimerMensaje } from "../lib/primerMensajeLogica.js";
+import { hayQueEsperarBase, proximoEnvio, puedeReintentar, tocaCorrer, validarConfig, type ConfigPrimerMensaje } from "../lib/primerMensajeLogica.js";
 
 // 2026-10-12 es lunes; 2026-10-18, domingo.
 const cfg: ConfigPrimerMensaje = { activa: true, plantillaId: "p1", diasSemana: [1, 2, 3, 4, 5, 6], hora: "10:30", telefonosPrueba: [] };
@@ -32,6 +32,19 @@ describe("cuándo corre el primer mensaje", () => {
 
   it("48 horas puede correr toda la semana si se marcan los 7 días", () => {
     expect(tocaCorrer({ ...cfg, diasSemana: [1, 2, 3, 4, 5, 6, 7] }, a("2026-10-18", "12:00"), listo)).toEqual({ toca: true });
+  });
+});
+
+describe("esperar la base del día", () => {
+  it("espera solo si la base se actualiza con normalidad y hoy todavía no", () => {
+    expect(hayQueEsperarBase({ usaActualizacion: true, actualizadaHoy: false, horasDesdeUltima: 20 })).toBe(true);
+    expect(hayQueEsperarBase({ usaActualizacion: true, actualizadaHoy: true, horasDesdeUltima: 2 })).toBe(false);
+  });
+
+  it("no espera si el grupo no la usa, o si lleva más de 36 horas sin actualizarse (no va a llegar)", () => {
+    expect(hayQueEsperarBase({ usaActualizacion: false, actualizadaHoy: false, horasDesdeUltima: null })).toBe(false);
+    expect(hayQueEsperarBase({ usaActualizacion: true, actualizadaHoy: false, horasDesdeUltima: 116 })).toBe(false);
+    expect(hayQueEsperarBase({ usaActualizacion: true, actualizadaHoy: false, horasDesdeUltima: null })).toBe(false);
   });
 });
 
