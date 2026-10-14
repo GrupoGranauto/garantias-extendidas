@@ -86,7 +86,7 @@ export default function HistorialMasivos({ sucursalId }: { sucursalId: string })
               <tr className="masivos-fila" onClick={() => setAbierto(abierto === m.id ? null : m.id)} aria-expanded={abierto === m.id}>
                 <td>{cuandoMasivo(m.creado_en)}</td>
                 <td>{m.plantilla_nombre}</td>
-                <td>{m.creado_por ?? "—"}</td>
+                <td>{m.automatico ? `Automático · ${m.campana_etiqueta ?? "primer mensaje"}` : (m.creado_por ?? "—")}</td>
                 <td>
                   {ESTADO_MASIVO[m.estado]}
                   {m.estado === "enviando" && m.pendientes > 0 ? ` (${m.pendientes} en cola)` : ""}
@@ -104,6 +104,13 @@ export default function HistorialMasivos({ sucursalId }: { sucursalId: string })
               {abierto === m.id && (
                 <tr className="masivos-detalle">
                   <td colSpan={9}>
+                    {m.nota && <Alerta tipo="error">No se pudo enviar: {m.nota}</Alerta>}
+                    {(m.omitidos_resumen ?? []).length > 0 && (
+                      <p className="masivos-resumen">
+                        Omitidos: {(m.omitidos_resumen ?? []).map((o) => `${o.n.toLocaleString("es-MX")} (${o.texto})`).join(" · ")}. Se revisan otra
+                        vez el siguiente día permitido.
+                      </p>
+                    )}
                     {!detalle ? (
                       <Cargador />
                     ) : (

@@ -22,6 +22,7 @@ import {
   type Destinatario,
   type ReglasPlantilla,
 } from "./masivosLogica.js";
+import { puedeReintentar } from "./primerMensajeLogica.js";
 
 /**
  * Masivos manuales de WhatsApp. El admin del grupo elige filas en la Base de Datos y una plantilla aprobada:
@@ -348,17 +349,125 @@ export async function crearMasivo(sucursalId: string, ids: string[], plantillaId
   }
 }
 
+/**
+ * El masivo automático del primer mensaje de una campaña: uno por día (si ya existe, no hace nada). Toma a los leads con su
+ * paso de esa campaña abierto y sin primer mensaje, más los que Meta frenó por el límite de marketing un día anterior (un solo
+ * reintento), y les aplica las mismas reglas que a un masivo manual. Solo quien sí lo recibe queda en cola, ligado a su paso;
+ * a los omitidos no se les marca (se revisan otra vez el siguiente día permitido) y queda su resumen en el masivo.
+ */
+export async function crearMasivoAutomatico(sucursalId: string, campana: string, plantillaId: string, fecha: string, soloTelefonos: string[] = []) {
+  const cliente = await getPool().connect();
+  try {
+    await cliente.query("BEGIN");
+    // El mismo candado que los masivos manuales: nadie esquiva la regla de un mensaje por teléfono al día.
+    await cliente.query(`SELECT pg_advisory_xact_lock(hashtext('masivo:' || $1))`, [sucursalId]);
+    const { rows: pl } = await cliente.query(
+      `SELECT coalesce(nombre, nombre_tecnico) AS nombre FROM whatsapp_plantillas WHERE id = $1 AND sucursal_id = $2`,
+      [plantillaId, sucursalId],
+    );
+    const { rows: nuevo } = await cliente.query(
+      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, automatico, campana, fecha_local)
+       VALUES ($1, $2, $3, true, $4, $5::date) ON CONFLICT DO NOTHING RETURNING id`,
+      [sucursalId, plantillaId, (pl[0]?.nombre as string | undefined) ?? "Plantilla", campana, fecha],
+    );
+    if (!nuevo[0]) {
+      await cliente.query("ROLLBACK");
+      return { creado: false as const };
+    }
+    const masivoId = nuevo[0].id as string;
+
+    // El último primer mensaje de cada paso decide: ninguno, o uno que Meta no entregó (se reintenta si se puede).
+    const { rows: pasos } = await cliente.query(
+      `SELECT o.id AS oportunidad_id, p.id AS paso_id, pm.estado AS pm_estado, pm.error_codigo AS pm_codigo, pm.fecha::text AS pm_fecha
+         FROM crm_oportunidad_campanas p
+         JOIN crm_oportunidades o ON o.id = p.oportunidad_id AND o.estado = 'abierta'
+         JOIN crm_contactos ct ON ct.id = o.contacto_id
+         LEFT JOIN LATERAL (
+           SELECT e.estado, e.error_codigo, e.primer_mensaje_intento,
+                  (coalesce(e.enviado_en, e.creado_en) AT TIME ZONE '${ZONA_ENVIOS}')::date AS fecha
+             FROM crm_envios e
+            WHERE e.campana_id = p.id AND e.primer_mensaje_intento IS NOT NULL
+            ORDER BY e.primer_mensaje_intento DESC
+            LIMIT 1) pm ON true
+        WHERE p.sucursal_id = $1 AND p.campana = $2 AND p.cerrada_en IS NULL
+          -- Modo prueba: solo los teléfonos de la lista.
+          AND (cardinality($3::text[]) = 0 OR right(regexp_replace(coalesce(ct.telefono, ''), '\\D', '', 'g'), 10) = ANY($3::text[]))
+          -- Si en esta campaña ya recibió (o tiene en cola) cualquier mensaje, ya no es «primer» mensaje.
+          AND NOT EXISTS (SELECT 1 FROM crm_envios x WHERE x.campana_id = p.id AND x.estado IN ('pendiente', 'enviado', 'entregado', 'leido'))
+          AND (pm.estado IS NULL OR (pm.primer_mensaje_intento = 1 AND pm.estado = 'fallido'))
+        ORDER BY p.abierta_en
+        LIMIT ${MAX_DESTINATARIOS}`,
+      [sucursalId, campana, soloTelefonos],
+    );
+    const candidatos = pasos
+      .filter((c) => !c.pm_estado || puedeReintentar({ estado: c.pm_estado, errorCodigo: c.pm_codigo, fecha: c.pm_fecha }, fecha))
+      .map((c) => ({ oportunidadId: c.oportunidad_id as string, pasoId: c.paso_id as string, intento: c.pm_estado ? 2 : 1 }));
+
+    let enviar = 0;
+    let omitidos: { motivo: string; texto: string; n: number }[] = [];
+    let nota: string | null = null;
+    if (candidatos.length > 0) {
+      const p = await preparar(cliente, sucursalId, candidatos.map((c) => c.oportunidadId), plantillaId);
+      if (!p.ok) {
+        nota = p.error;
+      } else {
+        omitidos = resumen(p.valor).omitidos;
+        const porLead = new Map(candidatos.map((c) => [c.oportunidadId, c]));
+        const filas = p.valor.filas
+          .map((f, i) => ({ f, motivo: p.valor.destinatarios[i].motivo }))
+          .filter((x) => !x.motivo)
+          .map(({ f }) => ({
+            oportunidad_id: f.id,
+            campana: f.campana,
+            parametros: f.parametros,
+            paso_id: porLead.get(f.id)!.pasoId,
+            intento: porLead.get(f.id)!.intento,
+          }));
+        if (filas.length > 0) {
+          const ins = await cliente.query(
+            `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, masivo_id, parametros,
+                                     campana_id, primer_mensaje_intento)
+             SELECT $1, r.oportunidad_id, r.campana, $2, now(), 'pendiente', $3, r.parametros, r.paso_id, r.intento
+               FROM jsonb_to_recordset($4::jsonb) AS r(oportunidad_id uuid, campana text, parametros jsonb, paso_id uuid, intento smallint)
+             ON CONFLICT DO NOTHING`,
+            [sucursalId, plantillaId, masivoId, JSON.stringify(filas)],
+          );
+          enviar = ins.rowCount ?? 0;
+        }
+      }
+    }
+
+    await cliente.query(
+      `UPDATE crm_masivos
+          SET omitidos_resumen = $2::jsonb, nota = $3,
+              estado = CASE WHEN $4::int = 0 THEN 'terminado' ELSE estado END,
+              terminado_en = CASE WHEN $4::int = 0 THEN now() ELSE terminado_en END
+        WHERE id = $1`,
+      [masivoId, JSON.stringify(omitidos), nota, enviar],
+    );
+    await cliente.query("COMMIT");
+    return { creado: true as const, masivoId, enviar, omitidos: omitidos.reduce((n, o) => n + o.n, 0), nota };
+  } catch (err) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    cliente.release();
+  }
+}
+
 /** Los masivos del grupo, del más reciente al más viejo, con cómo va cada uno. */
 export async function listarMasivos(sucursalId: string, limite = 30) {
   const { rows } = await getPool().query(
     `SELECT m.id, m.plantilla_nombre, m.estado, m.creado_en, m.terminado_en, u.nombre AS creado_por,
+            m.automatico, m.campana, m.nota, coalesce(m.omitidos_resumen, '[]'::jsonb) AS omitidos_resumen,
             count(e.id)::int AS total,
             count(e.id) FILTER (WHERE e.estado = 'pendiente')::int AS pendientes,
             count(e.id) FILTER (WHERE e.estado IN ('enviado', 'entregado', 'leido'))::int AS enviados,
             count(e.id) FILTER (WHERE e.estado IN ('entregado', 'leido'))::int AS entregados,
             count(e.id) FILTER (WHERE e.estado = 'leido')::int AS leidos,
             count(e.id) FILTER (WHERE e.estado = 'fallido')::int AS fallidos,
-            count(e.id) FILTER (WHERE e.estado = 'omitido')::int AS omitidos,
+            count(e.id) FILTER (WHERE e.estado = 'omitido')::int
+              + coalesce((SELECT sum((x->>'n')::int) FROM jsonb_array_elements(m.omitidos_resumen) x), 0)::int AS omitidos,
             min(e.programado_para) FILTER (WHERE e.estado = 'pendiente') AS proximo
        FROM crm_masivos m
        LEFT JOIN usuarios u ON u.id = m.creado_por
@@ -369,7 +478,7 @@ export async function listarMasivos(sucursalId: string, limite = 30) {
       LIMIT $2`,
     [sucursalId, limite],
   );
-  return rows;
+  return rows.map((r) => ({ ...r, campana_etiqueta: r.campana ? etiquetaCampana(r.campana as string) : null }));
 }
 
 /** Cada fila del masivo: a quién, en qué quedó y por qué no salió, si no salió. */
@@ -576,6 +685,7 @@ async function procesarUno(): Promise<boolean> {
       enviado = { waMessageId: r.id, conversacionId };
     } catch (err) {
       const mensaje = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+      const codigo = err instanceof ErrorEnvioMeta ? err.codigo : null;
       const intentos = (e.intentos as number) + 1;
       const resultado = err instanceof ErrorEnvioMeta ? err.resultado : "reintentar";
       if (resultado === "incierto") {
@@ -585,7 +695,12 @@ async function procesarUno(): Promise<boolean> {
           `${mensaje} No se confirmó el envío; no se reintenta para no mandar el mensaje dos veces.`.slice(0, 300),
         ]);
       } else if (resultado === "definitivo" || intentos >= MAX_INTENTOS) {
-        await pool.query(`UPDATE crm_envios SET estado = 'fallido', intentos = $2, error = $3 WHERE id = $1`, [e.id, intentos, mensaje]);
+        await pool.query(`UPDATE crm_envios SET estado = 'fallido', intentos = $2, error = $3, error_codigo = $4 WHERE id = $1`, [
+          e.id,
+          intentos,
+          mensaje,
+          codigo,
+        ]);
       } else {
         await pool.query(
           `UPDATE crm_envios SET intentos = $2, error = $3, motivo = 'reintento', programado_para = now() + interval '5 minutes' WHERE id = $1`,

@@ -910,12 +910,17 @@ export async function despacharEnvios(presupuestoMs = 45_000, maximo = 120): Pro
 const RANGO_SQL = `(CASE %s WHEN 'enviado' THEN 1 WHEN 'entregado' THEN 2 WHEN 'leido' THEN 3 WHEN 'fallido' THEN 4 ELSE 0 END)`;
 
 /** Lo llama el webhook de Meta: pasa a entregado/leído/fallido el envío que corresponda, sin retroceder. */
-export async function registrarEstadoEnvio(waMessageId: string, estado: "enviado" | "entregado" | "leido" | "fallido", error?: string | null): Promise<void> {
+export async function registrarEstadoEnvio(
+  waMessageId: string,
+  estado: "enviado" | "entregado" | "leido" | "fallido",
+  error?: string | null,
+  codigo?: number | null,
+): Promise<void> {
   await getPool().query(
-    `UPDATE crm_envios SET estado = $2, error = coalesce($3, error)
+    `UPDATE crm_envios SET estado = $2, error = coalesce($3, error), error_codigo = coalesce($4, error_codigo)
       WHERE wa_message_id = $1 AND estado IN ('enviado', 'entregado', 'leido')
         AND ${RANGO_SQL.replace("%s", "estado")} < ${RANGO_SQL.replace("%s", "$2")}`,
-    [waMessageId, estado, error ?? null],
+    [waMessageId, estado, error ?? null, codigo ?? null],
   );
 }
 

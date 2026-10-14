@@ -13,6 +13,7 @@ import {
   revisarMasivo,
 } from "../lib/masivos.js";
 import { MAX_DESTINATARIOS } from "../lib/masivosLogica.js";
+import { guardarPrimerMensaje, leerPrimerMensaje } from "../lib/primerMensaje.js";
 
 /** Masivos manuales de WhatsApp: solo el admin del grupo los ve y los manda. */
 export const crmMasivosRouter = Router();
@@ -119,6 +120,41 @@ crmMasivosRouter.post("/sucursales/:id/crm/masivos", async (req, res, next) => {
       return;
     }
     res.status(201).json(r.valor);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Primer mensaje automático por campaña: su configuración, cuántos esperan y cómo le fue la última vez. */
+crmMasivosRouter.get("/sucursales/:id/crm/masivos/primer-mensaje", async (req, res, next) => {
+  try {
+    res.json(await leerPrimerMensaje(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const primerMensajeSchema = z.object({
+  activa: z.boolean(),
+  plantilla_id: z.string().uuid().nullable(),
+  dias_semana: z.array(z.number().int().min(1).max(7)).max(7),
+  hora: z.string().regex(/^\d{2}:\d{2}$/, "La hora no es válida."),
+  telefonos_prueba: z.array(z.string().trim().max(20)).max(10).default([]),
+});
+
+crmMasivosRouter.put("/sucursales/:id/crm/masivos/primer-mensaje/:campana", async (req, res, next) => {
+  const parsed = primerMensajeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." });
+    return;
+  }
+  try {
+    const r = await guardarPrimerMensaje(req.params.id, req.params.campana, parsed.data, req.usuario?.id ?? null);
+    if (!r.ok) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    res.json(await leerPrimerMensaje(req.params.id));
   } catch (err) {
     next(err);
   }

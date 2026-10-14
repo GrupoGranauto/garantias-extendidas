@@ -435,6 +435,7 @@ async function procesarActualizacionEstado(estado: EstadoMensaje) {
       estado.id,
       MAPA_ESTADO[estado.status] as "enviado" | "entregado" | "leido" | "fallido",
       motivo,
+      falla?.code ?? null,
     );
   } catch {
     console.error("[campanas] no se pudo actualizar el estado del envío");

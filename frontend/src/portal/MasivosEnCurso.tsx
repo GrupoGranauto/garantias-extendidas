@@ -18,6 +18,11 @@ export type Masivo = {
   fallidos: number;
   omitidos: number;
   proximo: string | null;
+  /** Primer mensaje automático de una campaña (lo arma el servidor, no una persona). */
+  automatico?: boolean;
+  campana_etiqueta?: string | null;
+  nota?: string | null;
+  omitidos_resumen?: { motivo: string; texto: string; n: number }[];
 };
 
 export const cuandoMasivo = (v: string | null) =>
