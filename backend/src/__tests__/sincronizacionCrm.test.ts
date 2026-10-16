@@ -107,6 +107,7 @@ describe("clasificarCierre", () => {
     expect(clasificarCierre(maestra({ ...fuera, motivo_no_elegible: "BAJA", es_contactable: false }))).toBe("NO_CONTACTABLE_FUENTE");
     expect(clasificarCierre(maestra({ ...fuera, motivo_no_elegible: "NUMERO_EQUIVOCADO" }))).toBe("NO_CONTACTABLE_FUENTE");
     expect(clasificarCierre(maestra({ ...fuera, motivo_no_elegible: "FUERA_DE_VENTANA" }))).toBe("FUERA_DE_VENTANA");
+    expect(clasificarCierre(maestra({ ...fuera, motivo_no_elegible: "GE_DECLARADA" }))).toBe("YA_TIENE_GE");
   });
   it("la venta del BDC no se cuenta como «ya tiene GE»; la GE vendida fuera gana sobre un descarte", () => {
     expect(clasificarCierre(maestra({ tiene_ge: true, motivo_no_elegible: "VENDIDA_BDC" }))).toBe("VENDIDA_BDC");

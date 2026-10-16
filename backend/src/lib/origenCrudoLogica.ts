@@ -15,7 +15,7 @@ const texto = (v: unknown): string | null => {
 };
 
 /** Motivos de la maestra para lo que ya se resolvió en la web (llegan cuando la maestra cruza el envío nocturno). */
-const MOTIVOS_RESUELTOS_EN_WEB = new Set(["VENDIDA_BDC", "DESCARTADO", "BAJA", "NUMERO_EQUIVOCADO"]);
+const MOTIVOS_RESUELTOS_EN_WEB = new Set(["VENDIDA_BDC", "GE_DECLARADA", "DESCARTADO", "BAJA", "NUMERO_EQUIVOCADO"]);
 
 /** ¿La fila viene en formato crudo (sin la campaña calculada por BigQuery)? */
 export const esFilaCruda = (m: Fila): boolean => !("campania_actual" in m) && ("nombre" in m || "apellido_paterno" in m || "telefono" in m);

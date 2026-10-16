@@ -205,14 +205,15 @@ export function oportunidadWeb(
 /**
  * Por qué una oportunidad dejó de estar activa, según el estado actual de su VIN en la maestra. Cuando la maestra cruza
  * el envío nocturno de la web, su motivo manda: VENDIDA_BDC (la vendió el BDC desde la web; con eso `tiene_ge` queda solo
- * para la GE vendida fuera), DESCARTADO, y BAJA o NUMERO_EQUIVOCADO, que son no contactables. Con la maestra de antes
+ * para la GE vendida fuera), GE_DECLARADA (el cliente dijo tenerla; cuenta como YA_TIENE_GE), DESCARTADO, y BAJA o
+ * NUMERO_EQUIVOCADO, que son no contactables. Con la maestra de antes
  * (sin esos motivos) se decide por sus columnas, como siempre.
  */
 export function clasificarCierre(m: FilaMaestra | undefined): Exclude<EstadoCartera, "ACTIVA"> {
   if (!m) return "NO_EN_MAESTRA";
   const motivo = texto(m.motivo_no_elegible)?.toUpperCase();
   if (motivo === "VENDIDA_BDC") return "VENDIDA_BDC";
-  if (m.tiene_ge === true) return "YA_TIENE_GE";
+  if (m.tiene_ge === true || motivo === "GE_DECLARADA") return "YA_TIENE_GE";
   if (motivo === "DESCARTADO") return "DESCARTADO";
   if (motivo === "BAJA" || motivo === "NUMERO_EQUIVOCADO") return "NO_CONTACTABLE_FUENTE";
   if (m.es_contactable === false) return "NO_CONTACTABLE_FUENTE";
@@ -298,7 +299,8 @@ async function cargarLeads(sucursalId: string): Promise<{ leads: LeadExistente[]
             (SELECT s.motivo FROM crm_supresiones s
               WHERE s.sucursal_id = o.sucursal_id AND s.alcance = 'vin' AND s.valor = v.vin AND s.revocada_en IS NULL
                 AND (s.vigente_hasta IS NULL OR s.vigente_hasta > now())
-              ORDER BY s.creado_en LIMIT 1) AS descarte_vin
+              ORDER BY s.creado_en LIMIT 1) AS descarte_vin,
+            coalesce(o.declara_ge, false) AS declara_ge
        FROM crm_oportunidades o
        JOIN crm_vehiculos v ON v.id = o.vehiculo_id
        JOIN crm_contactos c ON c.id = o.contacto_id
@@ -330,6 +332,7 @@ async function cargarLeads(sucursalId: string): Promise<{ leads: LeadExistente[]
       pagado: l.pagado === true,
       contratoCancelado: l.contrato_cancelado === true,
       descarteVin: (l.descarte_vin as string | null) ?? null,
+      declaraGe: l.declara_ge === true,
       pasoAbierto: porLead.get(l.id as string)?.abierto ?? null,
       pasosCerrados: porLead.get(l.id as string)?.cerrados ?? [],
     })),

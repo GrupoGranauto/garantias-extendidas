@@ -47,14 +47,17 @@ export type LeadExistente = {
    * Sin el dato (pruebas viejas), se deduce de `supresion`.
    */
   descarteVin?: string | null;
+  /** El cliente declaró tener GE comprada fuera («Cliente declara tener GE»): sale de cartera (decisión del 16-oct-2026). */
+  declaraGe?: boolean;
   pasoAbierto: PasoExistente | null;
   pasosCerrados: PasoExistente[];
 };
 
 /**
  * Lead terminal: no vuelve a «Por contactar» al entrar a otra campaña ni recupera estado, etapa, resultado o motivo de
- * un paso que se reabre. Es el vendido, el pagado (aunque no esté en Vendido), el dado de baja y el que tiene una
- * supresión vigente (descarte del vehículo, baja o número equivocado).
+ * un paso que se reabre. Es el vendido, el pagado (aunque no esté en Vendido), el dado de baja, el que tiene una
+ * supresión vigente (descarte del vehículo, baja o número equivocado) y el que declaró tener GE comprada fuera (decisión
+ * del 16-oct-2026: sale de cartera; si el BDC quita la marca, vuelve a trabajarse en la siguiente campaña).
  *
  * El «No contactable» por sí solo no lo es: el número equivocado es del teléfono (D12) y llega en `supresion` mientras
  * el lead siga con ese teléfono. Si el teléfono cambió y el nuevo no tiene supresión, el lead se vuelve a trabajar en la
@@ -62,7 +65,9 @@ export type LeadExistente = {
  * contactable»): es terminal por su `supresion`, y en cuanto el BDC corrige el lead donde se capturó, deja de serlo.
  */
 export function esTerminal(l: LeadExistente): boolean {
-  return l.estado === "ganada" || l.estado_contacto === "baja" || l.supresion != null || l.pagado === true;
+  return (
+    l.estado === "ganada" || l.estado_contacto === "baja" || l.supresion != null || l.pagado === true || l.declaraGe === true
+  );
 }
 
 /** Motivos de supresión que son descartes del vehículo (alcance VIN); los demás (baja, número equivocado) son del teléfono. */
@@ -75,13 +80,15 @@ const DESCARTES_VEHICULO = new Set(["ya_no_tiene_auto", "flotilla", "uso_no_eleg
  *     maestra ya lo vea con GE: esa venta cuenta para el BDC, no como «ya tenía GE». Es la misma regla que manda el envío
  *     nocturno (esVentaBdc).
  *  2. La maestra dice que ya tiene GE (vendida fuera) o que lo vendió el BDC → lo que diga.
- *  3. El vehículo tiene un descarte vigente en la web → DESCARTADO.
- *  4. Lo demás, como lo clasifique la maestra.
+ *  3. El cliente declaró tener GE comprada fuera → YA_TIENE_GE.
+ *  4. El vehículo tiene un descarte vigente en la web → DESCARTADO.
+ *  5. Lo demás, como lo clasifique la maestra.
  */
 export function estadoDeCierre(m: FilaMaestra | undefined, lead: LeadExistente): Exclude<EstadoCartera, "ACTIVA"> {
   if ((lead.estado === "ganada" || lead.pagado === true) && lead.contratoCancelado !== true) return "VENDIDA_BDC";
   const deMaestra = clasificarCierre(m);
   if (deMaestra === "YA_TIENE_GE" || deMaestra === "VENDIDA_BDC") return deMaestra;
+  if (lead.declaraGe === true) return "YA_TIENE_GE";
   const descarte = lead.descarteVin !== undefined ? lead.descarteVin : lead.supresion;
   if (descarte != null && DESCARTES_VEHICULO.has(descarte)) return "DESCARTADO";
   return deMaestra;

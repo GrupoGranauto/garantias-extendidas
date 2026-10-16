@@ -240,6 +240,18 @@ describe("planificarLeads", () => {
       expect(estadoDeCierre(fueraDeCampana(), lead({ supresion: "baja", descarteVin: "flotilla" }))).toBe("DESCARTADO");
       expect(estadoDeCierre(fueraDeCampana(), lead({ supresion: "flotilla", descarteVin: null }))).toBe("FUERA_DE_VENTANA");
     });
+    it("quien declaró tener GE comprada fuera sale como YA_TIENE_GE; la venta del BDC le gana", () => {
+      expect(estadoDeCierre(fueraDeCampana(), lead({ estado: "perdida", declaraGe: true }))).toBe("YA_TIENE_GE");
+      expect(estadoDeCierre(undefined, lead({ estado: "perdida", declaraGe: true }))).toBe("YA_TIENE_GE");
+      expect(estadoDeCierre(fueraDeCampana(), lead({ estado: "perdida", declaraGe: true, descarteVin: "flotilla" }))).toBe("YA_TIENE_GE");
+      expect(estadoDeCierre(fueraDeCampana(), lead({ estado: "ganada", declaraGe: true }))).toBe("VENDIDA_BDC");
+    });
+    it("quien declaró GE es terminal: al entrar a otra campaña no vuelve a «Por contactar»", () => {
+      const declarado = lead({ estado: "perdida", declaraGe: true });
+      expect(esTerminal(declarado)).toBe(true);
+      expect(planificarLeads([hoy28m()], [declarado], ROSTER).pasosNuevos).toEqual([expect.objectContaining({ reiniciar: false })]);
+      expect(esTerminal(lead({ estado: "perdida", declaraGe: false }))).toBe(false);
+    });
     it("sin venta ni descarte en la web, lo que diga la maestra", () => {
       expect(estadoDeCierre(fueraDeCampana({ motivo_no_elegible: "VENDIDA_BDC" }), lead())).toBe("VENDIDA_BDC");
       expect(estadoDeCierre(fueraDeCampana({ motivo_no_elegible: "DESCARTADO" }), lead())).toBe("DESCARTADO");

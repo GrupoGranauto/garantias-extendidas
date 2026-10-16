@@ -58,7 +58,7 @@ describe("campaña calculada por la web", () => {
   });
 
   it("no entra lo que la web ya resolvió (venta del BDC, descarte, baja, número equivocado) aunque no cuente como «tiene GE»", () => {
-    for (const motivo of ["VENDIDA_BDC", "DESCARTADO", "BAJA", "NUMERO_EQUIVOCADO"]) {
+    for (const motivo of ["VENDIDA_BDC", "GE_DECLARADA", "DESCARTADO", "BAJA", "NUMERO_EQUIVOCADO"]) {
       expect(campanaDeVehiculo(cruda({ fecha_factura: "2026-05-15", motivo_no_elegible: motivo }), DEFS, HOY, undefined), motivo).toBeNull();
     }
     expect(campanaDeVehiculo(cruda({ fecha_factura: "2026-05-15", motivo_no_elegible: "FUERA_DE_VENTANA" }), DEFS, HOY, undefined)?.campana).toBe("5M");
