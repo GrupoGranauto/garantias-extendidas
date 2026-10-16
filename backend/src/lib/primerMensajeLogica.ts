@@ -38,6 +38,21 @@ export const CODIGO_LIMITE_MARKETING = 131049;
 
 export type Espera = "apagada" | "ya_corrio" | "dia" | "hora" | "horario" | "base";
 
+/**
+ * Si la campaña ya corrió hoy con su configuración actual: hay un masivo automático de hoy armado después del último
+ * guardado de la configuración. Si se guardó después (por ejemplo, otra hora), puede volver a correr ese mismo día; solo
+ * le llega a quien todavía no recibió el primer mensaje de su paso.
+ */
+export function corrioHoyConEstaConfig(
+  ultima: { fecha: string; creadoEn: string | Date } | null,
+  hoy: string,
+  configGuardadaEn: string | Date | null,
+): boolean {
+  if (!ultima || ultima.fecha !== hoy) return false;
+  if (!configGuardadaEn) return true;
+  return new Date(ultima.creadoEn).getTime() >= new Date(configGuardadaEn).getTime();
+}
+
 /** Si hoy, a esta hora, le toca armar el masivo del primer mensaje; si no, qué está esperando. */
 export function tocaCorrer(
   cfg: ConfigPrimerMensaje,

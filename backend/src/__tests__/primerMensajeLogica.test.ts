@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { hayQueEsperarBase, proximoEnvio, puedeReintentar, tocaCorrer, validarConfig, type ConfigPrimerMensaje } from "../lib/primerMensajeLogica.js";
+import {
+  corrioHoyConEstaConfig,
+  hayQueEsperarBase,
+  proximoEnvio,
+  puedeReintentar,
+  tocaCorrer,
+  validarConfig,
+  type ConfigPrimerMensaje,
+} from "../lib/primerMensajeLogica.js";
+
+describe("corrioHoyConEstaConfig", () => {
+  const corrida = { fecha: "2026-10-16", creadoEn: "2026-10-16T20:21:12Z" };
+  it("si hoy ya corrió y la configuración no ha cambiado desde entonces, ya no vuelve a correr", () => {
+    expect(corrioHoyConEstaConfig(corrida, "2026-10-16", "2026-10-16T16:49:00Z")).toBe(true);
+  });
+  it("si se guardó la configuración después (por ejemplo, otra hora), vuelve a tocar hoy", () => {
+    expect(corrioHoyConEstaConfig(corrida, "2026-10-16", "2026-10-16T20:35:00Z")).toBe(false);
+  });
+  it("si no corrió hoy, no cuenta", () => {
+    expect(corrioHoyConEstaConfig(null, "2026-10-16", null)).toBe(false);
+    expect(corrioHoyConEstaConfig({ ...corrida, fecha: "2026-10-15" }, "2026-10-16", null)).toBe(false);
+  });
+});
 
 // 2026-10-12 es lunes; 2026-10-18, domingo.
 const cfg: ConfigPrimerMensaje = { activa: true, plantillaId: "p1", diasSemana: [1, 2, 3, 4, 5, 6], hora: "10:30", telefonosPrueba: [] };

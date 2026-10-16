@@ -11,7 +11,15 @@ import {
   type Componentes,
   type Omitido,
 } from "./masivosLogica.js";
-import { HORA_SIN_BASE, hayQueEsperarBase, proximoEnvio, tocaCorrer, validarConfig, type ConfigPrimerMensaje } from "./primerMensajeLogica.js";
+import {
+  HORA_SIN_BASE,
+  corrioHoyConEstaConfig,
+  hayQueEsperarBase,
+  proximoEnvio,
+  tocaCorrer,
+  validarConfig,
+  type ConfigPrimerMensaje,
+} from "./primerMensajeLogica.js";
 
 /**
  * Primer mensaje automático por campaña. Lo único que sale solo: cada día permitido, a partir de su hora, el motor arma un
@@ -55,7 +63,7 @@ export async function leerPrimerMensaje(sucursalId: string) {
   const hoy = ahoraLocal();
   const [{ rows: cfgs }, { rows: plantillas }, { rows: pendientes }, { rows: ultimas }, base, { rows: porContactar }] = await Promise.all([
     pool.query(
-      `SELECT campana, activa, plantilla_id, dias_semana, hora::text AS hora, telefonos_prueba FROM crm_primer_mensaje_config WHERE sucursal_id = $1`,
+      `SELECT campana, activa, plantilla_id, dias_semana, hora::text AS hora, telefonos_prueba, actualizado_en FROM crm_primer_mensaje_config WHERE sucursal_id = $1`,
       [sucursalId],
     ),
     pool.query(
@@ -117,7 +125,12 @@ export async function leerPrimerMensaje(sucursalId: string) {
     campanas: campanas.map((campana) => {
       const cfg = aConfig(porCampana.get(campana));
       const ultima = ultimas.find((u) => u.campana === campana) ?? null;
-      const corrioHoy = ultima?.fecha === hoy.fecha;
+      // Ya corrió hoy con esta configuración; si se guardó después (otra hora, por ejemplo), vuelve a tocar hoy.
+      const corrioHoy = corrioHoyConEstaConfig(
+        ultima ? { fecha: ultima.fecha as string, creadoEn: ultima.creado_en as Date } : null,
+        hoy.fecha,
+        (porCampana.get(campana)?.actualizado_en as Date | undefined) ?? null,
+      );
       const t = tocaCorrer(cfg, hoy, { yaCorrioHoy: corrioHoy, baseActualizadaHoy: base });
       const omitidos = ultima ? juntarOmitidos(ultima.omitidos_resumen as Omitido[], ultima.omitidos_filas as { motivo: string; n: number }[]) : [];
       return {
@@ -207,15 +220,18 @@ export async function guardarPrimerMensaje(
 
 /**
  * Lo corre el motor cada minuto: para cada campaña encendida, si hoy le toca (día, hora, base del día) y todavía no corre,
- * arma su masivo del día. El índice único de crm_masivos garantiza uno por campaña y día aunque corran dos procesos.
+ * arma su masivo del día. Corre una vez por día y por configuración: si se guarda la configuración después de que ya corrió
+ * (otra hora, por ejemplo), vuelve a tocar ese día. El índice único de crm_masivos (campaña, día y versión de la
+ * configuración) garantiza que dos procesos no armen dos veces la misma corrida.
  */
 export async function programarPrimerosMensajes(): Promise<number> {
   const pool = getPool();
   const ahora = ahoraLocal();
   const { rows } = await pool.query(
     `SELECT c.sucursal_id, c.campana, c.activa, c.plantilla_id, c.dias_semana, c.hora::text AS hora, c.telefonos_prueba,
+            c.actualizado_en,
             EXISTS (SELECT 1 FROM crm_masivos m WHERE m.sucursal_id = c.sucursal_id AND m.automatico AND m.campana = c.campana
-                                                 AND m.fecha_local = $1::date) AS ya_corrio
+                                                 AND m.fecha_local = $1::date AND m.creado_en >= c.actualizado_en) AS ya_corrio
        FROM crm_primer_mensaje_config c
       WHERE c.activa AND c.plantilla_id IS NOT NULL`,
     [ahora.fecha],
@@ -227,7 +243,14 @@ export async function programarPrimerosMensajes(): Promise<number> {
     if (!bases.has(sucursalId)) bases.set(sucursalId, await baseActualizadaHoy(sucursalId));
     const t = tocaCorrer(aConfig(r), ahora, { yaCorrioHoy: r.ya_corrio === true, baseActualizadaHoy: bases.get(sucursalId)! });
     if (!t.toca) continue;
-    const res = await crearMasivoAutomatico(sucursalId, r.campana as string, r.plantilla_id as string, ahora.fecha, (r.telefonos_prueba as string[]) ?? []);
+    const res = await crearMasivoAutomatico(
+      sucursalId,
+      r.campana as string,
+      r.plantilla_id as string,
+      ahora.fecha,
+      (r.telefonos_prueba as string[]) ?? [],
+      (r.actualizado_en as Date | null) ?? null,
+    );
     if (res.creado) {
       armados++;
       console.log(

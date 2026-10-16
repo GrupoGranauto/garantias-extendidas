@@ -389,7 +389,15 @@ export async function crearMasivo(sucursalId: string, ids: string[], plantillaId
  * teléfono ya le llegó un mensaje de esa campaña (primer mensaje o masivo manual, de cualquier vehículo) queda marcado como
  * omitido y ligado a ese envío, para no revisarlo a diario.
  */
-export async function crearMasivoAutomatico(sucursalId: string, campana: string, plantillaId: string, fecha: string, soloTelefonos: string[] = []) {
+export async function crearMasivoAutomatico(
+  sucursalId: string,
+  campana: string,
+  plantillaId: string,
+  fecha: string,
+  soloTelefonos: string[] = [],
+  /** actualizado_en de la configuración con la que corre: una corrida por día y por configuración. */
+  configVersion: Date | string | null = null,
+) {
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
@@ -400,9 +408,9 @@ export async function crearMasivoAutomatico(sucursalId: string, campana: string,
       [plantillaId, sucursalId],
     );
     const { rows: nuevo } = await cliente.query(
-      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, automatico, campana, fecha_local)
-       VALUES ($1, $2, $3, true, $4, $5::date) ON CONFLICT DO NOTHING RETURNING id`,
-      [sucursalId, plantillaId, (pl[0]?.nombre as string | undefined) ?? "Plantilla", campana, fecha],
+      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, automatico, campana, fecha_local, config_version)
+       VALUES ($1, $2, $3, true, $4, $5::date, $6::timestamptz) ON CONFLICT DO NOTHING RETURNING id`,
+      [sucursalId, plantillaId, (pl[0]?.nombre as string | undefined) ?? "Plantilla", campana, fecha, configVersion],
     );
     if (!nuevo[0]) {
       await cliente.query("ROLLBACK");
