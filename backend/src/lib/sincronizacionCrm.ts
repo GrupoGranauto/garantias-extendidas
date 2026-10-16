@@ -19,6 +19,8 @@ import { DESTINO_DE_RESULTADO } from "./resultadoBdcLogica.js";
  *  - Un lead por VIN. Cada campaña en la que entra es un paso (VIN | campaña | inicio, el «ID Oportunidad» del Sheet)
  *    que nunca se borra; las reglas del ciclo diario están en cicloLeadLogica.ts.
  *  - La gestión manual (resultado, estado, contacto, comentarios, fechas, ejecutivo) no se sobrescribe jamás.
+ *  - Nunca libera una baja ni una supresión (número equivocado, descarte del vehículo): eso solo lo hace una persona al
+ *    corregir el lead (ver aplicarLeads).
  *  - Un lead nuevo arranca en la primera etapa, con el ejecutivo menos cargado del roster; después no cambia solo.
  *  - Con la maestra real solo se sincroniza contra la corrida de hoy (ge_cartera_refresh_runs).
  *  - Se planifica todo en memoria, se valida, y solo entonces se escribe (en una transacción).
@@ -237,6 +239,14 @@ const SQL_FOTO_PASO = `resultado_bdc = o.resultado_bdc, comentarios = o.comentar
                 estado_contacto = o.estado_contacto, gestion = jsonb_build_object('respuesta_titular', o.respuesta_titular, 'proximo_contacto_en', o.proximo_contacto_en, 'motivo_no_interes', o.motivo_no_interes, 'declara_ge', o.declara_ge, 'donde_obtuvo_ge', o.donde_obtuvo_ge, 'fecha_compra_ge', o.fecha_compra_ge, 'conserva_auto', o.conserva_auto, 'monto_cotizado', o.monto_cotizado, 'link_enviado_en', o.link_enviado_en, 'fecha_pago', o.fecha_pago, 'origen_venta', o.origen_venta, 'escalar_posventa', o.escalar_posventa, 'clasificacion_respuesta', o.clasificacion_respuesta, 'ultimo_contacto_efectivo_en', o.ultimo_contacto_efectivo_en, 'motivo_perdida_id', o.motivo_perdida_id)`;
 
 /**
+ * El lead ya tiene pago o compra capturados: fecha de pago, fecha de compra o contrato pagado (aunque no esté en Vendido).
+ * Misma regla que «pagado» en crm_motivo_no_enviar. Se usa con el lead como «o».
+ */
+const SQL_PAGADO = `(o.fecha_pago IS NOT NULL OR o.fecha_compra IS NOT NULL OR EXISTS (
+                SELECT 1 FROM crm_contratos ct WHERE ct.oportunidad_id = o.id
+                   AND ct.estado IN ('pago_confirmado', 'certificado_entregado', 'cobertura_iniciada')))`;
+
+/**
  * Guarda lo que hoy tiene el lead en la foto de su último paso cerrado. Para leads sin paso abierto: lo que el BDC
  * capturó fuera de ventana (el cliente llamó después) queda en la campaña a la que pertenece antes de que el ciclo
  * reinicie el lead o le restaure otro paso. Si ese último paso se cerró hoy, la foto queda igual.
@@ -259,9 +269,13 @@ async function guardarFotoUltimoPaso(cliente: Consulta, sucursalId: string, lead
 async function cargarLeads(sucursalId: string): Promise<{ leads: LeadExistente[]; roster: string[] }> {
   const pool = getPool();
   const { rows: leads } = await pool.query(
-    // Si la persona pidió no ser contactada (baja en el contacto), su lead cuenta como dado de baja: no se reinicia.
+    // Si la persona pidió no ser contactada (baja en el contacto), su lead cuenta como dado de baja: no se reinicia. Con
+    // la supresión vigente (por VIN o por el teléfono de su contacto actual, incluido el número equivocado) y el pago, el
+    // ciclo decide qué leads son terminales (esTerminal).
     `SELECT o.id, v.vin, o.ejecutivo, o.estado, o.estado_cartera,
-            CASE WHEN c.whatsapp_baja THEN 'baja' ELSE o.estado_contacto END AS estado_contacto
+            CASE WHEN c.whatsapp_baja THEN 'baja' ELSE o.estado_contacto END AS estado_contacto,
+            crm_supresion_terminal(o.id) AS supresion,
+            ${SQL_PAGADO} AS pagado
        FROM crm_oportunidades o
        JOIN crm_vehiculos v ON v.id = o.vehiculo_id
        JOIN crm_contactos c ON c.id = o.contacto_id
@@ -289,6 +303,8 @@ async function cargarLeads(sucursalId: string): Promise<{ leads: LeadExistente[]
       estado: l.estado as string,
       estado_contacto: l.estado_contacto as string,
       estado_cartera: l.estado_cartera as EstadoCartera,
+      supresion: (l.supresion as string | null) ?? null,
+      pagado: l.pagado === true,
       pasoAbierto: porLead.get(l.id as string)?.abierto ?? null,
       pasosCerrados: porLead.get(l.id as string)?.cerrados ?? [],
     })),
@@ -346,14 +362,20 @@ const resumenDe = (modo: ResumenSync["modo"], p: PlanLeads, totalLeads: number):
  * fallo de la fuente y no se escribe. Cerrar muchos pasos de golpe sí es normal: las
  * cohortes de 5M y 28M rotan cada mes.
  */
-function validarSensatez(plan: PlanLeads, leads: LeadExistente[], esPrueba = false): string | null {
-  // Una tabla de pruebas es chica a propósito: solo se exige que traiga algo activo.
-  if (esPrueba) return plan.activasFuente === 0 ? "La base de prueba no trae oportunidades activas; se aborta sin escribir." : null;
-  if (plan.filasFuente < 1000) return "La base de clientes devolvió muy pocas filas; se aborta sin escribir.";
-  if (plan.activasFuente === 0) return "La base de clientes no trae oportunidades activas; se aborta sin escribir.";
+export function validarSensatez(plan: PlanLeads, leads: LeadExistente[], esPrueba = false): string | null {
+  if (esPrueba) {
+    // Una tabla de pruebas es chica a propósito: no se le pide un mínimo de filas, pero sí que traiga algo activo.
+    if (plan.activasFuente === 0) return "La base de prueba no trae oportunidades activas; se aborta sin escribir.";
+  } else {
+    if (plan.filasFuente < 1000) return "La base de clientes devolvió muy pocas filas; se aborta sin escribir.";
+    if (plan.activasFuente === 0) return "La base de clientes no trae oportunidades activas; se aborta sin escribir.";
+  }
+  // También con una tabla de prueba: el 6-oct una corrida real con 4 filas de prueba cerró 1,697 pasos de la cartera.
   const activasHoy = leads.filter((l) => l.estado_cartera === "ACTIVA").length;
   if (activasHoy >= 50 && plan.activasFuente < activasHoy * 0.5) {
-    return "Las oportunidades activas de la base de clientes bajaron a menos de la mitad; se aborta sin escribir.";
+    return esPrueba
+      ? "La base de prueba trae menos de la mitad de las oportunidades activas que hay hoy; se aborta sin escribir."
+      : "Las oportunidades activas de la base de clientes bajaron a menos de la mitad; se aborta sin escribir.";
   }
   return null;
 }
@@ -409,6 +431,7 @@ export async function previsualizarCiclo(sucursalId: string, tabla: string = TAB
     leadsNuevosPorEjecutivo: contar(plan.leadsNuevos, (n) => n.ejecutivo ?? "SIN_ASIGNAR"),
     pasosNuevosPorCampana: contar(plan.pasosNuevos, (p) => p.datos.campana),
     reabiertosPorCampana: contar(plan.reabiertos, (r) => r.datos.campana),
+    reabiertosSinRestaurar: plan.reabiertos.filter((r) => !r.restaurar).length,
     carteraCambiada: plan.carteraCambiada.length,
   };
 }
@@ -418,7 +441,6 @@ export async function previsualizarCiclo(sucursalId: string, tabla: string = TAB
  * (modo "real") la sincronización de una sucursal.
  */
 export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Promise<ResumenSync> {
-  const modo = aplicar ? "real" : "simulacion";
   const { rows: habilitada } = await getPool().query(
     `SELECT sync_bigquery, bq_tabla_fuente, campanas_fuente FROM crm_config WHERE sucursal_id = $1`,
     [sucursalId],
@@ -434,12 +456,72 @@ export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Prom
   }
 
   const crudas = await leerMaestra(tabla);
+  return correrCiclo(sucursalId, crudas, {
+    aplicar,
+    esPrueba,
+    campanasFuente: (habilitada[0]?.campanas_fuente as string | null) ?? null,
+  });
+}
+
+/**
+ * El mismo ciclo que sincronizarCrm (planificar, validar y, si `aplicar`, escribir en una transacción) con filas dadas en
+ * memoria: no lee BigQuery ni revisa la frescura de la maestra. Es para probar la sincronización contra una sucursal de
+ * pruebas desde un script. Siempre valida en modo prueba (validarSensatez): las filas deben traer algo activo y no pueden
+ * dejar sin campaña a más de la mitad de la cartera activa. Se niega con una sucursal que se sincroniza a diario con la
+ * maestra real. Registra la corrida en la bitácora como cualquier otra, con la nota de que fue una prueba.
+ *
+ * Uso (script en backend/scripts, corrido con `npx tsx`, con SUPABASE_DB_URL en el .env):
+ *   import { sincronizarConFilas } from "../src/lib/sincronizacionCrm.js";
+ *   import { getPool } from "../src/lib/db.js";
+ *   const SUC_PRUEBAS = "<id de la sucursal de pruebas>";   // con crm_config, roster y embudo predeterminado
+ *   const dia1 = [{ vin: "3N1AB7AP0RY900001", cliente: "Prueba Uno", telefono_principal: "6620000001",
+ *                   es_contactable: true, tiene_ge: false, en_cartera_operativa: true, campania_actual: "5M",
+ *                   fecha_factura: "2026-05-15", fecha_inicio_5m: "2026-10-01", fecha_fin_5m: "2026-11-01" }];
+ *   console.log(await sincronizarConFilas(SUC_PRUEBAS, dia1, false));  // simulación: solo conteos
+ *   console.log(await sincronizarConFilas(SUC_PRUEBAS, dia1, true));   // escribe
+ *   await getPool().end();
+ * Las filas tienen la forma de la maestra; con filas del origen crudo (o campanas_fuente = 'web') la campaña la deciden las
+ * reglas de «Definir campañas» de esa sucursal. Para simular varios días, se llama una vez por día con las filas de cada
+ * día (p. ej. la misma fila con campania_actual = '28M' para un cambio de campaña).
+ */
+export async function sincronizarConFilas(sucursalId: string, filas: FilaMaestra[], aplicar: boolean): Promise<ResumenSync> {
+  const { rows: cfg } = await getPool().query(
+    `SELECT sync_bigquery, bq_tabla_fuente, campanas_fuente FROM crm_config WHERE sucursal_id = $1`,
+    [sucursalId],
+  );
+  if (!cfg[0]) throw new Error("La sucursal no tiene configuración del CRM.");
+  const tabla = (cfg[0].bq_tabla_fuente as string | null) ?? TABLA_MAESTRA;
+  if (cfg[0].sync_bigquery === true && tabla === TABLA_MAESTRA) {
+    throw new Error("Esta sucursal se sincroniza a diario con la base de clientes real; las pruebas con filas cargadas aparte van contra una sucursal de pruebas.");
+  }
+  return correrCiclo(sucursalId, filas, {
+    aplicar,
+    esPrueba: true,
+    campanasFuente: (cfg[0].campanas_fuente as string | null) ?? null,
+    nota: "Prueba con filas cargadas aparte.",
+  });
+}
+
+type OpcionesCiclo = {
+  aplicar: boolean;
+  /** Fuente de prueba: no se le pide un mínimo de filas (ver validarSensatez). */
+  esPrueba: boolean;
+  /** crm_config.campanas_fuente: con 'web' la campaña la deciden las reglas de «Definir campañas». */
+  campanasFuente: string | null;
+  /** Se antepone al mensaje de la corrida en la bitácora. */
+  nota?: string;
+};
+
+/** Planifica el ciclo del día con las filas ya leídas, lo valida y, si se pide, lo escribe. Registra la corrida. */
+async function correrCiclo(sucursalId: string, crudas: FilaMaestra[], o: OpcionesCiclo): Promise<ResumenSync> {
+  const modo = o.aplicar ? "real" : "simulacion";
+  const conNota = (m: string | null) => (o.nota ? [o.nota, m].filter(Boolean).join(" ") : m);
   const { leads, roster } = await cargarLeads(sucursalId);
 
   // ¿Quién decide la campaña? Por omisión, la maestra (campania_actual), igual que el Sheet. Un origen crudo (sin
   // campaña calculada) o la opción «la web manda» usan las reglas de «Definir campañas».
   const cruda = crudas.length > 0 && esFilaCruda(crudas[0]);
-  const web = cruda || (habilitada[0]?.campanas_fuente as string | null) === "web";
+  const web = cruda || o.campanasFuente === "web";
   const maestra = cruda ? crudas.map(adaptarFilaCruda) : crudas;
   let plan: PlanLeads;
   if (web) {
@@ -456,16 +538,16 @@ export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Prom
   const problema =
     plan.conflictos.length > 0
       ? "El plan tiene conflictos; no se escribe."
-      : validarSensatez(plan, leads, esPrueba) ??
+      : validarSensatez(plan, leads, o.esPrueba) ??
         (plan.leadsNuevos.length > 0 && roster.length === 0 ? "Hay leads nuevos pero el roster de ejecutivos está vacío." : null);
 
   if (problema) {
-    await registrarCorrida(sucursalId, resumen, "error", problema);
+    await registrarCorrida(sucursalId, resumen, "error", conNota(problema));
     throw Object.assign(new Error(problema), { resumen });
   }
 
-  if (!aplicar) {
-    await registrarCorrida(sucursalId, resumen, "ok", "Simulación: no se escribió nada.");
+  if (!o.aplicar) {
+    await registrarCorrida(sucursalId, resumen, "ok", conNota("Simulación: no se escribió nada."));
     return resumen;
   }
 
@@ -473,7 +555,7 @@ export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Prom
   // Los vehículos nuevos (o con km nuevo) quedan con su etapa calculada de una vez, sin esperar al recálculo diario.
   await recalcularEtapas(getPool(), sucursalId).catch((err) => console.error("[sync] no se pudieron recalcular las etapas", err instanceof Error ? err.message : err));
   await vincularConversaciones(sucursalId).catch(() => 0);
-  await registrarCorrida(sucursalId, resumen, "ok", null);
+  await registrarCorrida(sucursalId, resumen, "ok", conNota(null));
   return resumen;
 }
 
@@ -642,12 +724,19 @@ async function refrescarPasos(cliente: Consulta, sucursalId: string, filas: { pa
  * sigue igual. Si es de otra campaña que vino después (ya guardada en su foto por guardarFotoUltimoPaso), el lead
  * recupera lo del paso que vuelve, como las filas del Sheet:
  *  - completo (resultado, estado del lead y su motivo, contacto, comentarios, fechas y gestión) cuando se puede;
- *  - solo lo propio de la campaña (comentarios, fechas y gestión, sin tocar resultado ni estado) si el lead está vendido
- *    (además conserva los datos de la venta) o la persona pidió no ser contactada (la baja gana).
+ *  - solo lo propio de la campaña (comentarios, fechas y gestión, sin tocar resultado, estado, etapa ni motivo) si el
+ *    lead es terminal (esTerminal: vendido o pagado, que además conservan los datos de la venta; baja o suprimido), si
+ *    está «No contactable», o si la foto trae una baja, un no contactable o un descarte del vehículo que ya no están
+ *    vigentes. Así una marca de la campaña de en medio no se deshace al volver la anterior, y una marca vieja de la foto
+ *    no vuelve a bloquear un teléfono corregido.
  * La etapa de la foto, si ya no está activa, se toma por el resultado. Los intentos se recalculan con los del paso. Lo de
  * la persona o el vehículo (ya tiene GE, conserva el auto, último contacto efectivo, ejecutivo) se queda.
  */
-async function restaurarReabiertos(cliente: Consulta, sucursalId: string, pasos: string[]): Promise<void> {
+async function restaurarReabiertos(
+  cliente: Consulta,
+  sucursalId: string,
+  reabiertos: { pasoId: string; restaurar: boolean }[],
+): Promise<void> {
   // Solo los pasos que NO son el último cerrado de su lead: ahí lo que tiene el lead es de otra campaña.
   const { rows: ajenos } = await cliente.query(
     `SELECT c.id FROM crm_oportunidad_campanas c
@@ -655,15 +744,25 @@ async function restaurarReabiertos(cliente: Consulta, sucursalId: string, pasos:
         AND c.id <> (SELECT x.id FROM crm_oportunidad_campanas x
                       WHERE x.oportunidad_id = c.oportunidad_id AND x.cerrada_en IS NOT NULL
                       ORDER BY x.cerrada_en DESC, x.abierta_en DESC LIMIT 1)`,
-    [sucursalId, pasos],
+    [sucursalId, reabiertos.map((r) => r.pasoId)],
   );
   const ids = ajenos.map((r) => r.id as string);
   if (ids.length === 0) return;
 
   const motivoDe = Object.fromEntries(Object.entries(DESTINO_DE_RESULTADO).map(([r, d]) => [r, d.motivo ?? null]));
   const etapaDe = Object.fromEntries(Object.entries(DESTINO_DE_RESULTADO).map(([r, d]) => [r, d.etapa]));
+  // Los terminales que vio el plan no se intentan; el filtro de la consulta lo vuelve a revisar con lo que el lead tiene
+  // ahora (la foto y las supresiones ya están al día dentro de esta transacción).
+  const restaurables = new Set(reabiertos.filter((r) => r.restaurar).map((r) => r.pasoId));
+  const candidatos = ids.filter((id) => restaurables.has(id));
 
-  // 1. Completo: lead no vendido, persona sin baja, con una etapa activa a la cual volver.
+  // 1. Completo: lead no terminal (ni vendido, pagado, baja, no contactable ni suprimido), con una etapa activa a la
+  //    cual volver. Nunca se restaura el estado de contacto encima de una baja o un no contactable. La foto tampoco
+  //    revive una marca de cumplimiento que ya no está vigente (el lead que llega aquí no tiene baja ni supresión): una
+  //    baja quitada con «Quitar no contactar», un número equivocado corregido o de un teléfono anterior (D12 es por
+  //    teléfono), o un descarte del vehículo revocado. Copiarla de vuelta volvería a bloquear al cliente (los triggers
+  //    de supresión la registrarían otra vez, ahora sobre el teléfono de hoy); ese paso solo recupera lo de su campaña.
+  //    Si la persona sí tiene la baja vigente, el paso final del ciclo deja el lead en «Baja».
   const { rows: completos } = await cliente.query(
     `WITH f AS (
        SELECT c.oportunidad_id AS id, c.id AS paso, c.resultado_bdc, c.comentarios, c.fecha_ultimo_contacto, c.fecha_compra,
@@ -684,12 +783,21 @@ async function restaurarReabiertos(cliente: Consulta, sucursalId: string, pasos:
             LIMIT 1
          ) e ON true
         WHERE c.id = ANY($2::uuid[]) AND c.resultado_bdc IS NOT NULL
-          AND o.estado <> 'ganada' AND o.estado_contacto <> 'baja' AND NOT k.whatsapp_baja
+          AND o.estado <> 'ganada' AND o.estado_contacto NOT IN ('baja', 'no_contactable') AND NOT k.whatsapp_baja
+          AND NOT ${SQL_PAGADO} AND crm_supresion_terminal(o.id) IS NULL
+          AND coalesce(c.estado_contacto, '') NOT IN ('baja', 'no_contactable') AND c.resultado_bdc <> 'NO CONTACTABLE'
+          AND NOT EXISTS (SELECT 1 FROM crm_motivos_perdida mp
+                           WHERE mp.id = nullif(c.gestion->>'motivo_perdida_id', '')::uuid
+                             AND mp.clave IN ('pidio_baja', 'no_contactable',
+                                              'ya_no_tiene_auto', 'flotilla', 'uso_no_elegible', 'fuera_km_tiempo'))
      ), r AS (
        UPDATE crm_oportunidades o SET
          resultado_bdc = f.resultado_bdc, comentarios = f.comentarios, fecha_ultimo_contacto = f.fecha_ultimo_contacto,
          fecha_compra = f.fecha_compra,
-         estado_contacto = coalesce(f.estado_contacto, o.estado_contacto),
+         -- Ni la baja ni el no contactable se copian de la foto (el filtro de arriba ya no deja pasar esas fotos).
+         estado_contacto = CASE WHEN o.estado_contacto IN ('baja', 'no_contactable')
+                                  OR f.estado_contacto IN ('baja', 'no_contactable') THEN o.estado_contacto
+                                ELSE coalesce(f.estado_contacto, o.estado_contacto) END,
          embudo_id = f.embudo_id, etapa_id = f.etapa_id, estado = f.tipo,
          posicion = CASE WHEN f.etapa_id IS DISTINCT FROM o.etapa_id
            THEN (SELECT coalesce(max(x.posicion), 0) FROM crm_oportunidades x WHERE x.etapa_id = f.etapa_id) + f.n * 1024
@@ -717,29 +825,36 @@ async function restaurarReabiertos(cliente: Consulta, sucursalId: string, pasos:
        RETURNING 1
      )
      SELECT r.paso FROM r`,
-    [sucursalId, ids, JSON.stringify(motivoDe), JSON.stringify(etapaDe)],
+    [sucursalId, candidatos, JSON.stringify(motivoDe), JSON.stringify(etapaDe)],
   );
   const restaurados = new Set(completos.map((r) => r.paso as string));
 
-  // 2. Solo lo propio de la campaña (vendido, baja de la persona o sin etapa a la cual volver): su fila no se pierde.
+  // 2. Solo lo propio de la campaña (lead terminal, foto con una marca que ya no está vigente o sin etapa a la cual
+  //    volver): su fila no se pierde. Resultado, estado, etapa, motivo y estado de contacto se quedan como están.
   const parciales = ids.filter((id) => !restaurados.has(id));
   if (parciales.length > 0) {
     await cliente.query(
-      `UPDATE crm_oportunidades o SET
+      `WITH x AS (
+         -- Una venta, o un pago o compra ya capturados, conservan los datos con que se hicieron.
+         SELECT o.id, (o.estado = 'ganada' OR ${SQL_PAGADO}) AS vendido
+           FROM crm_oportunidades o JOIN crm_oportunidad_campanas c ON c.oportunidad_id = o.id
+          WHERE c.id = ANY($2::uuid[]) AND o.sucursal_id = $1
+       )
+       UPDATE crm_oportunidades o SET
          comentarios = c.comentarios, fecha_ultimo_contacto = c.fecha_ultimo_contacto,
          respuesta_titular = c.gestion->>'respuesta_titular',
          proximo_contacto_en = (c.gestion->>'proximo_contacto_en')::timestamptz,
          motivo_no_interes = c.gestion->>'motivo_no_interes',
          escalar_posventa = coalesce((c.gestion->>'escalar_posventa')::boolean, false),
          clasificacion_respuesta = c.gestion->>'clasificacion_respuesta',
-         -- Una venta conserva los datos con que se vendió.
-         fecha_compra = CASE WHEN o.estado = 'ganada' THEN o.fecha_compra ELSE c.fecha_compra END,
-         monto_cotizado = CASE WHEN o.estado = 'ganada' THEN o.monto_cotizado ELSE (c.gestion->>'monto_cotizado')::numeric END,
-         link_enviado_en = CASE WHEN o.estado = 'ganada' THEN o.link_enviado_en ELSE (c.gestion->>'link_enviado_en')::date END,
-         fecha_pago = CASE WHEN o.estado = 'ganada' THEN o.fecha_pago ELSE (c.gestion->>'fecha_pago')::date END,
-         origen_venta = CASE WHEN o.estado = 'ganada' THEN o.origen_venta ELSE c.gestion->>'origen_venta' END
-         FROM crm_oportunidad_campanas c
-        WHERE c.id = ANY($2::uuid[]) AND o.id = c.oportunidad_id AND o.sucursal_id = $1 AND c.gestion IS NOT NULL`,
+         fecha_compra = CASE WHEN x.vendido THEN o.fecha_compra ELSE c.fecha_compra END,
+         monto_cotizado = CASE WHEN x.vendido THEN o.monto_cotizado ELSE (c.gestion->>'monto_cotizado')::numeric END,
+         link_enviado_en = CASE WHEN x.vendido THEN o.link_enviado_en ELSE (c.gestion->>'link_enviado_en')::date END,
+         fecha_pago = CASE WHEN x.vendido THEN o.fecha_pago ELSE (c.gestion->>'fecha_pago')::date END,
+         origen_venta = CASE WHEN x.vendido THEN o.origen_venta ELSE c.gestion->>'origen_venta' END
+         FROM crm_oportunidad_campanas c, x
+        WHERE c.id = ANY($2::uuid[]) AND o.id = c.oportunidad_id AND x.id = o.id AND o.sucursal_id = $1
+          AND c.gestion IS NOT NULL`,
       [sucursalId, parciales],
     );
   }
@@ -756,7 +871,13 @@ async function restaurarReabiertos(cliente: Consulta, sucursalId: string, pasos:
   );
 }
 
-/** Escribe el ciclo del día en una transacción: o entra todo, o nada. */
+/**
+ * Escribe el ciclo del día en una transacción: o entra todo, o nada.
+ *
+ * La sync nunca libera un bloqueo (0039): no declara crm.corregir_supresion ni crm.quitar_baja, así que ninguno de sus
+ * UPDATE revoca un número equivocado o un descarte del vehículo, ni saca a un lead de «Baja», aunque le cambie el estado
+ * de contacto o el motivo (reinicio, reapertura). Eso solo lo hace una persona al corregir el lead en la web.
+ */
 async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> {
   const cliente = await getPool().connect();
   try {
@@ -795,10 +916,11 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
 
     // 2. Reabiertos: el mismo paso vuelve a la ventana tal cual; mientras está abierto, lo manual se lee del lead. Si
     //    después de cerrarlo el lead vivió otra campaña, lo que tiene hoy es de esa otra (que ya quedó en su foto): el paso
-    //    que vuelve recupera lo suyo antes de abrirse. Una venta no se toca.
+    //    que vuelve recupera lo suyo antes de abrirse. Un lead terminal (venta, pago, baja, supresión) o no contactable no
+    //    recupera estado, etapa, resultado ni motivo.
     if (plan.reabiertos.length > 0) {
       await guardarFotoUltimoPaso(cliente, sucursalId, plan.reabiertos.map((r) => r.leadId));
-      await restaurarReabiertos(cliente, sucursalId, plan.reabiertos.map((r) => r.pasoId));
+      await restaurarReabiertos(cliente, sucursalId, plan.reabiertos);
       // La foto del paso se conserva (mientras está abierto nadie la lee; al volver a cerrarse se reemplaza).
       await cliente.query(
         `UPDATE crm_oportunidad_campanas c SET cerrada_en = NULL, motivo_cierre = NULL
@@ -847,7 +969,9 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
       await refrescarLeads(cliente, sucursalId, plan.pasosNuevos.map((p) => ({ id: p.leadId, datos: p.datos })));
 
       // Empieza otra campaña: el lead vuelve a «Por contactar» con lo manual en blanco, como una fila nueva del Sheet.
-      // Lo de la campaña anterior quedó en la foto de su paso. Vendidos y dados de baja no se reinician.
+      // Lo de la campaña anterior quedó en la foto de su paso. Los terminales (esTerminal) no se reinician; el WHERE lo
+      // vuelve a revisar con lo de ahora (ya con el contacto de hoy): un pago o una supresión capturados entre la lectura
+      // del plan y esta transacción no se borran.
       const reiniciar = plan.pasosNuevos.filter((p) => p.reiniciar).map((p) => p.leadId);
       if (reiniciar.length > 0) {
         const { rows: pos } = await cliente.query(`SELECT coalesce(max(posicion), 0) AS p FROM crm_oportunidades WHERE etapa_id = $1`, [etapa[0].id]);
@@ -859,6 +983,10 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
                embudo_id = $4, etapa_id = $3, posicion = $5::float8 + (array_position($2::uuid[], o.id)) * 1024,
                estado = 'abierta', cerrada_en = NULL, motivo_perdida_id = NULL, entro_a_etapa_en = now(),
                resultado_bdc = 'PENDIENTE',
+               -- La baja nunca vuelve a «Sin intentar». Un «No contactable» que llega aquí no tiene supresión (el WHERE
+               -- excluye a los suprimidos): es el de un teléfono que cambió, y se vuelve a trabajar. Sacarlo de «No
+               -- contactable» no revoca nada: la sync no declara crm.corregir_supresion, así que el número equivocado
+               -- del teléfono anterior sigue vigente.
                estado_contacto = CASE WHEN o.estado_contacto = 'baja'
                                         OR (SELECT k.whatsapp_baja FROM crm_contactos k WHERE k.id = o.contacto_id)
                                       THEN 'baja' ELSE 'sin_intentar' END,
@@ -869,6 +997,7 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
                link_enviado_en = NULL, fecha_pago = NULL, origen_venta = NULL, escalar_posventa = false,
                respuesta_por_clasificar = false, clasificacion_respuesta = NULL
               WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])
+                AND NOT (${SQL_PAGADO}) AND crm_supresion_terminal(o.id) IS NULL
              RETURNING o.id
            )
            INSERT INTO crm_historial_etapas (sucursal_id, oportunidad_id, etapa_origen_id, etapa_destino_id, origen)
@@ -879,7 +1008,12 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
       }
     }
 
-    // 5. Leads nuevos: el lead, su primer paso y su entrada al embudo.
+    // 5. Leads nuevos: el lead, su primer paso y su entrada al embudo. Nace en «Baja» si la persona pidió no ser
+    //    contactada (la baja se hereda). Un número equivocado vigente en su teléfono NO lo hace nacer «No contactable»:
+    //    nace «Sin intentar» y lo frena la supresión del teléfono (D12), que alcanza a todos sus VIN en el freno de
+    //    envíos, esTerminal, el motor, el lote y CloudTalk. Si naciera «No contactable», el BDC ya no podría corregir el
+    //    lead donde se capturó por error: 0039 solo revoca el número equivocado si ningún otro lead del teléfono sigue
+    //    no contactable.
     if (plan.leadsNuevos.length > 0) {
       const { rows: pos } = await cliente.query(`SELECT coalesce(max(posicion), 0) AS p FROM crm_oportunidades WHERE etapa_id = $1`, [etapa[0].id]);
       const { rows: insertados } = await cliente.query(
@@ -888,18 +1022,20 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
              (sucursal_id, clave, contacto_id, vehiculo_id, campana, fecha_inicio_campana, fecha_fin_campana, fase_campana,
               proxima_campania, fecha_proxima_campania, motivo_no_elegible, estado_cartera, fuente, embudo_id, etapa_id,
               posicion, estado, estado_contacto, ejecutivo, ultima_sincronizacion)
-           SELECT $1, r.clave,
-                  (SELECT c.id FROM crm_contactos c WHERE c.sucursal_id = $1 AND c.clave = r.contacto_clave),
+           SELECT $1, r.clave, c.id,
                   (SELECT v.id FROM crm_vehiculos v WHERE v.sucursal_id = $1 AND v.vin = r.vin),
                   r.campana, r.fecha_inicio_campana, r.fecha_fin_campana, r.fase_campana, r.proxima_campania,
                   r.fecha_proxima_campania, r.motivo_no_elegible, 'ACTIVA', r.fuente, $3, $4,
                   $5::float8 + r.n * 1024, 'abierta',
-                  CASE WHEN (SELECT c.whatsapp_baja FROM crm_contactos c WHERE c.sucursal_id = $1 AND c.clave = r.contacto_clave)
-                       THEN 'baja' ELSE 'sin_intentar' END,
+                  -- crm_bloqueo_telefono pone la baja antes que el número equivocado.
+                  CASE WHEN coalesce(c.whatsapp_baja, false) OR b.bloqueo IN ('supresion_baja', 'baja') THEN 'baja'
+                       ELSE 'sin_intentar' END,
                   r.ejecutivo, now()
              FROM jsonb_to_recordset($2::jsonb) AS r(n int, clave text, vin text, contacto_clave text, campana text,
                   fecha_inicio_campana date, fecha_fin_campana date, fase_campana text, proxima_campania text,
                   fecha_proxima_campania date, motivo_no_elegible text, fuente jsonb, ejecutivo text)
+             LEFT JOIN crm_contactos c ON c.sucursal_id = $1 AND c.clave = r.contacto_clave
+             LEFT JOIN LATERAL (SELECT crm_bloqueo_telefono($1, crm_tel10(c.telefono)) AS bloqueo) b ON true
            RETURNING id, clave, campana, fecha_inicio_campana, fecha_fin_campana, fase_campana
          )
          INSERT INTO crm_oportunidad_campanas
@@ -922,8 +1058,10 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
       );
     }
 
-    // Al final (ya con el contacto de hoy en cada lead): una persona que pidió no ser contactada deja todos sus leads,
-    // salvo ventas, en «Baja», aunque la baja haya llegado cuando ese lead estaba fuera de ventana.
+    // Al final (ya refrescados los leads con el contacto de hoy, abiertos los pasos nuevos y hechos los reinicios): una
+    // persona que pidió no ser contactada deja todos sus leads, salvo ventas, en «Baja», aunque la baja haya llegado
+    // cuando ese lead estaba fuera de ventana o el lead se acabe de religar a ese contacto (su teléfono cambió a uno con
+    // baja: crm_contactos_heredar_baja ya marcó el contacto). El trigger de cierre de tareas (0032) cancela sus pendientes.
     await cliente.query(
       `UPDATE crm_oportunidades o SET estado_contacto = 'baja', respuesta_por_clasificar = false
          FROM crm_contactos c

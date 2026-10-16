@@ -43,6 +43,14 @@ const ESTADOS: Record<string, string> = { pendiente: "Pendiente", hecho: "Hecho"
 const MOTIVOS: Record<string, string> = {
   cambio_de_estado: "El contrato ya cambió de estado",
   ya_no_aplica: "La oportunidad ya no aplica",
+  // A quien no se le puede buscar no se le crea la tarea (mismas claves que el freno de envíos).
+  baja: "La persona pidió no ser contactada",
+  no_contactable: "Está marcada como no contactable",
+  supresion_numero_equivocado: "Su teléfono está marcado como número equivocado",
+  supresion_ya_no_tiene_auto: "Ya no tiene el vehículo",
+  supresion_flotilla: "Su vehículo es de flotilla",
+  supresion_uso_no_elegible: "El uso de su vehículo no es elegible",
+  supresion_fuera_km_tiempo: "Su vehículo ya pasó el kilometraje o el tiempo de la garantía",
 };
 
 let contador = 0;

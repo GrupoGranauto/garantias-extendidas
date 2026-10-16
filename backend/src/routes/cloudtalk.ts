@@ -104,8 +104,9 @@ cloudtalkRouter.post(
         return;
       }
 
+      // Con cada contacto, si su teléfono no se puede marcar: pidió no recibir más mensajes o es un número equivocado.
       const { rows } = await getPool().query(
-        `SELECT id, nombre, telefono, correo FROM crm_contactos
+        `SELECT id, nombre, telefono, correo, crm_bloqueo_telefono(sucursal_id, crm_tel10(telefono)) AS bloqueo FROM crm_contactos
           WHERE sucursal_id = $1 AND id = ANY($2::uuid[])`,
         [req.params.id, parsed.data.contacto_ids],
       );
@@ -118,7 +119,17 @@ cloudtalkRouter.post(
       });
 
       const noEncontrados = new Set(parsed.data.contacto_ids.filter((_, index) => contactos[index] === null));
-      const existentes = contactos.filter((contacto) => contacto !== null);
+      const bloqueados = new Map<string, string>(
+        rows
+          .filter((contacto) => contacto.bloqueo)
+          .map((contacto): [string, string] => [
+            contacto.id as string,
+            contacto.bloqueo === "supresion_numero_equivocado"
+              ? "Número marcado como equivocado o no contactable."
+              : "Pidió no recibir más mensajes.",
+          ]),
+      );
+      const existentes = contactos.filter((contacto) => contacto !== null).filter((contacto) => !bloqueados.has(contacto.id));
       let accessKeySecret: string;
       try {
         accessKeySecret = descifrarSecreto(configuracion.api_access_key_secret_cifrado);
@@ -136,9 +147,12 @@ cloudtalkRouter.post(
       const porResultado = new Map(resultados.map((resultado) => [resultado.contacto_id, resultado]));
       const detalle = parsed.data.contacto_ids.map((id) => noEncontrados.has(id)
         ? { contacto_id: id, estado: "error" as const, error: "Contacto no encontrado en esta sucursal." }
-        : porResultado.get(id)!);
+        : bloqueados.has(id)
+          ? { contacto_id: id, estado: "omitido" as const, motivo: bloqueados.get(id)! }
+          : porResultado.get(id)!);
       const creados = detalle.filter((resultado) => resultado.estado === "creado").length;
-      res.json({ total: detalle.length, creados, errores: detalle.length - creados, resultados: detalle });
+      const omitidos = detalle.filter((resultado) => resultado.estado === "omitido").length;
+      res.json({ total: detalle.length, creados, omitidos, errores: detalle.length - creados - omitidos, resultados: detalle });
     } catch (error) {
       next(error);
     }

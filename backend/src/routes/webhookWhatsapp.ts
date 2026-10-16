@@ -10,9 +10,10 @@ import {
 import { emitirEventoChat } from "../lib/eventosChat.js";
 import { motivoFallaWhatsApp } from "../lib/erroresMeta.js";
 import { procesarAhoraNo, procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
-import { buscarVinculo, registrarEntrante, type Vinculo } from "../lib/vinculoWhatsapp.js";
+import { buscarVinculo, elegirConversacion, registrarEntrante, type Vinculo } from "../lib/vinculoWhatsapp.js";
 import { esAhoraNo, esPeticionDeBaja, telefono10, textoEntrante } from "../lib/campanasLogica.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
+import { getPool } from "../lib/db.js";
 
 export const webhookWhatsappRouter = Router();
 
@@ -234,6 +235,16 @@ async function resolverEjecutivoDeLead(config: ConfigSucursal, waId: string): Pr
   return valor === null || valor === undefined || valor === "" ? null : String(valor);
 }
 
+/** Conversación de la sucursal que corresponde al wa_id: exacta o con los mismos últimos 10 dígitos (elegirConversacion). */
+async function buscarConversacion(sucursalId: string, waId: string) {
+  const { rows } = await getPool().query(
+    `SELECT id, wa_id, ultimo_mensaje_en FROM whatsapp_conversaciones
+      WHERE sucursal_id = $1 AND (wa_id = $2 OR ($3::text IS NOT NULL AND right(regexp_replace(wa_id, '\\D', '', 'g'), 10) = $3))`,
+    [sucursalId, waId, telefono10(waId)],
+  );
+  return elegirConversacion(rows as { id: string; wa_id: string; ultimo_mensaje_en: Date | null }[], waId);
+}
+
 async function obtenerOCrearConversacion(
   sucursalId: string,
   waId: string,
@@ -244,61 +255,81 @@ async function obtenerOCrearConversacion(
   asignadoA: string | null,
   contactoId: string | null,
 ) {
-  const supabase = getSupabase();
+  const pool = getPool();
 
-  const { data: existente } = await supabase
-    .from("whatsapp_conversaciones")
-    .select("id, no_leidos, asignado_a, contacto_id")
-    .eq("sucursal_id", sucursalId)
-    .eq("wa_id", waId)
-    .maybeSingle();
-
-  if (existente) {
-    const cambios: Record<string, unknown> = {
-      ultimo_mensaje_en: new Date().toISOString(),
-      ultimo_mensaje_cliente_en: new Date().toISOString(),
-      no_leidos: existente.no_leidos + 1,
-      ultimo_mensaje_tipo: tipoPreview,
-      ultimo_mensaje_texto: textoPreview,
-      ultimo_mensaje_direccion: "entrante",
-      ultimo_mensaje_wa_message_id: waMessageId,
-      ultimo_mensaje_estado: null,
-    };
-    if (nombreContacto) cambios.nombre_contacto = nombreContacto;
-    // Si la conversación aún no estaba ligada a la base o no tenía dueño, ahora sí.
-    if (contactoId && !existente.contacto_id) cambios.contacto_id = contactoId;
-    if (asignadoA && !existente.asignado_a) cambios.asignado_a = asignadoA;
-
-    await supabase.from("whatsapp_conversaciones").update(cambios).eq("id", existente.id);
-    return existente.id as string;
+  let existente = await buscarConversacion(sucursalId, waId);
+  if (!existente) {
+    // Dueño inicial: el ejecutivo del lead si el teléfono cruza; si no, queda
+    // suelto (null) y lo verán todos los asesores hasta que alguien conteste.
+    const { rows } = await pool.query(
+      `INSERT INTO whatsapp_conversaciones (sucursal_id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_cliente_en, no_leidos,
+              ultimo_mensaje_tipo, ultimo_mensaje_texto, ultimo_mensaje_direccion, ultimo_mensaje_wa_message_id, asignado_a, contacto_id)
+       VALUES ($1, $2, $3, now(), now(), 1, $4, $5, 'entrante', $6, $7, $8)
+       ON CONFLICT (sucursal_id, wa_id) DO NOTHING RETURNING id`,
+      [sucursalId, waId, nombreContacto || null, tipoPreview, textoPreview, waMessageId, asignadoA, contactoId],
+    );
+    if (rows[0]) return rows[0].id as string;
+    // Otro mensaje de la misma persona la creó al mismo tiempo: se usa esa.
+    existente = await buscarConversacion(sucursalId, waId);
+    if (!existente) throw new Error("No se pudo crear la conversación de WhatsApp.");
   }
 
-  const { data: creada, error } = await supabase
-    .from("whatsapp_conversaciones")
-    .insert({
-      sucursal_id: sucursalId,
-      wa_id: waId,
-      nombre_contacto: nombreContacto ?? null,
-      ultimo_mensaje_en: new Date().toISOString(),
-      ultimo_mensaje_cliente_en: new Date().toISOString(),
-      no_leidos: 1,
-      ultimo_mensaje_tipo: tipoPreview,
-      ultimo_mensaje_texto: textoPreview,
-      ultimo_mensaje_direccion: "entrante",
-      ultimo_mensaje_wa_message_id: waMessageId,
-      // Dueño inicial: el ejecutivo del lead si el teléfono cruza; si no, queda
-      // suelto (null) y lo verán todos los asesores hasta que alguien conteste.
-      asignado_a: asignadoA,
-      contacto_id: contactoId,
-    })
-    .select("id")
-    .single();
+  // Si la conversación aún no estaba ligada a la base o no tenía dueño, ahora sí.
+  await pool.query(
+    `UPDATE whatsapp_conversaciones
+        SET ultimo_mensaje_en = now(), ultimo_mensaje_cliente_en = now(), no_leidos = no_leidos + 1,
+            ultimo_mensaje_tipo = $2, ultimo_mensaje_texto = $3, ultimo_mensaje_direccion = 'entrante',
+            ultimo_mensaje_wa_message_id = $4, ultimo_mensaje_estado = NULL,
+            nombre_contacto = coalesce($5, nombre_contacto), contacto_id = coalesce(contacto_id, $6),
+            asignado_a = coalesce(asignado_a, $7)
+      WHERE id = $1`,
+    [existente.id, tipoPreview, textoPreview, waMessageId, nombreContacto || null, contactoId, asignadoA],
+  );
 
-  if (error) throw new Error(error.message);
-  return creada.id as string;
+  // La encontró con otro formato (la creó el masivo como 52 + 10 dígitos): se queda con el wa_id que manda Meta. Si en ese
+  // instante otra conversación ya tiene ese wa_id, se conserva el anterior; el chat sigue funcionando con cualquiera.
+  if (existente.wa_id !== waId) {
+    await pool
+      .query(
+        `UPDATE whatsapp_conversaciones SET wa_id = $2
+          WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM whatsapp_conversaciones x WHERE x.sucursal_id = $3 AND x.wa_id = $2)`,
+        [existente.id, waId, sucursalId],
+      )
+      .catch(() => console.error("[whatsapp] no se pudo actualizar el número de una conversación"));
+  }
+  return existente.id;
+}
+
+/** «BAJA», «STOP»… y «Ahora no». Cada uno falla por separado y nunca depende de que se pueda guardar el chat. */
+async function atenderBajaOAhoraNo(msg: MensajeEntrante, config: ConfigSucursal) {
+  const escrito = textoEntrante(msg);
+  const tel = telefono10(msg.from);
+  if (escrito === null || !tel) return;
+  if (esPeticionDeBaja(escrito)) {
+    // El contacto pidió no recibir más. Se respeta de inmediato y para siempre, esté o no en la base.
+    try {
+      await procesarBaja(config.sucursal_id, tel, msg.id);
+    } catch {
+      console.error("[campanas] no se pudo registrar una baja");
+    }
+  } else if (esAhoraNo(escrito)) {
+    // «Ahora no»: no es baja. Se pausa solo la campaña que le escribió; la siguiente campaña lo vuelve a contactar.
+    try {
+      await procesarAhoraNo(config.sucursal_id, tel);
+    } catch {
+      console.error("[campanas] no se pudo registrar un «Ahora no»");
+    }
+  }
 }
 
 async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucursal, nombreContacto?: string) {
+  // Meta puede volver a mandar el mismo evento: si el mensaje ya está guardado, ya se atendió (incluida su baja).
+  const yaGuardado = await getPool()
+    .query(`SELECT 1 FROM whatsapp_mensajes WHERE wa_message_id = $1`, [msg.id])
+    .then((r) => (r.rowCount ?? 0) > 0)
+    .catch(() => false);
+  if (yaGuardado) return;
+
   const fila: Record<string, unknown> = {
     sucursal_id: config.sucursal_id,
     wa_message_id: msg.id,
@@ -369,6 +400,9 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
       fila.texto = JSON.stringify(msg);
   }
 
+  // La baja y el «Ahora no» van antes que todo lo demás: si después falla el chat o el vínculo con la base, no se pierden.
+  await atenderBajaOAhoraNo(msg, config);
+
   // Primero se busca a la persona en la base cargada en la web (por teléfono); la columna configurada a mano
   // queda solo como respaldo para sucursales que aún no usan el CRM.
   const vinculo: Vinculo | null = await buscarVinculo(config.sucursal_id, msg.from).catch(() => null);
@@ -388,35 +422,13 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
   const { error } = await getSupabase().from("whatsapp_mensajes").insert(fila);
   if (error) throw new Error(error.message);
 
-  // Lo que escribió el cliente queda en el historial de su oportunidad y cae en la cola «por clasificar».
+  // Lo que escribió el cliente queda en el historial de su oportunidad y cae en la cola «por clasificar» (salvo una baja:
+  // registrarEntrante no abre la cola a quien la pidió, y la baja ya quedó registrada arriba).
   if (vinculo) {
     try {
       await registrarEntrante(config.sucursal_id, vinculo, fila.tipo === "texto" ? String(fila.texto ?? "") : `(${String(fila.tipo)})`);
     } catch {
       console.error("[whatsapp] no se pudo registrar el mensaje en el historial");
-    }
-  }
-
-  // "BAJA", "STOP"…: el contacto pidió no recibir más. Se respeta de inmediato y para siempre.
-  const escrito = textoEntrante(msg);
-  if (escrito !== null && esPeticionDeBaja(escrito)) {
-    const tel = telefono10(msg.from);
-    if (tel) {
-      try {
-        await procesarBaja(config.sucursal_id, tel);
-      } catch {
-        console.error("[campanas] no se pudo registrar una baja");
-      }
-    }
-  } else if (escrito !== null && esAhoraNo(escrito)) {
-    // «Ahora no»: no es baja. Se pausa solo la campaña que le escribió; la siguiente campaña lo vuelve a contactar.
-    const tel = telefono10(msg.from);
-    if (tel) {
-      try {
-        await procesarAhoraNo(config.sucursal_id, tel);
-      } catch {
-        console.error("[campanas] no se pudo registrar un «Ahora no»");
-      }
     }
   }
 

@@ -208,11 +208,12 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
         break;
       }
 
-      // Una sola lectura de las oportunidades del lote y de las automatizaciones de sus etapas destino.
+      // Una sola lectura de las oportunidades del lote y de las automatizaciones de sus etapas destino. «Bloqueada»: pidió
+      // no ser contactada, es un número equivocado / no contactable, o tiene una supresión vigente (por VIN o teléfono).
       const ids = [...new Set(eventos.map((e) => e.oportunidad_id as string))];
       const { rows: ops } = await cliente.query(
         `SELECT v.id, v.cliente, v.vin, v.campana, v.agencia, v.ejecutivo, v.etapa_id, v.estado_fuente,
-                (v.no_contactar OR o.estado_contacto = 'baja') AS baja
+                (v.no_contactar OR o.estado_contacto IN ('baja', 'no_contactable') OR crm_supresion_de_lead(o.id) IS NOT NULL) AS bloqueada
            FROM crm_v_oportunidades v JOIN crm_oportunidades o ON o.id = v.id WHERE v.id = ANY($1::uuid[])`,
         [ids],
       );
@@ -232,7 +233,7 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
         for (const evento of eventos) {
           const destino = (evento.datos as { etapa_destino?: string }).etapa_destino;
           const op = opPorId.get(evento.oportunidad_id as string);
-          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA" && !op.baja) {
+          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA" && !op.bloqueada) {
             for (const a of acciones.filter((x) => x.etapa_id === destino)) candidatos.push({ a, evento, op });
           }
         }
@@ -267,8 +268,8 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
           const destino = (evento.datos as { etapa_destino?: string }).etapa_destino;
           const op = opPorId.get(evento.oportunidad_id as string);
           // Solo cuenta si la oportunidad sigue activa y aún está en esa etapa (no se crean tareas viejas), y nunca para
-          // quien pidió no ser contactado.
-          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA" && !op.baja) {
+          // quien pidió no ser contactado, un número equivocado o un lead con supresión vigente.
+          if (op && destino && op.etapa_id === destino && op.estado_fuente === "ACTIVA" && !op.bloqueada) {
             for (const a of acciones.filter((x) => x.etapa_id === destino)) {
               const { rowCount } = await cliente.query(
                 `INSERT INTO crm_ejecuciones (automatizacion_id, oportunidad_id, evento_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
@@ -313,7 +314,7 @@ export async function procesarEventosCrm(maximo = 500, tamanoLote = 50): Promise
  * cumplieron el plazo y aún no tienen la tarea de ese ciclo (el ciclo es el instante en que
  * entraron a la etapa: si salen y vuelven, la regla puede correr otra vez). Con
  * `solo_sin_contacto`, no dispara si ya hubo una llamada o WhatsApp desde que entró. Nunca dispara para
- * quien pidió no ser contactado.
+ * quien pidió no ser contactado, un número equivocado / no contactable o un lead con supresión vigente.
  */
 export async function procesarReglasPorTiempo(maximo = 200): Promise<number> {
   const pool = getPool();
@@ -322,9 +323,10 @@ export async function procesarReglasPorTiempo(maximo = 200): Promise<number> {
             v.cliente, v.vin, v.campana, v.agencia, v.ejecutivo
        FROM crm_automatizaciones a
        JOIN crm_oportunidades o ON o.etapa_id = a.etapa_id AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'
-                               AND o.estado_contacto <> 'baja'
+                               AND o.estado_contacto NOT IN ('baja', 'no_contactable')
        JOIN crm_v_oportunidades v ON v.id = o.id AND NOT v.no_contactar
       WHERE a.activa AND a.evento = 'tiempo_en_etapa' AND a.tipo IN ('tarea', 'pregunta')
+        AND crm_supresion_de_lead(o.id) IS NULL
         AND o.entro_a_etapa_en + make_interval(hours => (a.config->>'horas')::int) <= now()
         AND (coalesce((a.config->>'aplicar_a_existentes')::boolean, false) OR o.entro_a_etapa_en >= a.activa_desde)
         AND (NOT coalesce((a.config->>'solo_sin_contacto')::boolean, false) OR NOT EXISTS (
@@ -363,6 +365,17 @@ export async function procesarReglasPorTiempo(maximo = 200): Promise<number> {
   return creadas;
 }
 
+/**
+ * Bajas escritas por WhatsApp (últimos 7 días) que no alcanzaron a registrarse —el webhook falló a la mitad, por ejemplo—:
+ * quedan como supresión del teléfono. Devuelve cuántas recuperó.
+ */
+export async function reconciliarBajas(): Promise<number> {
+  const { rows } = await getPool().query(`SELECT crm_reconciliar_bajas() AS n`);
+  const n = (rows[0]?.n as number | undefined) ?? 0;
+  if (n > 0) console.log(`[motor-crm] ${n} baja(s) de WhatsApp recuperada(s)`);
+  return n;
+}
+
 let temporizador: NodeJS.Timeout | null = null;
 let corriendo = false;
 
@@ -375,6 +388,8 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
     corriendo = true;
     vuelta++;
     const porTiempo = vuelta % Math.max(1, Math.round(60000 / cadaMs)) === 0;
+    // También en la primera vuelta: al arrancar (o tras un despliegue) no se esperan diez minutos con una baja sin registrar.
+    const reconciliar = vuelta === 1 || vuelta % Math.max(1, Math.round(600000 / cadaMs)) === 0;
     procesarEventosCrm()
       .then(async (r) => {
         // Cada etapa falla por separado y deja su mensaje: un problema al planificar no debe dejar sin despachar lo que ya
@@ -387,6 +402,8 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
             return vacio;
           }
         };
+        // Antes que todo lo que manda mensajes: una baja que se escapó del webhook frena lo que sigue en esta misma vuelta.
+        if (reconciliar) await etapa("reconciliar bajas", reconciliarBajas, 0);
         const extra = porTiempo ? await etapa("reglas por tiempo", procesarReglasPorTiempo, 0) : 0;
         if (porTiempo) {
           // Conversaciones que escribieron antes de estar en la base: se ligan en cuanto aparece su contacto.

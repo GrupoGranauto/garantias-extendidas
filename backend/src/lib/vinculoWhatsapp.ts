@@ -19,6 +19,24 @@ export type Vinculo = {
 
 const ZONA = "America/Hermosillo";
 
+/**
+ * De las conversaciones de la sucursal, la que corresponde a un wa_id que mandó Meta: la de ese wa_id exacto o, si no la
+ * hay, la más reciente con los mismos últimos 10 dígitos. El masivo crea la conversación como 52 + 10 dígitos y Meta
+ * contesta con 521 + 10: sin esto, la respuesta abriría un segundo chat de la misma persona.
+ */
+export function elegirConversacion<T extends { wa_id: string; ultimo_mensaje_en?: string | Date | null }>(
+  candidatas: T[],
+  waId: string,
+): T | null {
+  const exacta = candidatas.find((c) => c.wa_id === waId);
+  if (exacta) return exacta;
+  const tel = telefono10(waId);
+  if (!tel) return null;
+  const instante = (c: T) => (c.ultimo_mensaje_en ? new Date(c.ultimo_mensaje_en).getTime() : Number.NEGATIVE_INFINITY);
+  const delTelefono = candidatas.filter((c) => telefono10(c.wa_id) === tel).sort((a, b) => instante(b) - instante(a));
+  return delTelefono[0] ?? null;
+}
+
 /** Contacto de la base que corresponde a un wa_id, con su oportunidad más relevante (activa y abierta primero). */
 export async function buscarVinculo(sucursalId: string, waId: string): Promise<Vinculo | null> {
   const tel = telefono10(waId);
@@ -41,7 +59,8 @@ export async function buscarVinculo(sucursalId: string, waId: string): Promise<V
  * Alguien escribió desde el teléfono del cliente: queda en el historial de su oportunidad y la respuesta cae en la cola
  * «por clasificar» (Notion). Todavía no se sabe quién escribió, así que no cuenta como contacto efectivo: si el ejecutivo
  * la clasifica como «Titular», ahí pasa a Contactado («Solicita info por WhatsApp»); otra persona, spam o número
- * equivocado no lo mueven. Una petición de baja la atiende el webhook aparte y no necesita clasificarse.
+ * equivocado no lo mueven. Una petición de baja la atiende el webhook aparte (antes de llegar aquí) y no necesita
+ * clasificarse.
  */
 export async function registrarEntrante(sucursalId: string, v: Vinculo, resumen: string | null): Promise<void> {
   if (!v.oportunidad_id) return;

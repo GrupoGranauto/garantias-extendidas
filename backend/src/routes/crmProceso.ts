@@ -8,6 +8,7 @@ import { restringidoDe, exigirUuid } from "../lib/permisos.js";
 import { MAX_MASIVO, borrarVista, ejecutarAccionMasiva, guardarVista, listarVistas, resumenInicio } from "../lib/crmMasivo.js";
 import { estadoSincronizacion, sincronizarCrm, type ResumenSync } from "../lib/sincronizacionCrm.js";
 import { editarOportunidad, leerCatalogos, quitarNoContactar } from "../lib/crm.js";
+import { validarMotivoQuitar } from "../lib/noContactarLogica.js";
 import { COLOR_RESULTADO, DESTINO_DE_RESULTADO, RESULTADOS_BDC } from "../lib/resultadoBdcLogica.js";
 import {
   CATALOGOS,
@@ -311,11 +312,19 @@ crmProcesoRouter.put("/sucursales/:id/crm/oportunidades/:oid/no-contactar", asyn
   }
 });
 
-/** Quitar «no contactar» por un error de captura: solo un administrador, y nunca una baja pedida por WhatsApp. */
+/**
+ * Quitar «no contactar» por un error de captura: solo un administrador, con un motivo de al menos 10 caracteres (queda en
+ * el historial), y nunca una baja pedida por WhatsApp.
+ */
 crmProcesoRouter.delete("/sucursales/:id/crm/oportunidades/:oid/no-contactar", requireAdminSucursal, async (req, res, next) => {
+  const motivo = validarMotivoQuitar((req.body as { motivo?: unknown } | undefined)?.motivo);
+  if (!motivo.ok) {
+    res.status(400).json({ error: motivo.error });
+    return;
+  }
   try {
     if (!(await oportunidadAccesible(req, res))) return;
-    const r = await quitarNoContactar(req.params.id, req.params.oid, req.usuario?.id);
+    const r = await quitarNoContactar(req.params.id, req.params.oid, motivo.motivo, req.usuario?.id);
     if (!r.ok) {
       res.status(r.estado).json({ error: r.error });
       return;

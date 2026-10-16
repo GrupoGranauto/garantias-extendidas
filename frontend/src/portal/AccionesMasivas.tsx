@@ -24,7 +24,8 @@ type Panel = "etapa" | "ejecutivo" | "tarea" | null;
 
 /**
  * Barra de acciones sobre las filas elegidas: cambiar de etapa, reasignar ejecutivo o crear una tarea
- * para cada una. Se aplica todo o nada; las filas que el usuario no puede tocar se cuentan como omitidas.
+ * para cada una. Se aplica todo o nada; las filas que el usuario no puede tocar, o que están en «Baja» y la acción no
+ * les aplica, se cuentan como omitidas.
  * El admin además puede mandarles una plantilla de WhatsApp (masivo).
  */
 export default function AccionesMasivas({
@@ -53,11 +54,12 @@ export default function AccionesMasivas({
   async function aplicar(accion: Record<string, unknown>, verbo: string) {
     setEnviando(true);
     try {
-      const r = await apiFetch<{ afectadas: number; omitidas: number }>(`/api/admin/sucursales/${sucursalId}/crm/masivo`, {
+      // `aviso` dice por qué se dejaron fuera los leads en «Baja» (ya cuentan en omitidas).
+      const r = await apiFetch<{ afectadas: number; omitidas: number; aviso?: string | null }>(`/api/admin/sucursales/${sucursalId}/crm/masivo`, {
         method: "POST",
         body: JSON.stringify({ ids, accion }),
       });
-      onListo(`${verbo}: ${r.afectadas}${r.omitidas > 0 ? ` (${r.omitidas} omitidas)` : ""}`);
+      onListo(`${verbo}: ${r.afectadas}${r.omitidas > 0 ? ` (${r.omitidas} omitidas)` : ""}${r.aviso ? `. ${r.aviso}` : ""}`);
       setPanel(null);
       setTitulo("");
     } catch (err) {

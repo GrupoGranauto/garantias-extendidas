@@ -17,7 +17,7 @@ type Tarea = {
   estado: "pendiente" | "hecha" | "cancelada";
   respuesta: string | null;
   completada_en: string | null;
-  cierre_automatico: "contacto" | "lead_cerrado" | "baja" | null;
+  cierre_automatico: "contacto" | "lead_cerrado" | "baja" | "numero_equivocado" | null;
   oportunidad_id: string;
   cliente: string | null;
   telefono_principal: string | null;

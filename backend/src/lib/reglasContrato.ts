@@ -10,12 +10,14 @@ import {
   type ReglaContratoEntrada,
 } from "./contratoLogica.js";
 import { guardarContrato } from "./crmProceso.js";
+import { motivoSinTarea } from "./noContactarLogica.js";
 
 /**
  * Pago y cierre automáticos.
  *
  *  - Reglas del contrato: cuando un contrato lleva N horas en un estado, se crea una tarea para el ejecutivo de la oportunidad
- *    (la liga de pago por vencer, reemitir la orden de pago, pedir los datos para facturar…). Nacen apagadas.
+ *    (la liga de pago por vencer, reemitir la orden de pago, pedir los datos para facturar…). Nacen apagadas. Nunca para
+ *    quien está en baja, no contactable o con una supresión vigente: esa tarea queda omitida con su motivo.
  *  - Cobertura automática: cuando termina la garantía original (36 meses desde la factura), los contratos en «Certificado
  *    entregado» pasan solos a «Cobertura iniciada».
  *
@@ -264,6 +266,27 @@ async function ejecutarUna(): Promise<{ hubo: boolean; sucursal: string | null }
     const fila = (f[0]?.f ?? null) as Record<string, unknown> | null;
     if (!fila || fila.estado_oportunidad === "perdida") {
       await cerrar(cliente, x.id, "omitido", "ya_no_aplica");
+      await cliente.query("COMMIT");
+      return { hubo: true, sucursal: null };
+    }
+
+    // A quien no se le puede buscar no se le crea la tarea: en baja (el lead, la persona o su teléfono), no contactable o
+    // con una supresión vigente por su VIN o su teléfono. Queda omitida con el motivo.
+    const { rows: ct } = await cliente.query(
+      `SELECT o.estado_contacto, coalesce(k.whatsapp_baja, false) AS no_contactar, crm_supresion_de_lead(o.id) AS supresion
+         FROM crm_oportunidades o LEFT JOIN crm_contactos k ON k.id = o.contacto_id
+        WHERE o.id = $1 AND o.sucursal_id = $2`,
+      [x.oportunidad_id, x.sucursal_id],
+    );
+    const sinTarea = ct[0]
+      ? motivoSinTarea({
+          estadoContacto: (ct[0].estado_contacto as string | null) ?? null,
+          noContactar: ct[0].no_contactar === true,
+          supresion: (ct[0].supresion as string | null) ?? null,
+        })
+      : "ya_no_aplica";
+    if (sinTarea) {
+      await cerrar(cliente, x.id, "omitido", sinTarea);
       await cliente.query("COMMIT");
       return { hubo: true, sucursal: null };
     }

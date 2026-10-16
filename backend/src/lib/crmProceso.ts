@@ -1,5 +1,6 @@
 import { getPool } from "./db.js";
-import { ajustarResultados, autorValido, avanzarPorContacto, editarEnTransaccion, editarOportunidad } from "./crm.js";
+import { ajustarResultados, autorValido, avanzarPorContacto, editarEnTransaccion, editarOportunidad, marcarCorreccion } from "./crm.js";
+import { corrigeBloqueo } from "./noContactarLogica.js";
 import { type ResultadoBdc } from "./resultadoBdcLogica.js";
 import {
   ETIQUETA_LLAMADA,
@@ -81,6 +82,10 @@ export async function registrarContacto(p: {
     const dadoDeBaja = rows[0].estado_contacto === "baja" || rows[0].contacto_baja === true;
     const calculado = efectoLlamada(p.resultado, rows[0].estado_contacto as string, rows[0].resultado_bdc as ResultadoBdc);
     const ef = dadoDeBaja ? { ...calculado, contacto: "baja", resultado: rows[0].resultado_bdc as ResultadoBdc } : calculado;
+    // Contestó el titular en un lead «No contactable»: el número sí es suyo. Lo registra una persona sobre este lead, así
+    // que se declara como corrección (solo para este cambio) y la base revoca el número equivocado de ese teléfono.
+    const corrige = corrigeBloqueo({ contactoAntes: rows[0].estado_contacto as string, contactoDespues: ef.contacto, motivoAntes: null, motivoDespues: null });
+    if (corrige) await marcarCorreccion(cliente, true);
 
     await cliente.query(
       `UPDATE crm_oportunidades
@@ -90,6 +95,7 @@ export async function registrarContacto(p: {
         WHERE id = $1 AND sucursal_id = $2`,
       [p.oportunidadId, p.sucursalId, ef.contacto, ef.resultado, ef.efectivo],
     );
+    if (corrige) await marcarCorreccion(cliente, false);
     // Hablar con el titular en una llamada registrada saca al lead de «Por contactar» aunque su campaña ya haya salido de la
     // ventana (igual que cuando se registra su respuesta). Lo demás: el resultado se alinea con el estado del lead.
     if (ef.efectivo && !dadoDeBaja) await avanzarPorContacto(cliente, p.sucursalId, p.oportunidadId, true);
@@ -381,7 +387,7 @@ export async function reporteEmbudo(sucursalId: string, desde: string, hasta: st
     pool.query(
       `SELECT o.ejecutivo,
               count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta')::int AS cartera_abierta,
-              count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND o.estado_contacto = 'sin_intentar')::int AS sin_intentar
+              count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND o.estado_contacto = 'sin_intentar' AND crm_supresion_de_lead(o.id) IS NULL)::int AS sin_intentar
          FROM crm_oportunidades o
         WHERE o.sucursal_id = $1 AND o.ejecutivo IS NOT NULL${ejecutivo ? " AND o.ejecutivo = $2" : ""}
         GROUP BY o.ejecutivo ORDER BY o.ejecutivo`,

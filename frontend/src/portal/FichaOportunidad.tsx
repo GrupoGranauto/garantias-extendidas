@@ -209,6 +209,10 @@ function detalleEntrada(e: Entrada): string | null {
   const d = e.detalle ?? {};
   if (e.tipo === "nota" && d.texto) return String(d.texto);
   if ((e.tipo === "llamada" || e.tipo === "whatsapp") && d.nota) return String(d.nota);
+  // Quitar «no contactar»: por qué se quitó y desde cuándo estaba la baja.
+  if (e.tipo === "edicion" && d.campo === "no_contactar" && d.motivo) {
+    return `Motivo: ${String(d.motivo)}${d.baja_en ? ` · La baja era del ${formato(d.baja_en)}` : ""}`;
+  }
   if (e.tipo === "edicion" || e.tipo === "reasignacion") return `${valorEdicion(d.campo, d.anterior)} → ${valorEdicion(d.campo, d.nuevo)}`;
   if (e.tipo === "etapa" && d.motivo) return `Motivo: ${String(d.motivo)}`;
   if (e.tipo === "tarea" && d.respuesta) return `Respuesta: ${String(d.respuesta)}`;
@@ -283,7 +287,8 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
     setEnviando(true);
     setAviso(null);
     try {
-      await apiFetch(`${base}/${ruta}`, { method: metodo, ...(metodo === "DELETE" ? {} : { body: JSON.stringify(cuerpo) }) });
+      // Un DELETE solo lleva cuerpo si trae datos (quitar «no contactar» manda su motivo).
+      await apiFetch(`${base}/${ruta}`, { method: metodo, ...(metodo === "DELETE" && cuerpo === null ? {} : { body: JSON.stringify(cuerpo) }) });
       setAviso({ tipo: "ok", texto: exito });
       despues?.();
       cargar(soloFicha);
@@ -570,7 +575,11 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
               enviando={enviando}
               guardar={(valores, exito) => accion("gestion", "PUT", valores, exito, undefined, true)}
               noContactar={(canal) => accion("no-contactar", "PUT", { canal }, "Registrado: no contactar.")}
-              quitarNoContactar={() => accion("no-contactar", "DELETE", null, "Se quitó «no contactar».")}
+              quitarNoContactar={(motivo) =>
+                accion("no-contactar", "DELETE", { motivo }, ficha.gestion.valores.no_contactar ? "Se quitó «no contactar»." : "Se quitó «Baja» de este lead.")
+              }
+              // La vista trae el estado de contacto con su etiqueta.
+              leadEnBaja={op.estado_contacto === "Baja"}
               esAdmin={esAdmin}
               avisar={(texto) => setAviso({ tipo: "error", texto })}
             />

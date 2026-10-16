@@ -62,6 +62,11 @@ const CANALES_BAJA = [
   { valor: "sms", texto: "SMS" },
 ];
 
+/** Mínimo de caracteres del motivo para quitar «no contactar» (el servidor exige lo mismo). */
+const MOTIVO_QUITAR_MIN = 10;
+/** Caracteres del motivo sin los espacios de las orillas, contados como el servidor (un emoji es uno). */
+const largoMotivo = (motivo: string) => [...motivo.trim()].length;
+
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /** ISO → valor de <input type="datetime-local"> en la hora local. */
@@ -111,21 +116,38 @@ type Props = {
   guardar: (valores: Record<string, unknown>, exito: string) => Promise<boolean>;
   /** Marca «no contactar» con el canal por el que lo pidió (PUT …/no-contactar). */
   noContactar: (canal: string) => void;
-  /** Quita «no contactar» (solo administradores; nunca una baja pedida por WhatsApp). */
-  quitarNoContactar: () => void;
+  /** Quita «no contactar» con su motivo (solo administradores; nunca una baja pedida por WhatsApp). Resuelve si se quitó. */
+  quitarNoContactar: (motivo: string) => Promise<boolean>;
+  /** El lead está en «Baja». Si la persona no tiene baja registrada, la baja es solo de este lead. */
+  leadEnBaja: boolean;
   esAdmin: boolean;
   /** Muestra un error de captura sin ir al servidor. */
   avisar: (texto: string) => void;
 };
 
-export default function GestionBdc({ gestion, enviando, guardar, noContactar, quitarNoContactar, esAdmin, avisar }: Props) {
+export default function GestionBdc({ gestion, enviando, guardar, noContactar, quitarNoContactar, leadEnBaja, esAdmin, avisar }: Props) {
   const g = gestion.valores;
   const k = gestion.calculados;
   const cat = gestion.catalogos;
+  // Lead en «Baja» sin baja de la persona (cambió de teléfono, o la baja de su número se quitó): se quita solo del lead.
+  const bajaSoloDelLead = leadEnBaja && !g.no_contactar;
   const [monto, setMonto] = useState(g.monto_cotizado === null ? "" : String(g.monto_cotizado));
   const [proximo, setProximo] = useState(aLocal(g.proximo_contacto_en));
   const [canalBaja, setCanalBaja] = useState("llamada");
   const [confirmarBaja, setConfirmarBaja] = useState(false);
+  // Quitar «no contactar» pide confirmación con un motivo obligatorio (queda en el historial).
+  const [quitando, setQuitando] = useState(false);
+  const [motivoQuitar, setMotivoQuitar] = useState("");
+  const faltanMotivo = MOTIVO_QUITAR_MIN - largoMotivo(motivoQuitar);
+
+  // Si no se pudo, se cierra para que se vea el error en la ficha; el motivo escrito se conserva.
+  const confirmarQuitar = () => {
+    if (faltanMotivo > 0 || enviando) return;
+    quitarNoContactar(motivoQuitar.trim()).then((ok) => {
+      setQuitando(false);
+      if (ok) setMotivoQuitar("");
+    });
+  };
 
   const guardarMonto = () => {
     const limpio = monto.replace(/[$,\s]/g, "");
@@ -363,34 +385,99 @@ export default function GestionBdc({ gestion, enviando, guardar, noContactar, qu
             {esAdmin && ["llamada", "correo", "presencial", "sms"].includes(g.no_contactar_canal ?? "") && (
               <>
                 {" "}
-                <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={quitarNoContactar}>
+                <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={() => setQuitando(true)}>
                   Quitar «no contactar» (error de captura)
                 </button>
               </>
             )}
           </p>
-        ) : confirmarBaja ? (
-          <div className="ficha-fila">
-            <select className="auto-input" value={canalBaja} onChange={(e) => setCanalBaja(e.target.value)} aria-label="Canal por el que lo pidió">
-              {CANALES_BAJA.map((c) => (
-                <option key={c.valor} value={c.valor}>
-                  Lo pidió por {c.texto.toLowerCase()}
-                </option>
-              ))}
-            </select>
-            <div className="ficha-botones">
-              <button type="button" className="boton-guardar boton-guardar-peligro" disabled={enviando} onClick={() => noContactar(canalBaja)}>
-                Confirmar
+        ) : (
+          <>
+            {bajaSoloDelLead && (
+              <p className="ficha-ayuda ficha-ayuda-alerta">
+                Este lead está en «Baja» por una baja de otro teléfono del cliente; su teléfono actual no tiene baja. No recibe mensajes masivos.
+                {esAdmin && (
+                  <>
+                    {" "}
+                    <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={() => setQuitando(true)}>
+                      Quitar «Baja» de este lead (error de captura)
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
+            {confirmarBaja ? (
+              <div className="ficha-fila">
+                <select className="auto-input" value={canalBaja} onChange={(e) => setCanalBaja(e.target.value)} aria-label="Canal por el que lo pidió">
+                  {CANALES_BAJA.map((c) => (
+                    <option key={c.valor} value={c.valor}>
+                      Lo pidió por {c.texto.toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+                <div className="ficha-botones">
+                  <button type="button" className="boton-guardar boton-guardar-peligro" disabled={enviando} onClick={() => noContactar(canalBaja)}>
+                    Confirmar
+                  </button>
+                  <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={() => setConfirmarBaja(false)}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={() => setConfirmarBaja(true)}>
+                Pidió no ser contactado
               </button>
-              <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={() => setConfirmarBaja(false)}>
-                Cancelar
-              </button>
+            )}
+          </>
+        )}
+        {quitando && (
+          <div
+            className="modal-fondo"
+            onClick={() => !enviando && setQuitando(false)}
+            // Escape cierra solo este diálogo, no la ficha.
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.stopPropagation();
+              if (!enviando) setQuitando(false);
+            }}
+          >
+            <div className="modal-tarjeta" role="dialog" aria-modal="true" aria-labelledby="quitar-baja-titulo" onClick={(e) => e.stopPropagation()}>
+              <h2 id="quitar-baja-titulo">{bajaSoloDelLead ? "Quitar «Baja» de este lead" : "Quitar «no contactar»"}</h2>
+              <div className="ficha-grupo">
+                <p>
+                  {bajaSoloDelLead
+                    ? "Solo si quedó en «Baja» por error. Solo este lead vuelve a recibir mensajes y llamadas; si el teléfono tiene una baja vigente, no se quita."
+                    : "Solo si se registró por error. La persona vuelve a recibir mensajes y llamadas en todos sus leads con este teléfono."}{" "}
+                  Escribe por qué; queda en el historial.
+                </p>
+                <label className="ficha-campo">
+                  <span>Motivo</span>
+                  <textarea
+                    className="auto-input"
+                    rows={3}
+                    maxLength={500}
+                    autoFocus
+                    placeholder="Ej. Se marcó en el cliente equivocado"
+                    value={motivoQuitar}
+                    disabled={enviando}
+                    onChange={(e) => setMotivoQuitar(e.target.value)}
+                  />
+                </label>
+                <span className="ficha-ayuda">
+                  {faltanMotivo > 0 ? `Mínimo ${MOTIVO_QUITAR_MIN} caracteres: ${faltanMotivo === 1 ? "falta 1" : `faltan ${faltanMotivo}`}.` : "Listo para quitarlo."}
+                </span>
+              </div>
+              <div className="modal-acciones">
+                <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={() => setQuitando(false)}>
+                  Cancelar
+                </button>
+                <button type="button" className="boton-guardar boton-guardar-peligro" disabled={enviando || faltanMotivo > 0} onClick={confirmarQuitar}>
+                  {enviando ? "Un momento…" : bajaSoloDelLead ? "Quitar «Baja»" : "Quitar «no contactar»"}
+                </button>
+              </div>
             </div>
           </div>
-        ) : (
-          <button type="button" className="boton-secundario-claro" disabled={enviando} onClick={() => setConfirmarBaja(true)}>
-            Pidió no ser contactado
-          </button>
         )}
       </div>
 

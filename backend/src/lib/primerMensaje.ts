@@ -1,7 +1,16 @@
 import { getPool } from "./db.js";
 import { CAMPANAS_CONOCIDAS, ZONA_ENVIOS, ahoraLocal } from "./campanasLogica.js";
 import { crearMasivoAutomatico, type Resultado } from "./masivos.js";
-import { etiquetaCampana, ordenCampana, plantillaNoUsable, VENTANA_MASIVOS, type Componentes } from "./masivosLogica.js";
+import {
+  etiquetaCampana,
+  juntarOmitidos,
+  ordenCampana,
+  plantillaNoUsable,
+  usoDePlantilla,
+  VENTANA_MASIVOS,
+  type Componentes,
+  type Omitido,
+} from "./masivosLogica.js";
 import { HORA_SIN_BASE, hayQueEsperarBase, proximoEnvio, tocaCorrer, validarConfig, type ConfigPrimerMensaje } from "./primerMensajeLogica.js";
 
 /**
@@ -51,7 +60,7 @@ export async function leerPrimerMensaje(sucursalId: string) {
     ),
     pool.query(
       `SELECT p.id, coalesce(p.nombre, p.nombre_tecnico) AS nombre, p.estado, p.componentes, coalesce(r.campanas, '{}') AS campanas,
-              coalesce(r.estados::text[], '{}') AS estados,
+              coalesce(r.estados::text[], '{}') AS estados, r.uso, p.categoria,
               coalesce((SELECT array_agg(v.indice) FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id), '{}') AS indices
          FROM whatsapp_plantillas p
          LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id
@@ -74,8 +83,11 @@ export async function leerPrimerMensaje(sucursalId: string) {
               (SELECT count(*) FROM crm_envios e WHERE e.masivo_id = m.id AND e.estado IN ('enviado', 'entregado', 'leido'))::int AS enviados,
               (SELECT count(*) FROM crm_envios e WHERE e.masivo_id = m.id AND e.estado = 'pendiente')::int AS en_cola,
               (SELECT count(*) FROM crm_envios e WHERE e.masivo_id = m.id AND e.estado = 'fallido')::int AS fallidos,
-              coalesce((SELECT sum((x->>'n')::int) FROM jsonb_array_elements(m.omitidos_resumen) x), 0)::int AS omitidos,
-              coalesce(m.omitidos_resumen, '[]'::jsonb) AS omitidos_resumen
+              coalesce(m.omitidos_resumen, '[]'::jsonb) AS omitidos_resumen,
+              -- Los que sí quedaron como fila omitida: cubiertos por otro vehículo con su teléfono, o frenados al despachar.
+              coalesce((SELECT jsonb_agg(jsonb_build_object('motivo', x.motivo, 'n', x.n))
+                          FROM (SELECT coalesce(e.motivo, 'omitido') AS motivo, count(*)::int AS n
+                                  FROM crm_envios e WHERE e.masivo_id = m.id AND e.estado = 'omitido' GROUP BY 1) x), '[]'::jsonb) AS omitidos_filas
          FROM crm_masivos m
         WHERE m.sucursal_id = $1 AND m.automatico
         ORDER BY m.campana, m.creado_en DESC`,
@@ -89,9 +101,11 @@ export async function leerPrimerMensaje(sucursalId: string) {
   const campanas = [...new Set<string>([...CAMPANAS_CONOCIDAS, ...cfgs.map((c) => c.campana as string)])].sort(
     (a, b) => ordenCampana(a) - ordenCampana(b),
   );
-  // Un primer mensaje es para leads «Por contactar»: las plantillas de otro estado (pago, póliza…) nunca les llegarían.
+  // Un primer mensaje es para leads «Por contactar» y es de campaña: las plantillas de otro estado o de servicio (pago,
+  // póliza…) no se ofrecen.
   const idsPorContactar = new Set(porContactar.map((e) => e.id as string));
   const usables = plantillas
+    .filter((p) => usoDePlantilla(p.uso as string | null, p.categoria as string | null) === "campana")
     .filter((p) => !plantillaNoUsable({ estado: p.estado, componentes: p.componentes as Componentes }, (p.indices as number[]).map(Number)))
     .filter((p) => (p.estados as string[]).length === 0 || (p.estados as string[]).some((id) => idsPorContactar.has(id)))
     .map((p) => ({ id: p.id as string, nombre: p.nombre as string, campanas: p.campanas as string[] }));
@@ -105,6 +119,7 @@ export async function leerPrimerMensaje(sucursalId: string) {
       const ultima = ultimas.find((u) => u.campana === campana) ?? null;
       const corrioHoy = ultima?.fecha === hoy.fecha;
       const t = tocaCorrer(cfg, hoy, { yaCorrioHoy: corrioHoy, baseActualizadaHoy: base });
+      const omitidos = ultima ? juntarOmitidos(ultima.omitidos_resumen as Omitido[], ultima.omitidos_filas as { motivo: string; n: number }[]) : [];
       return {
         campana,
         etiqueta: etiquetaCampana(campana),
@@ -129,8 +144,8 @@ export async function leerPrimerMensaje(sucursalId: string) {
               enviados: ultima.enviados as number,
               en_cola: ultima.en_cola as number,
               fallidos: ultima.fallidos as number,
-              omitidos: ultima.omitidos as number,
-              omitidos_resumen: ultima.omitidos_resumen as { motivo: string; texto: string; n: number }[],
+              omitidos: omitidos.reduce((n, o) => n + o.n, 0),
+              omitidos_resumen: omitidos,
               nota: (ultima.nota as string | null) ?? null,
             }
           : null,
@@ -139,7 +154,10 @@ export async function leerPrimerMensaje(sucursalId: string) {
   };
 }
 
-/** Guarda la configuración de una campaña (solo campañas conocidas o ya configuradas, y una plantilla que sí se pueda mandar). */
+/**
+ * Guarda la configuración de una campaña: solo campañas conocidas o ya configuradas, y una plantilla de campaña (nunca de
+ * servicio) que sí se pueda mandar.
+ */
 export async function guardarPrimerMensaje(
   sucursalId: string,
   campana: string,
@@ -159,6 +177,19 @@ export async function guardarPrimerMensaje(
   const info = await leerPrimerMensaje(sucursalId);
   const fila = info.campanas.find((c) => c.campana === campana);
   if (!fila) return { ok: false, error: "Esa campaña no existe." };
+  if (cfg.plantillaId) {
+    const { rows } = await getPool().query(
+      `SELECT r.uso, p.categoria FROM whatsapp_plantillas p LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id
+        WHERE p.id = $1 AND p.sucursal_id = $2`,
+      [cfg.plantillaId, sucursalId],
+    );
+    if (rows[0] && usoDePlantilla(rows[0].uso as string | null, rows[0].categoria as string | null) === "servicio") {
+      return {
+        ok: false,
+        error: "El primer mensaje debe ser una plantilla de campaña. Esta es de servicio (póliza o cobro); elige una de campaña.",
+      };
+    }
+  }
   if (cfg.plantillaId && !fila.plantillas.some((p) => p.id === cfg.plantillaId)) {
     return { ok: false, error: "Esa plantilla no se puede usar: tiene que estar aprobada, con sus datos ligados y ser de esta campaña o general." };
   }
@@ -200,7 +231,8 @@ export async function programarPrimerosMensajes(): Promise<number> {
     if (res.creado) {
       armados++;
       console.log(
-        `[primer-mensaje] ${r.campana}: ${res.enviar} en cola, ${res.omitidos} omitidos${res.nota ? ` (${res.nota})` : ""} (sucursal ${sucursalId})`,
+        `[primer-mensaje] ${r.campana}: ${res.enviar} en cola, ${res.omitidos} omitidos, ${res.cubiertos} cubiertos por otro vehículo` +
+          `${res.nota ? ` (${res.nota})` : ""} (sucursal ${sucursalId})`,
       );
     }
   }

@@ -1,10 +1,23 @@
 import { getPool } from "./db.js";
 import { ajustarResultados, autorValido, CONTRATO_CON_EVIDENCIA } from "./crm.js";
+import {
+  DESCARTES_VEHICULO,
+  avisoBajaEnLote,
+  avisoBloqueadasEnLote,
+  avisoBloqueadasEtapaEnLote,
+  bajaQuedaFuera,
+  bloqueoQuedaFuera,
+} from "./noContactarLogica.js";
 
 /**
  * Acciones sobre varias oportunidades a la vez (selección en la tabla). Todo ocurre en una sola
  * transacción: o se aplica a todas las elegibles, o a ninguna. Un asesor restringido a su ejecutivo
- * solo puede tocar las suyas; las demás se cuentan como omitidas, no como error.
+ * solo puede tocar las suyas; las demás se cuentan como omitidas, no como error. Los leads en «Baja»
+ * (o de una persona dada de baja) no se reabren ni reciben tareas en lote: también se omiten, y la
+ * respuesta dice cuántos y por qué (`en_baja`, `aviso`). Tampoco reciben tareas los no contactables
+ * ni los que tienen una supresión vigente por su teléfono o su VIN, ni se reabren o cambian de motivo
+ * en lote los no contactables o con el vehículo descartado (`bloqueadas`): eso se corrige en la ficha.
+ * Una acción en lote nunca declara la corrección de un bloqueo: no libera números equivocados ni VIN.
  */
 
 export const MAX_MASIVO = 200;
@@ -15,7 +28,22 @@ export type AccionMasiva =
   | { accion: "ejecutivo"; ejecutivo: string }
   | { accion: "tarea"; titulo: string; descripcion?: string | null; vence_horas?: number | null };
 
-export type ResultadoMasivo = { afectadas: number; omitidas: number } | { error: string };
+export type ResultadoMasivo =
+  | {
+      afectadas: number;
+      /** Incluye las de `en_baja` y `bloqueadas`. */
+      omitidas: number;
+      /** Leads en «Baja» que la acción dejó fuera. */
+      en_baja: number;
+      /**
+       * Leads bloqueados que la acción dejó fuera: sin la tarea (no contactables o con una supresión vigente) o sin moverse
+       * de estado (no contactables o con el vehículo descartado, cuando la acción los reabría o les cambiaba el motivo).
+       */
+      bloqueadas: number;
+      /** Por qué se dejaron fuera, para mostrarlo tal cual; null si no hubo. */
+      aviso: string | null;
+    }
+  | { error: string };
 
 export async function ejecutarAccionMasiva(p: {
   sucursalId: string;
@@ -33,10 +61,13 @@ export async function ejecutarAccionMasiva(p: {
   try {
     await cliente.query("BEGIN");
 
+    // En baja: el lead está en «Baja», o la persona lo está y el lead no es venta (a las ventas la baja no las mueve).
     const { rows: filas } = await cliente.query(
-      `SELECT id, etapa_id, ejecutivo FROM crm_oportunidades
-        WHERE sucursal_id = $1 AND id = ANY($2::uuid[])${restringidoA ? " AND ejecutivo = $3" : ""}
-        ORDER BY id FOR UPDATE`,
+      `SELECT o.id, o.etapa_id, o.ejecutivo,
+              (o.estado_contacto = 'baja' OR (coalesce(k.whatsapp_baja, false) AND o.estado <> 'ganada')) AS en_baja
+         FROM crm_oportunidades o LEFT JOIN crm_contactos k ON k.id = o.contacto_id
+        WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])${restringidoA ? " AND o.ejecutivo = $3" : ""}
+        ORDER BY o.id FOR UPDATE OF o`,
       restringidoA ? [sucursalId, ids, restringidoA] : [sucursalId, ids],
     );
     const omitidasPorPermiso = ids.length - filas.length;
@@ -44,7 +75,7 @@ export async function ejecutarAccionMasiva(p: {
 
     if (filas.length === 0) {
       await cliente.query("ROLLBACK");
-      return { afectadas: 0, omitidas: omitidasPorPermiso };
+      return { afectadas: 0, omitidas: omitidasPorPermiso, en_baja: 0, bloqueadas: 0, aviso: null };
     }
 
     /* ---------- Cambiar de etapa ---------- */
@@ -59,7 +90,6 @@ export async function ejecutarAccionMasiva(p: {
       }
       const destino = etapas[0].id as string;
       const tipo = etapas[0].tipo as string;
-      const aMover = filas.filter((f) => f.etapa_id !== destino);
 
       let motivoId: string | null = null;
       if (tipo === "perdida" && accion.motivo) {
@@ -73,6 +103,38 @@ export async function ejecutarAccionMasiva(p: {
         }
         motivoId = rows[0].id as string;
       }
+
+      // Un lead en «Baja» solo se cierra como perdido en lote: reabrirlo o venderlo se hace en su ficha, uno por uno.
+      const fueraPorBaja = filas.filter((f) => f.etapa_id !== destino && f.en_baja && bajaQuedaFuera("etapa", tipo));
+      // Bloqueados: no contactables (el lead, o su teléfono con un número equivocado vigente) o con el vehículo descartado
+      // (su motivo, o una supresión vigente de su VIN). El lote no libera bloqueos, así que tampoco los reabre ni les cambia
+      // el motivo: quedarían abiertos pero sin poder contactarse, o perderían el motivo con que se corrigen en la ficha.
+      const candidatos = filas.filter((f) => f.etapa_id !== destino && !fueraPorBaja.includes(f));
+      const { rows: bloq } =
+        candidatos.length > 0
+          ? await cliente.query(
+              `SELECT o.id, o.motivo_perdida_id
+                 FROM crm_oportunidades o
+                 LEFT JOIN crm_contactos k ON k.id = o.contacto_id
+                 LEFT JOIN crm_vehiculos v ON v.id = o.vehiculo_id
+                 LEFT JOIN crm_motivos_perdida mp ON mp.id = o.motivo_perdida_id
+                WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])
+                  AND (o.estado_contacto = 'no_contactable'
+                       OR mp.clave = ANY($3::text[])
+                       OR EXISTS (SELECT 1 FROM crm_supresiones s
+                                   WHERE s.sucursal_id = o.sucursal_id AND s.revocada_en IS NULL
+                                     AND (s.vigente_hasta IS NULL OR s.vigente_hasta > now())
+                                     AND ((s.alcance = 'telefono' AND s.motivo = 'numero_equivocado' AND s.valor = crm_tel10(k.telefono))
+                                       OR (s.alcance = 'vin' AND s.valor = v.vin))))`,
+              [sucursalId, candidatos.map((f) => f.id), [...DESCARTES_VEHICULO]],
+            )
+          : { rows: [] };
+      const motivoBloqueada = new Map(bloq.map((r) => [r.id as string, (r.motivo_perdida_id as string | null) ?? null]));
+      const nuevoMotivo = tipo === "perdida" ? motivoId : null;
+      const fueraPorBloqueo = candidatos.filter(
+        (f) => motivoBloqueada.has(f.id as string) && bloqueoQuedaFuera(tipo, motivoBloqueada.get(f.id as string) ?? null, nuevoMotivo),
+      );
+      const aMover = candidatos.filter((f) => !fueraPorBloqueo.includes(f));
 
       // Una venta exige evidencia si la sucursal así lo configuró: todas o ninguna.
       if (tipo === "ganada" && aMover.length > 0) {
@@ -114,7 +176,16 @@ export async function ejecutarAccionMasiva(p: {
         await ajustarResultados(cliente, sucursalId, aMover.map((f) => f.id as string));
       }
       await cliente.query("COMMIT");
-      return { afectadas: aMover.length, omitidas: omitidasPorPermiso + (filas.length - aMover.length) };
+      const avisos = [avisoBajaEnLote("etapa", fueraPorBaja.length), avisoBloqueadasEtapaEnLote(fueraPorBloqueo.length)].filter(
+        (a): a is string => a !== null,
+      );
+      return {
+        afectadas: aMover.length,
+        omitidas: omitidasPorPermiso + (filas.length - aMover.length),
+        en_baja: fueraPorBaja.length,
+        bloqueadas: fueraPorBloqueo.length,
+        aviso: avisos.length > 0 ? avisos.join(" ") : null,
+      };
     }
 
     /* ---------- Reasignar ejecutivo ---------- */
@@ -139,7 +210,14 @@ export async function ejecutarAccionMasiva(p: {
         );
       }
       await cliente.query("COMMIT");
-      return { afectadas: aCambiar.length, omitidas: omitidasPorPermiso + (filas.length - aCambiar.length) };
+      // Reasignar no saca a nadie de baja: los leads en «Baja» también cambian de ejecutivo.
+      return {
+        afectadas: aCambiar.length,
+        omitidas: omitidasPorPermiso + (filas.length - aCambiar.length),
+        en_baja: 0,
+        bloqueadas: 0,
+        aviso: null,
+      };
     }
 
     /* ---------- Crear una tarea para cada una ---------- */
@@ -148,15 +226,39 @@ export async function ejecutarAccionMasiva(p: {
       await cliente.query("ROLLBACK");
       return { error: "La tarea necesita un título." };
     }
-    await cliente.query(
-      `INSERT INTO crm_tareas (sucursal_id, oportunidad_id, tipo, titulo, descripcion, config, asignado_a, vence_en)
-       SELECT $1, o.id, 'tarea', $3, $4, '{}'::jsonb, o.ejecutivo,
-              CASE WHEN $5::int IS NULL THEN NULL ELSE now() + make_interval(hours => $5::int) END
-         FROM crm_oportunidades o WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])`,
-      [sucursalId, filas.map((f) => f.id), titulo, accion.descripcion?.trim() || null, accion.vence_horas ?? null],
+    // A quien no se le puede contactar (no contactable, o con una supresión vigente por su teléfono o su VIN) nadie debe
+    // buscarlo: tampoco recibe la tarea.
+    const { rows: bloq } = await cliente.query(
+      `SELECT o.id FROM crm_oportunidades o
+        WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])
+          AND (o.estado_contacto = 'no_contactable' OR crm_supresion_de_lead(o.id) IS NOT NULL)`,
+      [sucursalId, filas.map((f) => f.id)],
     );
+    const bloqueadasIds = new Set(bloq.map((r) => r.id as string));
+    // La baja descarta las tareas pendientes del lead: tampoco se le crean nuevas. Cada lead cuenta en un solo grupo.
+    const sinTareaPorBaja = filas.filter((f) => f.en_baja && bajaQuedaFuera("tarea"));
+    const sinTareaPorBloqueo = filas.filter((f) => !sinTareaPorBaja.includes(f) && bloqueadasIds.has(f.id as string));
+    const conTarea = filas.filter((f) => !sinTareaPorBaja.includes(f) && !sinTareaPorBloqueo.includes(f));
+    const enBaja = sinTareaPorBaja.length;
+    const bloqueadas = sinTareaPorBloqueo.length;
+    if (conTarea.length > 0) {
+      await cliente.query(
+        `INSERT INTO crm_tareas (sucursal_id, oportunidad_id, tipo, titulo, descripcion, config, asignado_a, vence_en)
+         SELECT $1, o.id, 'tarea', $3, $4, '{}'::jsonb, o.ejecutivo,
+                CASE WHEN $5::int IS NULL THEN NULL ELSE now() + make_interval(hours => $5::int) END
+           FROM crm_oportunidades o WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])`,
+        [sucursalId, conTarea.map((f) => f.id), titulo, accion.descripcion?.trim() || null, accion.vence_horas ?? null],
+      );
+    }
     await cliente.query("COMMIT");
-    return { afectadas: filas.length, omitidas: omitidasPorPermiso };
+    const avisos = [avisoBajaEnLote("tarea", enBaja), avisoBloqueadasEnLote(bloqueadas)].filter((a): a is string => a !== null);
+    return {
+      afectadas: conTarea.length,
+      omitidas: omitidasPorPermiso + enBaja + bloqueadas,
+      en_baja: enBaja,
+      bloqueadas,
+      aviso: avisos.length > 0 ? avisos.join(" ") : null,
+    };
   } catch (err) {
     await cliente.query("ROLLBACK").catch(() => {});
     throw err;
@@ -181,7 +283,7 @@ export async function resumenInicio(sucursalId: string, ejecutivo: string | null
   const [cartera, tareas, contactos, ventas, atender, embudo, campanas, actividad] = await Promise.all([
     pool.query(
       `SELECT count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta')::int AS cartera_abierta,
-              count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND o.estado_contacto = 'sin_intentar')::int AS sin_intentar,
+              count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND o.estado_contacto = 'sin_intentar' AND crm_supresion_de_lead(o.id) IS NULL)::int AS sin_intentar,
               count(*) FILTER (WHERE o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta' AND e.tiempo_max_horas IS NOT NULL
                                AND o.entro_a_etapa_en < now() - make_interval(hours => e.tiempo_max_horas))::int AS fuera_sla
          FROM crm_oportunidades o LEFT JOIN crm_etapas e ON e.id = o.etapa_id
@@ -220,6 +322,7 @@ export async function resumenInicio(sucursalId: string, ejecutivo: string | null
          LEFT JOIN crm_contactos c ON c.id = o.contacto_id
         WHERE o.sucursal_id = $1 AND o.estado_cartera = 'ACTIVA' AND o.estado = 'abierta'
           AND o.estado_contacto NOT IN ('baja', 'no_contactable') AND NOT coalesce(c.whatsapp_baja, false)
+          AND crm_supresion_de_lead(o.id) IS NULL
           AND (o.estado_contacto = 'sin_intentar' OR (${fueraSla}))${filtro}
         ORDER BY (${fueraSla}) DESC, o.fecha_fin_campana NULLS LAST, o.entro_a_etapa_en
         LIMIT 8`,

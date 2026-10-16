@@ -9,17 +9,22 @@ import {
   VENTANA_MASIVOS,
   clasificarDestinatarios,
   contarOmitidos,
+  cubiertoPorTelefono,
   encabezadoArchivo,
   etiquetaCampana,
   indicesCuerpo,
   llenarCuerpo,
+  motivoDelFreno,
+  motivoPorPaso,
   motivoPorReglas,
   ordenCampana,
   plantillaNoUsable,
+  reglasParaEnvio,
   vistaMensaje,
   type Componentes,
   type DatosLead,
   type Destinatario,
+  type EnvioPrevio,
   type ReglasPlantilla,
 } from "./masivosLogica.js";
 import { puedeReintentar } from "./primerMensajeLogica.js";
@@ -29,7 +34,8 @@ import { puedeReintentar } from "./primerMensajeLogica.js";
  *  - revisarMasivo: cuántos sí lo reciben, por qué se omite a los demás y cómo se ve el mensaje (no guarda nada);
  *  - crearMasivo: deja cada fila como un envío del masivo, con los datos de la plantilla congelados, y vuelve enseguida;
  *  - despacharMasivos: el motor del servidor los manda en segundo plano, uno por uno, dentro del horario.
- * Respeta lo de siempre: la baja gana, un mensaje por teléfono al día y nunca se manda dos veces el mismo mensaje.
+ * Respeta lo de siempre: la baja gana, un mensaje por teléfono al día y nunca se manda dos veces el mismo mensaje. El freno
+ * de la base (crm_motivo_no_enviar: supresiones, venta, contrato, campaña) se consulta al armar y otra vez justo antes de mandar.
  */
 
 type Consulta = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }> };
@@ -54,12 +60,23 @@ type Plantilla = {
   reglas: ReglasPlantilla;
 };
 
+/** Las reglas «A quién» de la plantilla (alias r de crm_plantilla_reglas). */
+const SQL_REGLAS = `coalesce(r.campanas, '{}') AS r_campanas, coalesce(r.estados::text[], '{}') AS r_estados,
+         coalesce(r.resultados, '{}') AS r_resultados, coalesce(r.etapas_vehiculo::text[], '{}') AS r_etapas_vehiculo,
+         coalesce(r.uso, 'campana') AS r_uso`;
+const aReglas = (r: Record<string, any>): ReglasPlantilla => ({
+  campanas: r.r_campanas,
+  estados: r.r_estados,
+  resultados: r.r_resultados,
+  etapasVehiculo: r.r_etapas_vehiculo,
+  uso: r.r_uso === "servicio" ? "servicio" : "campana",
+});
+
 const SQL_PLANTILLA = `
   SELECT p.id, coalesce(p.nombre, p.nombre_tecnico) AS nombre, p.nombre_tecnico, p.idioma, p.estado, p.componentes,
          coalesce((SELECT json_agg(json_build_object('indice', v.indice, 'columna', v.columna_tecnica) ORDER BY v.indice)
                      FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id), '[]'::json) AS variables,
-         coalesce(r.campanas, '{}') AS r_campanas, coalesce(r.estados::text[], '{}') AS r_estados,
-         coalesce(r.resultados, '{}') AS r_resultados, coalesce(r.etapas_vehiculo::text[], '{}') AS r_etapas_vehiculo
+         ${SQL_REGLAS}
     FROM whatsapp_plantillas p
     LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id`;
 
@@ -71,8 +88,14 @@ const aPlantilla = (r: Record<string, any>): Plantilla => ({
   estado: r.estado,
   componentes: r.componentes,
   variables: r.variables,
-  reglas: { campanas: r.r_campanas, estados: r.r_estados, resultados: r.r_resultados, etapasVehiculo: r.r_etapas_vehiculo },
+  reglas: aReglas(r),
 });
+
+/** Freno de la base: 'primer_mensaje' para el masivo automático (exige campaña vigente), 'masivo' para el manual. */
+type Origen = "primer_mensaje" | "masivo";
+
+/** SQL: el envío `x` pudo llegarle al teléfono. Misma regla que pudoLlegar() en masivosLogica.ts. */
+const PUDO_LLEGAR = (x: string) => `(${x}.estado IN ('enviado', 'entregado', 'leido') OR (${x}.estado = 'fallido' AND ${x}.error_codigo IS NULL))`;
 
 /** Lo del lead que se compara con las reglas de una plantilla. */
 const SQL_DATOS_LEAD = `o.campana AS campana_lead, o.etapa_id::text AS estado_id, o.resultado_bdc, veh.etapa_vehiculo_id::text AS etapa_vehiculo_id`;
@@ -182,9 +205,11 @@ export async function guardarReglas(
     const { rows } = await pool.query(`SELECT count(*)::int AS n FROM crm_ciclo_etapas WHERE sucursal_id = $1 AND id = ANY($2::uuid[])`, [sucursalId, etapas]);
     if (rows[0].n !== etapas.length) return { ok: false, error: "Hay una etapa del vehículo que no existe en este grupo." };
   }
+  // El uso nace de la categoría de Meta (utilidad = servicio, como al crear la columna); al editar las reglas no se toca.
   await pool.query(
-    `INSERT INTO crm_plantilla_reglas (plantilla_id, sucursal_id, campanas, estados, resultados, etapas_vehiculo, actualizado_en)
-     VALUES ($1, $2, $3, $4::uuid[], $5, $6::uuid[], now())
+    `INSERT INTO crm_plantilla_reglas (plantilla_id, sucursal_id, campanas, estados, resultados, etapas_vehiculo, actualizado_en, uso)
+     VALUES ($1, $2, $3, $4::uuid[], $5, $6::uuid[], now(),
+             (SELECT CASE WHEN p.categoria = 'utility' THEN 'servicio' ELSE 'campana' END FROM whatsapp_plantillas p WHERE p.id = $1))
      ON CONFLICT (plantilla_id) DO UPDATE SET campanas = excluded.campanas, estados = excluded.estados, resultados = excluded.resultados,
             etapas_vehiculo = excluded.etapas_vehiculo, actualizado_en = now()`,
     [plantillaId, sucursalId, unicos(r.campanas), estados, resultados, etapas],
@@ -199,8 +224,11 @@ type Preparado = {
   noEncontradas: number;
 };
 
-/** Carga la plantilla y las filas elegidas, arma los datos de cada mensaje y decide a quién sí le sale. */
-async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantillaId: string): Promise<Resultado<Preparado>> {
+/**
+ * Carga la plantilla y las filas elegidas, arma los datos de cada mensaje y decide a quién sí le sale: las reglas «A quién»,
+ * el freno de la base (supresiones, venta, contrato y campaña, según el origen) y un mensaje por teléfono al día.
+ */
+async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantillaId: string, origen: Origen): Promise<Resultado<Preparado>> {
   const unicos = [...new Set(ids)];
   if (unicos.length === 0) return { ok: false, error: "Elige al menos una fila." };
   if (unicos.length > MAX_DESTINATARIOS) return { ok: false, error: `Un masivo puede llevar hasta ${MAX_DESTINATARIOS.toLocaleString("es-MX")} filas.` };
@@ -215,14 +243,15 @@ async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantil
 
   const { rows } = await cl.query(
     `SELECT o.id, coalesce(o.campana, 'MASIVO') AS campana, o.estado_contacto, c.nombre AS cliente, c.telefono, c.tiene_celular,
-            c.whatsapp_baja, to_jsonb(v) AS fila, ${SQL_DATOS_LEAD}
+            c.whatsapp_baja, to_jsonb(v) AS fila, ${SQL_DATOS_LEAD},
+            crm_motivo_no_enviar(o.id, $3::uuid, $4::text) AS freno
        FROM crm_oportunidades o
        JOIN crm_contactos c ON c.id = o.contacto_id
        JOIN crm_vehiculos veh ON veh.id = o.vehiculo_id
        JOIN crm_v_oportunidades v ON v.id = o.id
       WHERE o.sucursal_id = $1 AND o.id = ANY($2::uuid[])
       ORDER BY array_position($2::uuid[], o.id)`,
-    [sucursalId, unicos],
+    [sucursalId, unicos, plantilla.id, origen],
   );
 
   const indices = indicesCuerpo(plantilla.componentes!.body!.texto);
@@ -248,10 +277,12 @@ async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantil
     [sucursalId, ahoraLocal().fecha],
   );
 
+  const reglas = reglasParaEnvio(plantilla.reglas);
   const destinatarios = clasificarDestinatarios(
     filas.map((f) => ({
       oportunidadId: f.id,
-      fueraDeReglas: motivoPorReglas(plantilla.reglas, aDatosLead(f.r)),
+      fueraDeReglas: motivoPorReglas(reglas, aDatosLead(f.r)),
+      freno: motivoDelFreno(f.r.freno as string | null),
       telefono: f.r.telefono,
       tieneCelular: (f.r.tiene_celular as boolean | null) ?? null,
       baja: f.r.whatsapp_baja === true,
@@ -296,7 +327,7 @@ function resumen(p: Preparado) {
 
 /** Lo que pasaría al mandar: a cuántos sale, a quién se omite y por qué, y el mensaje de ejemplo. No guarda nada. */
 export async function revisarMasivo(sucursalId: string, ids: string[], plantillaId: string) {
-  const p = await preparar(getPool(), sucursalId, ids, plantillaId);
+  const p = await preparar(getPool(), sucursalId, ids, plantillaId, "masivo");
   if (!p.ok) return p;
   return { ok: true as const, valor: resumen(p.valor) };
 }
@@ -308,7 +339,7 @@ export async function crearMasivo(sucursalId: string, ids: string[], plantillaId
     await cliente.query("BEGIN");
     // Dos admins mandando a la vez no deben esquivar la regla de un mensaje por teléfono al día.
     await cliente.query(`SELECT pg_advisory_xact_lock(hashtext('masivo:' || $1))`, [sucursalId]);
-    const p = await preparar(cliente, sucursalId, ids, plantillaId);
+    const p = await preparar(cliente, sucursalId, ids, plantillaId, "masivo");
     if (!p.ok) {
       await cliente.query("ROLLBACK");
       return p;
@@ -352,8 +383,11 @@ export async function crearMasivo(sucursalId: string, ids: string[], plantillaId
 /**
  * El masivo automático del primer mensaje de una campaña: uno por día (si ya existe, no hace nada). Toma a los leads con su
  * paso de esa campaña abierto y sin primer mensaje, más los que Meta frenó por el límite de marketing un día anterior (un solo
- * reintento), y les aplica las mismas reglas que a un masivo manual. Solo quien sí lo recibe queda en cola, ligado a su paso;
- * a los omitidos no se les marca (se revisan otra vez el siguiente día permitido) y queda su resumen en el masivo.
+ * reintento), y les aplica las mismas reglas que a un masivo manual más el freno del primer mensaje (campaña vigente). Solo
+ * quien sí lo recibe queda en cola, ligado a su paso; a los omitidos no se les marca (se revisan otra vez el siguiente día
+ * permitido) y queda su resumen en el masivo. La excepción es D10, un primer mensaje por teléfono y campaña: el paso a cuyo
+ * teléfono ya le llegó un mensaje de esa campaña (primer mensaje o masivo manual, de cualquier vehículo) queda marcado como
+ * omitido y ligado a ese envío, para no revisarlo a diario.
  */
 export async function crearMasivoAutomatico(sucursalId: string, campana: string, plantillaId: string, fecha: string, soloTelefonos: string[] = []) {
   const cliente = await getPool().connect();
@@ -376,15 +410,29 @@ export async function crearMasivoAutomatico(sucursalId: string, campana: string,
     }
     const masivoId = nuevo[0].id as string;
 
-    // El último primer mensaje de cada paso decide: ninguno, o uno que Meta no entregó (se reintenta si se puede).
+    // El último primer mensaje de cada paso decide: ninguno, uno que Meta no entregó (se reintenta si se puede), o uno omitido
+    // porque a su teléfono ya le había llegado un mensaje de la campaña (D10) que al final no llegó: ese ya no lo cubre. Como
+    // el intento 1 quedó ocupado por la omisión, sale como intento 2.
     const { rows: pasos } = await cliente.query(
-      `SELECT o.id AS oportunidad_id, p.id AS paso_id, pm.estado AS pm_estado, pm.error_codigo AS pm_codigo, pm.fecha::text AS pm_fecha
+      `SELECT o.id AS oportunidad_id, p.id AS paso_id, coalesce(o.campana, 'MASIVO') AS campana_lead, crm_tel10(ct.telefono) AS tel10,
+              coalesce(p.fecha_inicio_campana, (p.abierta_en AT TIME ZONE '${ZONA_ENVIOS}')::date)::text AS inicio,
+              pm.estado AS pm_estado, pm.error_codigo AS pm_codigo, pm.fecha::text AS pm_fecha, pm.cubierto_caido
          FROM crm_oportunidad_campanas p
          JOIN crm_oportunidades o ON o.id = p.oportunidad_id AND o.estado = 'abierta'
          JOIN crm_contactos ct ON ct.id = o.contacto_id
          LEFT JOIN LATERAL (
            SELECT e.estado, e.error_codigo, e.primer_mensaje_intento,
-                  (coalesce(e.enviado_en, e.creado_en) AT TIME ZONE '${ZONA_ENVIOS}')::date AS fecha
+                  (coalesce(e.enviado_en, e.creado_en) AT TIME ZONE '${ZONA_ENVIOS}')::date AS fecha,
+                  -- El envío que lo cubría no pudo llegar (falló con código de Meta, se omitió o ya no existe) y su paso no
+                  -- tiene un reintento en cola o enviado.
+                  (e.estado = 'omitido' AND e.motivo = 'cubierto_mismo_telefono'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM crm_envios c
+                      WHERE c.id = e.cubierto_por_envio_id
+                        AND (${PUDO_LLEGAR("c")}
+                             OR EXISTS (SELECT 1 FROM crm_envios r
+                                         WHERE r.campana_id = c.campana_id AND r.primer_mensaje_intento = 2
+                                           AND (r.estado = 'pendiente' OR ${PUDO_LLEGAR("r")}))))) AS cubierto_caido
              FROM crm_envios e
             WHERE e.campana_id = p.id AND e.primer_mensaje_intento IS NOT NULL
             ORDER BY e.primer_mensaje_intento DESC
@@ -394,25 +442,88 @@ export async function crearMasivoAutomatico(sucursalId: string, campana: string,
           AND (cardinality($3::text[]) = 0 OR right(regexp_replace(coalesce(ct.telefono, ''), '\\D', '', 'g'), 10) = ANY($3::text[]))
           -- Si en esta campaña ya recibió (o tiene en cola) cualquier mensaje, ya no es «primer» mensaje.
           AND NOT EXISTS (SELECT 1 FROM crm_envios x WHERE x.campana_id = p.id AND x.estado IN ('pendiente', 'enviado', 'entregado', 'leido'))
-          AND (pm.estado IS NULL OR (pm.primer_mensaje_intento = 1 AND pm.estado = 'fallido'))
+          AND (pm.estado IS NULL OR (pm.primer_mensaje_intento = 1 AND (pm.estado = 'fallido' OR pm.cubierto_caido)))
         ORDER BY p.abierta_en
         LIMIT ${MAX_DESTINATARIOS}`,
       [sucursalId, campana, soloTelefonos],
     );
     const candidatos = pasos
-      .filter((c) => !c.pm_estado || puedeReintentar({ estado: c.pm_estado, errorCodigo: c.pm_codigo, fecha: c.pm_fecha }, fecha))
-      .map((c) => ({ oportunidadId: c.oportunidad_id as string, pasoId: c.paso_id as string, intento: c.pm_estado ? 2 : 1 }));
+      .filter(
+        (c) =>
+          !c.pm_estado || c.cubierto_caido === true || puedeReintentar({ estado: c.pm_estado, errorCodigo: c.pm_codigo, fecha: c.pm_fecha }, fecha),
+      )
+      .map((c) => ({
+        oportunidadId: c.oportunidad_id as string,
+        pasoId: c.paso_id as string,
+        intento: c.pm_estado ? 2 : 1,
+        campana: c.campana_lead as string,
+        tel10: (c.tel10 as string | null) ?? null,
+        inicio: c.inicio as string,
+      }));
+
+    // D10, un primer mensaje por teléfono y campaña: los mensajes de esta campaña que pudieron llegar (o siguen en cola) a los
+    // teléfonos de los candidatos, de cualquier vehículo: primeros mensajes y envíos de masivos manuales ligados a un paso de
+    // esta campaña. Cuáles cubren a cada candidato (por fecha) lo decide cubiertoPorTelefono.
+    let previos: EnvioPrevio[] = [];
+    const telefonos = [...new Set(candidatos.map((c) => c.tel10).filter((t): t is string => t !== null))];
+    if (telefonos.length > 0) {
+      const { rows } = await cliente.query(
+        `SELECT e.id, crm_tel10(c.telefono) AS tel10, e.estado, e.error_codigo,
+                (coalesce(e.enviado_en, e.creado_en) AT TIME ZONE '${ZONA_ENVIOS}')::date::text AS fecha
+           FROM crm_envios e
+           JOIN crm_oportunidad_campanas px ON px.id = e.campana_id AND px.campana = $2
+           JOIN crm_oportunidades o ON o.id = e.oportunidad_id
+           JOIN crm_contactos c ON c.id = o.contacto_id
+          WHERE e.sucursal_id = $1 AND (e.primer_mensaje_intento IS NOT NULL OR e.masivo_id IS NOT NULL)
+            AND (e.estado = 'pendiente' OR ${PUDO_LLEGAR("e")})
+            AND c.sucursal_id = $1 AND crm_tel10(c.telefono) = ANY($3::text[])`,
+        [sucursalId, campana, telefonos],
+      );
+      previos = rows.map((r) => ({
+        id: r.id as string,
+        tel10: (r.tel10 as string | null) ?? null,
+        estado: r.estado as string,
+        errorCodigo: (r.error_codigo as number | null) ?? null,
+        fecha: r.fecha as string,
+      }));
+    }
+    const libres: typeof candidatos = [];
+    const cubiertos: { oportunidad_id: string; campana: string; paso_id: string; intento: number; cubierto_por: string }[] = [];
+    let enCola = 0;
+    for (const c of candidatos) {
+      const d10 = cubiertoPorTelefono(c, previos);
+      if (d10.cubiertoPor) {
+        cubiertos.push({ oportunidad_id: c.oportunidadId, campana: c.campana, paso_id: c.pasoId, intento: c.intento, cubierto_por: d10.cubiertoPor });
+      } else if (d10.saltarHoy) {
+        enCola++;
+      } else {
+        libres.push(c);
+      }
+    }
+    // Cubierto: queda omitido en el masivo de hoy, ligado al envío que lo cubre, y así no se vuelve a revisar.
+    let marcados = 0;
+    if (cubiertos.length > 0) {
+      const ins = await cliente.query(
+        `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, motivo, masivo_id,
+                                 campana_id, primer_mensaje_intento, cubierto_por_envio_id)
+         SELECT $1, r.oportunidad_id, r.campana, $2, now(), 'omitido', 'cubierto_mismo_telefono', $3, r.paso_id, r.intento, r.cubierto_por
+           FROM jsonb_to_recordset($4::jsonb) AS r(oportunidad_id uuid, campana text, paso_id uuid, intento smallint, cubierto_por uuid)
+         ON CONFLICT (campana_id, primer_mensaje_intento) WHERE primer_mensaje_intento IS NOT NULL DO NOTHING`,
+        [sucursalId, plantillaId, masivoId, JSON.stringify(cubiertos)],
+      );
+      marcados = ins.rowCount ?? 0;
+    }
 
     let enviar = 0;
     let omitidos: { motivo: string; texto: string; n: number }[] = [];
     let nota: string | null = null;
-    if (candidatos.length > 0) {
-      const p = await preparar(cliente, sucursalId, candidatos.map((c) => c.oportunidadId), plantillaId);
+    if (libres.length > 0) {
+      const p = await preparar(cliente, sucursalId, libres.map((c) => c.oportunidadId), plantillaId, "primer_mensaje");
       if (!p.ok) {
         nota = p.error;
       } else {
         omitidos = resumen(p.valor).omitidos;
-        const porLead = new Map(candidatos.map((c) => [c.oportunidadId, c]));
+        const porLead = new Map(libres.map((c) => [c.oportunidadId, c]));
         const filas = p.valor.filas
           .map((f, i) => ({ f, motivo: p.valor.destinatarios[i].motivo }))
           .filter((x) => !x.motivo)
@@ -429,13 +540,16 @@ export async function crearMasivoAutomatico(sucursalId: string, campana: string,
                                      campana_id, primer_mensaje_intento)
              SELECT $1, r.oportunidad_id, r.campana, $2, now(), 'pendiente', $3, r.parametros, r.paso_id, r.intento
                FROM jsonb_to_recordset($4::jsonb) AS r(oportunidad_id uuid, campana text, parametros jsonb, paso_id uuid, intento smallint)
-             ON CONFLICT DO NOTHING`,
+             -- Solo el candado de un primer mensaje por paso e intento; cualquier otra violación falla de forma visible.
+             ON CONFLICT (campana_id, primer_mensaje_intento) WHERE primer_mensaje_intento IS NOT NULL DO NOTHING`,
             [sucursalId, plantillaId, masivoId, JSON.stringify(filas)],
           );
           enviar = ins.rowCount ?? 0;
         }
       }
     }
+    // Los que esperan a que salga otro mensaje de la campaña a su teléfono: no se marcan, cuentan en el resumen.
+    if (enCola > 0) omitidos.push({ motivo: "cubierto_en_cola", texto: TEXTO_MOTIVO.cubierto_en_cola, n: enCola });
 
     await cliente.query(
       `UPDATE crm_masivos
@@ -446,7 +560,7 @@ export async function crearMasivoAutomatico(sucursalId: string, campana: string,
       [masivoId, JSON.stringify(omitidos), nota, enviar],
     );
     await cliente.query("COMMIT");
-    return { creado: true as const, masivoId, enviar, omitidos: omitidos.reduce((n, o) => n + o.n, 0), nota };
+    return { creado: true as const, masivoId, enviar, omitidos: omitidos.reduce((n, o) => n + o.n, 0), cubiertos: marcados, nota };
   } catch (err) {
     await cliente.query("ROLLBACK").catch(() => {});
     throw err;
@@ -581,15 +695,21 @@ async function procesarUno(): Promise<boolean> {
   try {
     await cliente.query("BEGIN");
     const { rows } = await cliente.query(
-      `SELECT e.id, e.sucursal_id, e.oportunidad_id, e.masivo_id, e.motivo, e.intentos, e.parametros,
-              m.estado AS masivo_estado, m.plantilla_nombre,
+      `SELECT e.id, e.sucursal_id, e.oportunidad_id, e.masivo_id, e.plantilla_id, e.motivo, e.intentos, e.parametros,
+              e.campana_id::text AS paso_envio,
+              (SELECT px.id::text FROM crm_oportunidad_campanas px WHERE px.oportunidad_id = o.id AND px.cerrada_en IS NULL) AS paso_abierto,
+              m.estado AS masivo_estado, m.plantilla_nombre, m.automatico,
               (c.whatsapp_baja OR o.estado_contacto = 'baja') AS baja, c.telefono, c.nombre AS cliente, o.ejecutivo,
-              p.nombre_tecnico, p.idioma, p.estado AS plantilla_estado, p.componentes
+              ${SQL_DATOS_LEAD},
+              p.nombre_tecnico, p.idioma, p.estado AS plantilla_estado, p.componentes,
+              ${SQL_REGLAS}
          FROM crm_envios e
          JOIN crm_masivos m ON m.id = e.masivo_id
          JOIN crm_oportunidades o ON o.id = e.oportunidad_id
          JOIN crm_contactos c ON c.id = o.contacto_id
+         LEFT JOIN crm_vehiculos veh ON veh.id = o.vehiculo_id
          LEFT JOIN whatsapp_plantillas p ON p.id = e.plantilla_id
+         LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id
         WHERE e.masivo_id IS NOT NULL AND e.estado = 'pendiente' AND e.programado_para <= now()
         ORDER BY e.programado_para, e.creado_en
         LIMIT 1
@@ -620,6 +740,13 @@ async function procesarUno(): Promise<boolean> {
     if (e.masivo_estado !== "enviando") return await omitir("detenido");
     // Pidió la baja después de que se armó el masivo: gana la baja.
     if (e.baja) return await omitir("baja");
+    // El primer mensaje automático es de su paso de campaña: si ese paso ya se cerró, ya no le toca (antes que el freno).
+    const sinPaso = motivoPorPaso({
+      automatico: e.automatico === true,
+      pasoEnvio: (e.paso_envio as string | null) ?? null,
+      pasoAbierto: (e.paso_abierto as string | null) ?? null,
+    });
+    if (sinPaso) return await omitir(sinPaso);
     if (e.plantilla_estado !== "aprobada" || !e.componentes?.body?.texto) return await omitir("plantilla_no_disponible");
     const tel = telefono10(e.telefono);
     if (!tel) return await omitir("sin_telefono");
@@ -642,6 +769,18 @@ async function procesarUno(): Promise<boolean> {
       await cliente.query("COMMIT");
       return true;
     }
+
+    // Freno al despachar: lo que cambió desde que se armó el masivo gana. Primero «A quién» con los datos de hoy del lead;
+    // luego el freno de la base (supresiones, venta, contrato y, en el automático, campaña vigente).
+    const fueraDeReglas = motivoPorReglas(reglasParaEnvio(aReglas(e)), aDatosLead(e));
+    if (fueraDeReglas) return await omitir(fueraDeReglas);
+    const { rows: fr } = await cliente.query(`SELECT crm_motivo_no_enviar($1::uuid, $2::uuid, $3::text) AS motivo`, [
+      e.oportunidad_id,
+      e.plantilla_id,
+      e.automatico ? "primer_mensaje" : "masivo",
+    ]);
+    const freno = motivoDelFreno(fr[0]?.motivo as string | null);
+    if (freno) return await omitir(freno);
 
     // Envío real, «a lo sumo una vez»: antes de hablar con Meta se deja durable la marca «enviando». Si el proceso muere o
     // no se logra anotar el resultado, jamás se reenvía solo. Es preferible perder un mensaje a mandarlo dos veces.

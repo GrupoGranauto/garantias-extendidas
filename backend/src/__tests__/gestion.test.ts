@@ -59,6 +59,22 @@ describe("resultado de una llamada", () => {
 
   it("una baja se respeta", () => {
     expect(efectoLlamada("CONTESTA_TITULAR", "baja", "PENDIENTE").contacto).toBe("baja");
+    expect(efectoLlamada("NUMERO_EQUIVOCADO", "baja", "PENDIENTE").contacto).toBe("baja");
+  });
+
+  it("un no contactable se queda así mientras no conteste el titular", () => {
+    for (const r of ["NO_CONTESTA", "BUZON", "CUELGA", "OCUPADO", "CONTESTA_OTRA_PERSONA", "NUMERO_EQUIVOCADO", "NUMERO_INVALIDO"] as const) {
+      expect(efectoLlamada(r, "no_contactable", "PENDIENTE")).toMatchObject({ contacto: "no_contactable", efectivo: false });
+    }
+  });
+
+  it("si contesta el titular, el número sí sirve: sale de no contactable", () => {
+    expect(efectoLlamada("CONTESTA_TITULAR", "no_contactable", "PENDIENTE")).toEqual({
+      contacto: "contactado",
+      resultado: "CONTACTADO",
+      efectivo: true,
+    });
+    expect(efectoLlamada("CONTESTA_TITULAR", "no_contactable", "NO CONTACTABLE")).toMatchObject({ contacto: "contactado", efectivo: true });
   });
 });
 

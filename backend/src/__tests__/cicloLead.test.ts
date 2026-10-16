@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planificarLeads, type LeadExistente } from "../lib/cicloLeadLogica.js";
+import { esTerminal, planificarLeads, type LeadExistente } from "../lib/cicloLeadLogica.js";
 import type { FilaMaestra } from "../lib/sincronizacionCrm.js";
 
 const VIN = "3N1AB7AP0RY000001";
@@ -30,10 +30,15 @@ const lead = (extra: Partial<LeadExistente> = {}): LeadExistente => ({
   estado: "abierta",
   estado_contacto: "contactado",
   estado_cartera: "ACTIVA",
+  supresion: null,
+  pagado: false,
   pasoAbierto: { id: "paso-5m", clave: `${VIN}|5M|2026-10-01`, campana: "5M" },
   pasosCerrados: [],
   ...extra,
 });
+
+/** El mismo VIN hoy en 28M de octubre (otra campaña que la del paso abierto de 5M). */
+const hoy28m = () => fila({ campania_actual: "28M", fecha_inicio_28m: "2026-10-01", fecha_fin_28m: "2026-11-01" });
 
 const ROSTER = ["María José Nuñez", "Fernando Zazueta"];
 
@@ -56,14 +61,61 @@ describe("planificarLeads", () => {
   });
 
   it("un lead vendido o dado de baja no se reinicia al entrar a otra campaña", () => {
-    const hoy28m = fila({ campania_actual: "28M", fecha_inicio_28m: "2026-10-01", fecha_fin_28m: "2026-11-01" });
-    expect(planificarLeads([hoy28m], [lead({ estado: "ganada" })], ROSTER).pasosNuevos[0].reiniciar).toBe(false);
-    expect(planificarLeads([hoy28m], [lead({ estado_contacto: "baja" })], ROSTER).pasosNuevos[0].reiniciar).toBe(false);
+    expect(planificarLeads([hoy28m()], [lead({ estado: "ganada" })], ROSTER).pasosNuevos[0].reiniciar).toBe(false);
+    expect(planificarLeads([hoy28m()], [lead({ estado_contacto: "baja" })], ROSTER).pasosNuevos[0].reiniciar).toBe(false);
+  });
+
+  it("un lead no contactable con su número equivocado vigente no vuelve a «Por contactar» en otra campaña", () => {
+    const p = planificarLeads(
+      [hoy28m()],
+      [lead({ estado: "perdida", estado_contacto: "no_contactable", supresion: "numero_equivocado" })],
+      ROSTER,
+    );
+    expect(p.cerrados).toEqual([expect.objectContaining({ leadId: "lead-1", motivo: "CAMBIO_CAMPANA" })]);
+    expect(p.pasosNuevos).toEqual([expect.objectContaining({ leadId: "lead-1", reiniciar: false })]);
+  });
+
+  it("un lead no contactable cuyo teléfono cambió (sin supresión en el nuevo) se vuelve a trabajar en la siguiente campaña", () => {
+    // D12 es por teléfono: con el teléfono nuevo, crm_supresion_de_lead ya no trae el número equivocado.
+    const p = planificarLeads([hoy28m()], [lead({ estado: "perdida", estado_contacto: "no_contactable", supresion: null })], ROSTER);
+    expect(p.cerrados).toEqual([expect.objectContaining({ leadId: "lead-1", motivo: "CAMBIO_CAMPANA" })]);
+    expect(p.pasosNuevos).toEqual([expect.objectContaining({ leadId: "lead-1", reiniciar: true })]);
+  });
+
+  it("un lead con una supresión vigente no se reinicia, sea por el VIN o por el teléfono", () => {
+    for (const supresion of ["ya_no_tiene_auto", "flotilla", "uso_no_elegible", "fuera_km_tiempo", "numero_equivocado", "baja"]) {
+      const p = planificarLeads([hoy28m()], [lead({ estado: "perdida", supresion })], ROSTER);
+      expect(p.pasosNuevos[0].reiniciar, supresion).toBe(false);
+    }
+  });
+
+  it("un lead con pago o compra capturados no se reinicia aunque no esté en Vendido", () => {
+    const p = planificarLeads([hoy28m()], [lead({ estado: "abierta", pagado: true })], ROSTER);
+    expect(p.pasosNuevos).toEqual([expect.objectContaining({ leadId: "lead-1", reiniciar: false })]);
+  });
+
+  it("un lead perdido por algo de la campaña (p. ej. no le interesó) sí se reinicia en la siguiente", () => {
+    const p = planificarLeads([hoy28m()], [lead({ estado: "perdida", estado_contacto: "contactado" })], ROSTER);
+    expect(p.pasosNuevos).toEqual([expect.objectContaining({ leadId: "lead-1", reiniciar: true })]);
+    const buzon = planificarLeads([hoy28m()], [lead({ estado_contacto: "buzon" })], ROSTER);
+    expect(buzon.pasosNuevos[0].reiniciar).toBe(true);
+  });
+
+  it("esTerminal: vendido, pagado, baja o suprimido (por VIN o por teléfono)", () => {
+    expect(esTerminal(lead())).toBe(false);
+    expect(esTerminal(lead({ estado: "perdida", estado_contacto: "intentando" }))).toBe(false);
+    expect(esTerminal(lead({ estado: "ganada" }))).toBe(true);
+    expect(esTerminal(lead({ pagado: true }))).toBe(true);
+    expect(esTerminal(lead({ estado_contacto: "baja" }))).toBe(true);
+    expect(esTerminal(lead({ supresion: "flotilla" }))).toBe(true);
+    expect(esTerminal(lead({ supresion: "baja" }))).toBe(true);
+    // El número equivocado cuenta por la supresión del teléfono, no por el estado de contacto del lead.
+    expect(esTerminal(lead({ estado_contacto: "no_contactable", supresion: "numero_equivocado" }))).toBe(true);
+    expect(esTerminal(lead({ estado: "perdida", estado_contacto: "no_contactable", supresion: null }))).toBe(false);
   });
 
   it("un lead que nunca tuvo paso solo abre el suyo, sin reiniciar lo que capturó el BDC", () => {
-    const hoy28m = fila({ campania_actual: "28M", fecha_inicio_28m: "2026-10-01", fecha_fin_28m: "2026-11-01" });
-    const p = planificarLeads([hoy28m], [lead({ pasoAbierto: null, pasosCerrados: [] })], ROSTER);
+    const p = planificarLeads([hoy28m()], [lead({ pasoAbierto: null, pasosCerrados: [] })], ROSTER);
     expect(p.pasosNuevos).toEqual([expect.objectContaining({ leadId: "lead-1", reiniciar: false })]);
   });
 
@@ -81,8 +133,68 @@ describe("planificarLeads", () => {
   it("el mismo paso que vuelve a la ventana se reabre tal cual (sin reiniciar el lead)", () => {
     const cerrado = lead({ estado_cartera: "NO_CONTACTABLE_FUENTE", pasoAbierto: null, pasosCerrados: [{ id: "paso-5m", clave: `${VIN}|5M|2026-10-01`, campana: "5M" }] });
     const p = planificarLeads([fila()], [cerrado], ROSTER);
-    expect(p.reabiertos).toEqual([expect.objectContaining({ leadId: "lead-1", pasoId: "paso-5m" })]);
+    expect(p.reabiertos).toEqual([expect.objectContaining({ leadId: "lead-1", pasoId: "paso-5m", restaurar: true })]);
     expect(p.pasosNuevos).toHaveLength(0);
+  });
+
+  describe("reapertura después de otra campaña", () => {
+    // Paso A (5M) cerrado por cambio de campaña; el lead vive el paso B (28M); hoy la maestra regresa la clave de A.
+    const PASO_A = { id: "paso-a", clave: `${VIN}|5M|2026-10-01`, campana: "5M" };
+    const PASO_B = { id: "paso-b", clave: `${VIN}|28M|2026-10-01`, campana: "28M" };
+    const enB = (extra: Partial<LeadExistente> = {}) => lead({ pasoAbierto: PASO_B, pasosCerrados: [PASO_A], ...extra });
+
+    it("cierra B por cambio de campaña y reabre A (no abre un paso nuevo)", () => {
+      const p = planificarLeads([fila()], [enB()], ROSTER);
+      expect(p.cerrados).toEqual([{ leadId: "lead-1", pasoId: "paso-b", estado: "FUERA_DE_VENTANA", motivo: "CAMBIO_CAMPANA" }]);
+      expect(p.reabiertos).toEqual([expect.objectContaining({ leadId: "lead-1", pasoId: "paso-a" })]);
+      expect(p.pasosNuevos).toHaveLength(0);
+      expect(p.conflictos).toEqual([]);
+    });
+
+    it("un lead normal recupera lo de A (estado, etapa y resultado de la foto)", () => {
+      expect(planificarLeads([fila()], [enB({ estado_contacto: "intentando" })], ROSTER).reabiertos[0].restaurar).toBe(true);
+    });
+
+    it("si en B se marcó No contactable (número equivocado vigente), al volver A el lead no regresa a abierto ni a «intentando»", () => {
+      const p = planificarLeads(
+        [fila()],
+        [enB({ estado: "perdida", estado_contacto: "no_contactable", supresion: "numero_equivocado" })],
+        ROSTER,
+      );
+      expect(p.reabiertos).toEqual([expect.objectContaining({ pasoId: "paso-a", restaurar: false })]);
+    });
+
+    it("un no contactable sin supresión (teléfono cambiado) no es terminal en el plan; la restauración completa lo vuelve a excluir al escribir", () => {
+      const p = planificarLeads([fila()], [enB({ estado: "perdida", estado_contacto: "no_contactable", supresion: null })], ROSTER);
+      expect(p.reabiertos).toEqual([expect.objectContaining({ pasoId: "paso-a", restaurar: true })]);
+    });
+
+    it("tampoco se restaura un lead vendido, pagado, dado de baja o suprimido", () => {
+      const casos: Partial<LeadExistente>[] = [
+        { estado: "ganada" },
+        { pagado: true },
+        { estado_contacto: "baja" },
+        { estado: "perdida", supresion: "ya_no_tiene_auto" },
+        { supresion: "numero_equivocado" },
+      ];
+      for (const c of casos) {
+        expect(planificarLeads([fila()], [enB(c)], ROSTER).reabiertos[0].restaurar, JSON.stringify(c)).toBe(false);
+      }
+    });
+
+    it("sin paso abierto (A y B cerrados), A vuelve igual y respeta al terminal", () => {
+      const ambos = (extra: Partial<LeadExistente>) =>
+        lead({ estado_cartera: "FUERA_DE_VENTANA", pasoAbierto: null, pasosCerrados: [PASO_A, PASO_B], ...extra });
+      const normal = planificarLeads([fila()], [ambos({})], ROSTER);
+      expect(normal.cerrados).toHaveLength(0);
+      expect(normal.reabiertos).toEqual([expect.objectContaining({ pasoId: "paso-a", restaurar: true })]);
+      const nc = planificarLeads(
+        [fila()],
+        [ambos({ estado: "perdida", estado_contacto: "no_contactable", supresion: "numero_equivocado" })],
+        ROSTER,
+      );
+      expect(nc.reabiertos[0].restaurar).toBe(false);
+    });
   });
 
   it("un lead sin paso abierto solo actualiza su estado de cartera cuando cambia", () => {

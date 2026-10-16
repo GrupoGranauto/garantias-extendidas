@@ -23,6 +23,7 @@ import {
   type Opcion,
   type RespuestaTitular,
 } from "./gestionLogica.js";
+import { corrigeBloqueo, validarMotivoQuitar } from "./noContactarLogica.js";
 
 /** Estado de contacto: la vista lo muestra con etiqueta, la tabla lo guarda con clave. */
 export const ESTADOS_CONTACTO: Record<string, string> = {
@@ -70,6 +71,17 @@ const TITULO_CAMPO: Record<string, string> = {
 };
 
 type Consulta = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }> };
+
+/**
+ * Marca de corrección explícita (0039): con ella encendida, la base deshace el bloqueo capturado por error cuando el lead
+ * sale de «No contactable» (revoca el número equivocado de su teléfono) o pierde un motivo de descarte del vehículo
+ * (revoca la supresión de su VIN). Solo la declaran las ediciones que hace una persona sobre UN lead, justo antes del
+ * cambio que corrige, y la apagan después para que no alcance a nada más de la transacción. Nunca en lote ni en caminos
+ * automáticos (la sync, el ciclo diario, los envíos): sin ella, nada libera un bloqueo.
+ */
+export async function marcarCorreccion(cliente: Consulta, encendida: boolean): Promise<void> {
+  await cliente.query(`SELECT set_config('crm.corregir_supresion', $1, true)`, [encendida ? "on" : "off"]);
+}
 
 /** El historial y las actividades referencian a public.usuarios: sin fila ahí (ej. admin de plataforma) queda sin autor. */
 export async function autorValido(cliente: Consulta, usuarioId?: string): Promise<string | null> {
@@ -264,9 +276,38 @@ const COLOR_CATALOGO = "#6b7280";
 /**
  * No contactar (Notion: «gana sobre todo y bloquea masivos»): la baja es de la persona, así que va al contacto y deja en
  * «Baja» todos sus leads que no son venta (abiertos y perdidos: así el ciclo diario tampoco los reabre). Se guarda el
- * canal por el que lo pidió, si se sabe.
+ * canal por el que lo pidió, si se sabe. Además queda como supresión del teléfono: el reinicio de campaña no la borra y
+ * alcanza a los demás contactos con ese número (la base los marca al registrarla).
  */
-export async function marcarNoContactar(cliente: Consulta, sucursalId: string, oportunidadId: string, canal: string | null): Promise<void> {
+export async function marcarNoContactar(
+  cliente: Consulta,
+  sucursalId: string,
+  oportunidadId: string,
+  canal: string | null,
+  /** Quién la registró (ya validado contra usuarios: null si no tiene fila) y desde dónde, para la evidencia. */
+  registro: { usuarioId: string | null; origen: string } = { usuarioId: null, origen: "ficha" },
+): Promise<void> {
+  // Contactos del número que hoy no están en baja (este y los demás con el mismo teléfono).
+  const { rows } = await cliente.query(
+    `SELECT crm_tel10(k.telefono) AS tel10,
+            array(SELECT x.id::text FROM crm_contactos x
+                   WHERE x.sucursal_id = k.sucursal_id AND NOT x.whatsapp_baja
+                     AND (x.id = k.id OR crm_tel10(x.telefono) = crm_tel10(k.telefono))) AS sin_baja
+       FROM crm_oportunidades o JOIN crm_contactos k ON k.id = o.contacto_id
+      WHERE o.id = $1 AND o.sucursal_id = $2`,
+    [oportunidadId, sucursalId],
+  );
+  const sinBaja = (rows[0]?.sin_baja as string[] | undefined) ?? [];
+  if (rows[0]?.tel10) {
+    await cliente.query(`SELECT crm_registrar_supresion($1::uuid, 'telefono', $2::text, 'baja', $3::text, $4::jsonb, $5::uuid, $6::uuid)`, [
+      sucursalId,
+      rows[0].tel10,
+      canal,
+      { origen: registro.origen },
+      oportunidadId,
+      registro.usuarioId,
+    ]);
+  }
   await cliente.query(
     `WITH c AS (
        UPDATE crm_contactos k SET whatsapp_baja = true, whatsapp_baja_en = coalesce(k.whatsapp_baja_en, now()),
@@ -281,6 +322,11 @@ export async function marcarNoContactar(cliente: Consulta, sucursalId: string, o
         AND (x.estado_contacto <> 'baja' OR x.respuesta_por_clasificar)`,
     [oportunidadId, sucursalId, canal],
   );
+  // Quien no estaba en baja empieza hoy, aunque conserve la fecha de una baja que se quitó (quitar «no contactar» la deja
+  // como historia y la supresión la respeta al marcarlo).
+  if (sinBaja.length > 0) {
+    await cliente.query(`UPDATE crm_contactos SET whatsapp_baja_en = now() WHERE id = ANY($1::uuid[]) AND whatsapp_baja`, [sinBaja]);
+  }
 }
 
 /**
@@ -317,24 +363,34 @@ export async function opcionesDinamicas(sucursalId: string): Promise<Record<stri
 }
 
 /**
- * Quitar «no contactar» (solo un administrador, para corregir un error de captura). Una baja pedida por WhatsApp (STOP o
- * clasificada así) no se quita nunca: esa la decidió la persona. Sus leads en «Baja» vuelven a «Contactado» si ya se
- * había hablado con el titular, o a «Sin intentar».
+ * Quitar «no contactar» (solo un administrador, para corregir un error de captura, y con motivo). Una baja pedida por
+ * WhatsApp (STOP o clasificada así) no se quita nunca: esa la decidió la persona. La baja es del teléfono: se revoca su
+ * supresión y salen de baja todos los contactos con ese número. Sus leads en «Baja» vuelven a «Contactado» si ya se
+ * había hablado con el titular, o a «Sin intentar». La fecha de la baja se queda en el contacto como historia.
+ *
+ * Un lead puede quedar en «Baja» sin que la persona la tenga (cambió de teléfono, o la baja de su número se revocó): en
+ * ese caso solo sale de «Baja» ese lead, siempre que su teléfono no tenga una baja vigente.
  */
 export async function quitarNoContactar(
   sucursalId: string,
   oportunidadId: string,
+  motivo: string,
   usuarioId?: string,
 ): Promise<{ ok: true } | { ok: false; estado: 400 | 404; error: string }> {
+  const valido = validarMotivoQuitar(motivo);
+  if (!valido.ok) return { ok: false, estado: 400, error: valido.error };
   const cliente = await getPool().connect();
   try {
+    // Antes de revisar: un BAJA escrito por WhatsApp que no se alcanzó a registrar queda registrado ya y frena la reversión.
+    // Va en su propia consulta para que se guarde aunque al final no se quite nada.
+    await cliente.query(`SELECT crm_reconciliar_bajas()`);
     await cliente.query("BEGIN");
+    // Solo aquí un lead puede salir de «Baja»: cualquier otro cambio la conserva (lo cuida la base).
+    await cliente.query(`SELECT set_config('crm.quitar_baja', 'on', true)`);
     const { rows } = await cliente.query(
-      `SELECT k.id, k.whatsapp_baja, k.baja_canal,
-              EXISTS (SELECT 1 FROM crm_actividades a JOIN crm_oportunidades x ON x.id = a.oportunidad_id
-                       WHERE x.contacto_id = k.id AND a.tipo = 'baja' AND a.detalle->>'canal' = 'whatsapp') AS por_whatsapp
+      `SELECT o.estado_contacto, k.id, k.whatsapp_baja, k.baja_canal, k.whatsapp_baja_en, crm_tel10(k.telefono) AS tel10
          FROM crm_oportunidades o JOIN crm_contactos k ON k.id = o.contacto_id
-        WHERE o.id = $1 AND o.sucursal_id = $2 FOR UPDATE OF k`,
+        WHERE o.id = $1 AND o.sucursal_id = $2 FOR UPDATE OF o, k`,
       [oportunidadId, sucursalId],
     );
     const k = rows[0];
@@ -343,24 +399,115 @@ export async function quitarNoContactar(
       return { ok: false, estado: 404, error: "Registro no encontrado." };
     }
     if (!k.whatsapp_baja) {
-      await cliente.query("ROLLBACK");
-      return { ok: false, estado: 400, error: "Esta persona no está en «no contactar»." };
+      if (k.estado_contacto !== "baja") {
+        await cliente.query("ROLLBACK");
+        return { ok: false, estado: 400, error: "Esta persona no está en «no contactar»." };
+      }
+      // El lead está en «Baja» pero la persona no: solo se quita si su teléfono tampoco tiene una baja vigente.
+      const { rows: vigente } = k.tel10
+        ? await cliente.query(
+            `SELECT 1 FROM crm_supresiones
+              WHERE sucursal_id = $1 AND alcance = 'telefono' AND valor = $2 AND motivo = 'baja' AND revocada_en IS NULL
+                AND (vigente_hasta IS NULL OR vigente_hasta > now())
+              LIMIT 1`,
+            [sucursalId, k.tel10],
+          )
+        : { rows: [] };
+      if (vigente.length > 0) {
+        await cliente.query("ROLLBACK");
+        return { ok: false, estado: 400, error: "El teléfono de este lead tiene una baja vigente: no se puede quitar solo del lead." };
+      }
+      // Si la baja de este lead la pidió el cliente por WhatsApp (desde otro teléfono suyo), tampoco se quita: igual que
+      // en el camino de la persona, una baja pedida por WhatsApp no se quita nunca.
+      const { rows: porWhatsapp } = await cliente.query(
+        `SELECT 1 FROM crm_actividades
+          WHERE oportunidad_id = $1 AND sucursal_id = $2 AND tipo = 'baja' AND detalle->>'canal' = 'whatsapp'
+          LIMIT 1`,
+        [oportunidadId, sucursalId],
+      );
+      if (porWhatsapp.length > 0) {
+        await cliente.query("ROLLBACK");
+        return { ok: false, estado: 400, error: "La baja la pidió el cliente por WhatsApp: no se puede quitar." };
+      }
+      const autor = await autorValido(cliente, usuarioId);
+      await cliente.query(
+        `UPDATE crm_oportunidades
+            SET estado_contacto = CASE WHEN ultimo_contacto_efectivo_en IS NOT NULL THEN 'contactado' ELSE 'sin_intentar' END
+          WHERE id = $1 AND sucursal_id = $2 AND estado_contacto = 'baja'`,
+        [oportunidadId, sucursalId],
+      );
+      await cliente.query(
+        `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle, usuario_id)
+         VALUES ($1, $2, 'edicion', 'Se quitó «Baja» de este lead', $3, $4)`,
+        [
+          sucursalId,
+          oportunidadId,
+          { campo: "no_contactar", anterior: true, nuevo: false, canal: null, motivo: valido.motivo, solo_lead: true, supresiones: [] },
+          autor,
+        ],
+      );
+      await cliente.query("COMMIT");
+      return { ok: true };
     }
-    // Solo se quita lo que el BDC registró a mano (llamada, correo, presencial, SMS). Por WhatsApp o sin canal conocido, no.
-    if (!["llamada", "correo", "presencial", "sms"].includes(k.baja_canal) || k.por_whatsapp) {
+    // La supresión del teléfono (sin vencer o vencida, mientras no esté revocada): se bloquea antes de revisarla.
+    const { rows: sup } = k.tel10
+      ? await cliente.query(
+          `SELECT id, canal FROM crm_supresiones
+            WHERE sucursal_id = $1 AND alcance = 'telefono' AND valor = $2 AND motivo = 'baja' AND revocada_en IS NULL FOR UPDATE`,
+          [sucursalId, k.tel10],
+        )
+      : { rows: [] };
+    // «Del número»: este contacto y los demás con el mismo teléfono (la baja los alcanza a todos).
+    const delNumero = `c.sucursal_id = $1 AND (c.id = $2 OR crm_tel10(c.telefono) = $3::text)`;
+    // Solo se quita lo que el BDC registró a mano (llamada, correo, presencial, SMS). Por WhatsApp o sin canal conocido, no,
+    // en ninguno de los contactos del número ni en su supresión.
+    const { rows: ch } = await cliente.query(
+      `SELECT EXISTS (SELECT 1 FROM crm_contactos c WHERE ${delNumero} AND c.whatsapp_baja
+                        AND coalesce(c.baja_canal, '') NOT IN ('llamada', 'correo', 'presencial', 'sms')) AS sin_canal_manual,
+              EXISTS (SELECT 1 FROM crm_actividades a
+                        JOIN crm_oportunidades x ON x.id = a.oportunidad_id JOIN crm_contactos c ON c.id = x.contacto_id
+                       WHERE ${delNumero} AND a.tipo = 'baja' AND a.detalle->>'canal' = 'whatsapp') AS por_whatsapp`,
+      [sucursalId, k.id, k.tel10],
+    );
+    if (ch[0].sin_canal_manual || ch[0].por_whatsapp || sup.some((s) => s.canal === "whatsapp")) {
       await cliente.query("ROLLBACK");
       return { ok: false, estado: 400, error: "La baja la pidió el cliente por WhatsApp (o no se sabe por dónde): no se puede quitar." };
     }
-    await cliente.query(`UPDATE crm_contactos SET whatsapp_baja = false, whatsapp_baja_en = NULL, baja_canal = NULL WHERE id = $1`, [k.id]);
+    const autor = await autorValido(cliente, usuarioId);
+    for (const s of sup) {
+      // Al revocarla, la base saca de baja a los contactos del número (whatsapp_baja_en se conserva).
+      await cliente.query(`SELECT crm_revocar_supresion($1::uuid, $2::uuid, $3::text)`, [s.id, autor, valido.motivo]);
+    }
+    // También sin supresión (un contacto sin teléfono de 10 dígitos): la fecha de la baja se queda como historia.
+    await cliente.query(`UPDATE crm_contactos c SET whatsapp_baja = false, baja_canal = NULL WHERE ${delNumero} AND c.whatsapp_baja`, [
+      sucursalId,
+      k.id,
+      k.tel10,
+    ]);
     await cliente.query(
-      `UPDATE crm_oportunidades SET estado_contacto = CASE WHEN ultimo_contacto_efectivo_en IS NOT NULL THEN 'contactado' ELSE 'sin_intentar' END
-        WHERE contacto_id = $1 AND sucursal_id = $2 AND estado_contacto = 'baja'`,
-      [k.id, sucursalId],
+      `UPDATE crm_oportunidades o
+          SET estado_contacto = CASE WHEN o.ultimo_contacto_efectivo_en IS NOT NULL THEN 'contactado' ELSE 'sin_intentar' END
+         FROM crm_contactos c
+        WHERE c.id = o.contacto_id AND ${delNumero} AND NOT c.whatsapp_baja AND o.sucursal_id = $1 AND o.estado_contacto = 'baja'`,
+      [sucursalId, k.id, k.tel10],
     );
     await cliente.query(
       `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle, usuario_id)
        VALUES ($1, $2, 'edicion', 'Se quitó «no contactar»', $3, $4)`,
-      [sucursalId, oportunidadId, { campo: "no_contactar", anterior: true, nuevo: false, canal: k.baja_canal ?? null }, await autorValido(cliente, usuarioId)],
+      [
+        sucursalId,
+        oportunidadId,
+        {
+          campo: "no_contactar",
+          anterior: true,
+          nuevo: false,
+          canal: k.baja_canal ?? null,
+          motivo: valido.motivo,
+          baja_en: k.whatsapp_baja_en ?? null,
+          supresiones: sup.map((s) => s.id as string),
+        },
+        autor,
+      ],
     );
     await cliente.query("COMMIT");
     return { ok: true };
@@ -396,6 +543,8 @@ export type ResultadoEdicion = { ok: true; etapaCambio: boolean } | { ok: false;
  * Aplica una edición a una oportunidad, en una sola transacción. Un cambio de etapa
  * mueve la tarjeta al final de su columna, actualiza el estado comercial (abierta,
  * ganada, perdida), y deja constancia en el historial. Lo demás va directo a la fila.
+ * Es siempre la edición de una persona sobre UN lead (tabla, ficha, llamada, clasificación): si corrige un bloqueo
+ * (lo saca de «No contactable» o le quita un descarte del vehículo), lo declara para que la base lo libere.
  */
 export type ParamsEdicion = {
   sucursalId: string;
@@ -432,6 +581,7 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
 
     const { rows: filas } = await cliente.query(
       `SELECT o.id, o.etapa_id, o.estado, o.motivo_perdida_id, e.tipo AS tipo_etapa, o.comentarios, o.resultado_bdc,
+              (SELECT m.clave FROM crm_motivos_perdida m WHERE m.id = o.motivo_perdida_id) AS motivo_clave,
               o.fecha_ultimo_contacto::text AS fecha_ultimo_contacto, o.fecha_compra::text AS fecha_compra,
               o.ejecutivo, o.estado_contacto, o.vehiculo_id, o.estado_cartera,
               (SELECT k.whatsapp_baja FROM crm_contactos k WHERE k.id = o.contacto_id) AS contacto_baja,
@@ -454,6 +604,13 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
     const asignar = (columna: string, valor: unknown) => {
       args.push(valor);
       sets.push(`${columna} = $${args.length}`);
+    };
+    // Cómo quedan el contacto y el motivo de pérdida (clave): deciden si la edición corrige un bloqueo.
+    let contactoNuevo = actual.estado_contacto as string;
+    let motivoClaveNuevo = (actual.motivo_clave as string | null) ?? null;
+    const asignarContacto = (clave: string) => {
+      asignar("estado_contacto", clave);
+      contactoNuevo = clave;
     };
 
     for (const [col, valor] of Object.entries(valores)) {
@@ -553,10 +710,11 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
       if (!clave) {
         return { ok: false, estado: 400, error: "Estado de contacto inválido." };
       }
-      if (actual.contacto_baja && clave !== "baja") {
+      // La baja es de la persona o del lead: de «Baja» solo se sale con «Quitar no contactar» (admin, con motivo).
+      if ((actual.contacto_baja || actual.estado_contacto === "baja") && clave !== "baja") {
         return { ok: false, estado: 400, error: "Esta persona pidió no ser contactada: su contacto se queda en «Baja»." };
       }
-      asignar("estado_contacto", clave);
+      asignarContacto(clave);
     }
 
     // ---- Resultado BDC: decide el estado del lead, el motivo de pérdida y el contacto ----
@@ -575,16 +733,20 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
     if (resultadoElegido) {
       asignar("resultado_bdc", resultadoElegido);
       const contacto = noContactar ? "baja" : DESTINO_DE_RESULTADO[resultadoElegido].contacto;
-      if (contacto && (noContactar || (actual.estado_contacto !== "baja" && !actual.contacto_baja)) && !("estado_contacto" in valores)) {
-        asignar("estado_contacto", contacto);
+      // Igual que en la llamada: a un lead «No contactable» solo lo saca un resultado con contacto efectivo (el número sí
+      // es del titular). BUZÓN o CONTACTO NO DISPONIBLE no prueban nada y lo dejan como está.
+      const sinPruebaDeNumero = actual.estado_contacto === "no_contactable" && contacto !== "contactado" && contacto !== "no_contactable";
+      if (contacto && !sinPruebaDeNumero && (noContactar || (actual.estado_contacto !== "baja" && !actual.contacto_baja)) && !("estado_contacto" in valores)) {
+        asignarContacto(contacto);
       }
     } else if (!("estado_contacto" in valores)) {
       // Una venta conserva su estado de contacto: la baja queda en la persona (y en sus demás leads).
       if (noContactar) {
-        if (actual.estado !== "ganada") asignar("estado_contacto", "baja");
+        if (actual.estado !== "ganada") asignarContacto("baja");
       }
-      else if (contactoForzado && actual.estado_contacto !== "baja") asignar("estado_contacto", contactoForzado);
-      else if (efectivo && ["sin_intentar", "intentando", "buzon"].includes(actual.estado_contacto)) asignar("estado_contacto", "contactado");
+      else if (contactoForzado && actual.estado_contacto !== "baja") asignarContacto(contactoForzado);
+      // Contestó o escribió el titular: también saca al lead de «No contactable» (el número sí es suyo).
+      else if (efectivo && ["sin_intentar", "intentando", "buzon", "no_contactable"].includes(actual.estado_contacto)) asignarContacto("contactado");
     }
 
     // ---- Etapa ----
@@ -633,7 +795,10 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
         asignar("estado", tipoDestino);
         sets.push(`entro_a_etapa_en = now()`);
         sets.push(tipoDestino === "abierta" ? `cerrada_en = NULL` : `cerrada_en = now()`);
-        if (tipoDestino !== "perdida") sets.push(`motivo_perdida_id = NULL`);
+        if (tipoDestino !== "perdida") {
+          sets.push(`motivo_perdida_id = NULL`);
+          motivoClaveNuevo = null;
+        }
       }
     }
 
@@ -643,12 +808,14 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
     if (motivoDelResultado) {
       motivoId = await asegurarMotivo(cliente, sucursalId, motivoDelResultado);
       asignar("motivo_perdida_id", motivoId);
+      motivoClaveNuevo = motivoDelResultado;
     } else if ("motivo_perdida" in valores) {
       if (tipoDestino !== "perdida") {
         return { ok: false, estado: 400, error: "Solo una oportunidad perdida lleva motivo de pérdida." };
       }
       const nombre = valores.motivo_perdida as string | null;
       motivoId = null;
+      motivoClaveNuevo = null;
       if (nombre) {
         const { rows } = await cliente.query(
           `SELECT id, clave FROM crm_motivos_perdida WHERE sucursal_id = $1 AND nombre = $2 AND activo`,
@@ -659,6 +826,7 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
         }
         if (rows[0].clave === "pidio_baja") return { ok: false, estado: 400, error: "«Pidió baja» se registra con «Pidió no ser contactado» en la ficha." };
         motivoId = rows[0].id as string;
+        motivoClaveNuevo = rows[0].clave as string;
       }
       asignar("motivo_perdida_id", motivoId);
     }
@@ -678,11 +846,24 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
     }
 
     if (sets.length > 0) {
+      // Una persona corrige este lead (lo saca de «No contactable» o le quita un descarte del vehículo): se declara solo
+      // para este cambio, y la base libera el número equivocado o la supresión del VIN que se capturó por error.
+      // El descarte del vehículo solo se libera si la persona cambió a mano el estado, el motivo o el resultado; nunca por
+      // el efecto implícito de una respuesta del titular o una clasificación (D1: el descarte es permanente).
+      const motivoAntes = (actual.motivo_clave as string | null) ?? null;
+      const corrige = corrigeBloqueo({
+        contactoAntes: actual.estado_contacto as string,
+        contactoDespues: contactoNuevo,
+        motivoAntes,
+        motivoDespues: tocaEstado ? motivoClaveNuevo : motivoAntes,
+      });
+      if (corrige) await marcarCorreccion(cliente, true);
       args.push(oportunidadId, sucursalId);
       await cliente.query(
         `UPDATE crm_oportunidades SET ${sets.join(", ")} WHERE id = $${args.length - 1} AND sucursal_id = $${args.length}`,
         args,
       );
+      if (corrige) await marcarCorreccion(cliente, false);
     }
     if (kmNuevo !== undefined) {
       await cliente.query(`UPDATE crm_vehiculos SET kilometraje = $3, kilometraje_actualizado_en = now() WHERE id = $1 AND sucursal_id = $2`, [
@@ -723,10 +904,13 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
       }
     }
     if (noContactar) {
-      await marcarNoContactar(cliente, sucursalId, oportunidadId, params.canalBaja ?? (claves.clasificacion_respuesta ? "whatsapp" : null));
+      await marcarNoContactar(cliente, sucursalId, oportunidadId, params.canalBaja ?? (claves.clasificacion_respuesta ? "whatsapp" : null), {
+        usuarioId: autorEdicion,
+        origen: claves.clasificacion_respuesta ? "clasificacion_respuesta" : "respuesta_titular",
+      });
     } else if (ESTADOS_CONTACTO[valores.estado_contacto as string] === "baja") {
       // Poner «Baja» a mano en el contacto es lo mismo: la persona deja de recibir mensajes en todos sus leads.
-      await marcarNoContactar(cliente, sucursalId, oportunidadId, "llamada");
+      await marcarNoContactar(cliente, sucursalId, oportunidadId, "llamada", { usuarioId: autorEdicion, origen: "estado_contacto" });
     }
     for (const c of cambios) {
       await cliente.query(
@@ -784,7 +968,8 @@ const SEPARACION = 1024;
  * Mueve una tarjeta del tablero: a otra etapa o a otro lugar de la misma. `antesId`
  * es la tarjeta delante de la cual queda; sin ella, va al final de la columna. La
  * posición es un número entre sus vecinas, así un movimiento toca solo una fila.
- * Si cae en Perdido puede traer motivo; mover fuera de Perdido lo limpia.
+ * Si cae en Perdido puede traer motivo; mover fuera de Perdido lo limpia. Es siempre una tarjeta movida por una persona:
+ * si con eso le quita un descarte del vehículo, lo declara como corrección para que la base libere el VIN.
  */
 export async function moverOportunidad(params: {
   sucursalId: string;
@@ -800,7 +985,9 @@ export async function moverOportunidad(params: {
     await cliente.query("BEGIN");
 
     const { rows: filas } = await cliente.query(
-      `SELECT id, etapa_id, motivo_perdida_id FROM crm_oportunidades WHERE id = $1 AND sucursal_id = $2 FOR UPDATE`,
+      `SELECT o.id, o.etapa_id, o.motivo_perdida_id, o.estado_contacto, m.clave AS motivo_clave
+         FROM crm_oportunidades o LEFT JOIN crm_motivos_perdida m ON m.id = o.motivo_perdida_id
+        WHERE o.id = $1 AND o.sucursal_id = $2 FOR UPDATE OF o`,
       [oportunidadId, sucursalId],
     );
     const actual = filas[0];
@@ -869,6 +1056,7 @@ export async function moverOportunidad(params: {
     }
 
     let motivoId: string | null = null;
+    let motivoClave: string | null = null;
     if (tipo === "perdida") {
       if (motivoPerdida) {
         const { rows } = await cliente.query(
@@ -880,10 +1068,23 @@ export async function moverOportunidad(params: {
           return { ok: false, estado: 400, error: rows[0] ? "«Pidió baja» se registra con «Pidió no ser contactado» en la ficha." : "El motivo de pérdida no existe." };
         }
         motivoId = rows[0].id as string;
+        motivoClave = rows[0].clave as string;
       } else if (!cambioEtapa) {
         motivoId = actual.motivo_perdida_id; // reordenar dentro de Perdido no borra su motivo
+        motivoClave = actual.motivo_clave ?? null;
       }
     }
+
+    // Una persona mueve esta tarjeta y con eso le quita (o le cambia) un descarte del vehículo: es una corrección explícita,
+    // se declara solo para este cambio y la base libera la supresión de su VIN. Reordenar sin tocar el motivo no corrige nada.
+    const motivoQueda = cambioEtapa ? motivoClave : (motivoClave ?? actual.motivo_clave ?? null);
+    const corrige = corrigeBloqueo({
+      contactoAntes: actual.estado_contacto as string,
+      contactoDespues: actual.estado_contacto as string,
+      motivoAntes: (actual.motivo_clave as string | null) ?? null,
+      motivoDespues: motivoQueda,
+    });
+    if (corrige) await marcarCorreccion(cliente, true);
 
     if (cambioEtapa) {
       await cliente.query(
@@ -893,6 +1094,7 @@ export async function moverOportunidad(params: {
           WHERE id = $1 AND sucursal_id = $2`,
         [oportunidadId, sucursalId, etapaId, posicion, tipo, motivoId],
       );
+      if (corrige) await marcarCorreccion(cliente, false);
       const autor = usuarioId
         ? (await cliente.query(`SELECT id FROM usuarios WHERE id = $1`, [usuarioId])).rows[0]?.id ?? null
         : null;
@@ -908,6 +1110,7 @@ export async function moverOportunidad(params: {
           WHERE id = $1 AND sucursal_id = $2`,
         [oportunidadId, sucursalId, posicion, motivoId],
       );
+      if (corrige) await marcarCorreccion(cliente, false);
     }
     // Moverlo de estado (o cambiarle el motivo en Perdido) pone el resultado que corresponde.
     if (cambioEtapa || motivoId !== actual.motivo_perdida_id) await ajustarResultados(cliente, sucursalId, [oportunidadId]);

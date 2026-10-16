@@ -124,6 +124,8 @@ export function normalizarLlamada(v: unknown): ResultadoLlamada | null {
  * Estado de contacto y resultado BDC tras una llamada. Solo habla con el titular cuenta como contacto efectivo (Notion:
  * «Contacto efectivo: solo el titular»). Quien ya estaba contactado no retrocede por un «no contesta»; un número
  * equivocado o inválido deja el contacto como no contactable, pero cerrar la campaña lo decide el ejecutivo.
+ * La baja se conserva siempre; «No contactable» también, salvo que conteste el titular (el número sí sirve): un «no
+ * contesta», un buzón u otra persona no prueban que el número sea suyo.
  */
 export function efectoLlamada(
   r: ResultadoLlamada,
@@ -137,6 +139,7 @@ export function efectoLlamada(
   else if (contactoActual === "contactado") contacto = "contactado";
   else contacto = r === "BUZON" ? "buzon" : "intentando";
   if (contactoActual === "baja") contacto = "baja";
+  else if (contactoActual === "no_contactable" && !efectivo) contacto = "no_contactable";
 
   let resultado = resultadoActual;
   if (SIN_CONTACTO_EFECTIVO.has(resultadoActual)) {
@@ -250,8 +253,9 @@ export function fechaCapturaValida(valor: string, hoy: string): boolean {
    ============================================================ */
 
 /**
- * Qué hace la clasificación de una respuesta al mensaje: «Titular» es contacto efectivo; «Pide baja» es no contactar;
- * «Número equivocado» deja el teléfono como no contactable. «Otra persona» y «Spam» solo se registran.
+ * Qué hace la clasificación de una respuesta al mensaje: «Titular» es contacto efectivo (y, como en la llamada, saca al
+ * lead de «No contactable»: escribió desde ese número); «Pide baja» es no contactar; «Número equivocado» deja el teléfono
+ * como no contactable. «Otra persona» y «Spam» solo se registran.
  */
 export function efectoClasificacion(c: ClasificacionRespuesta): { efectivo: boolean; noContactar: boolean; numeroEquivocado: boolean } {
   return { efectivo: c === "TITULAR", noContactar: c === "BAJA", numeroEquivocado: c === "NUMERO_EQUIVOCADO" };

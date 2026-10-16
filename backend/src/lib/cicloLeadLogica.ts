@@ -10,9 +10,11 @@ import { clasificarCierre, oportunidadActiva, type DatosFuente, type EstadoCarte
  *
  *  - Mismo paso abierto → solo se refrescan los datos de origen.
  *  - Otra campaña → se cierra el paso anterior (CAMBIO_CAMPANA) y se abre uno nuevo; el lead vuelve a «Por contactar»
- *    salvo que esté vendido o dado de baja (lo de la campaña anterior queda en la foto de su paso).
+ *    salvo que sea terminal (esTerminal: vendido, pagado, baja o suprimido por VIN o por teléfono). Lo de la campaña
+ *    anterior queda en la foto de su paso.
  *  - El mismo paso vuelve a la ventana (p. ej. un día salió como no contactable) → se reabre sin reiniciar nada, como
- *    el Apps Script reactiva la misma fila. Lo que evita repetir mensajes es el registro de envíos por paso.
+ *    el Apps Script reactiva la misma fila; un lead terminal no recupera estado, etapa ni resultado de la foto. Lo que
+ *    evita repetir mensajes es el registro de envíos por paso.
  *  - 6M histórico = 5M y 28M viejo = 28M mensual: el paso se renombra y conserva todo (la migración del Apps Script).
  *  - Sin campaña hoy → se cierra con el motivo de la maestra. Nunca se borra nada.
  *  - VIN nuevo con campaña → lead nuevo con el ejecutivo de menor carga (el 50/50 del Sheet), una sola vez.
@@ -31,9 +33,30 @@ export type LeadExistente = {
   estado: string;
   estado_contacto: string;
   estado_cartera: EstadoCartera;
+  /**
+   * Motivo de la supresión vigente que alcanza al lead (por su VIN o por el teléfono de su contacto actual), o null. El
+   * número equivocado (D12) llega aquí.
+   */
+  supresion: string | null;
+  /** Hay pago o compra capturados: fecha de pago, fecha de compra o contrato pagado. */
+  pagado: boolean;
   pasoAbierto: PasoExistente | null;
   pasosCerrados: PasoExistente[];
 };
+
+/**
+ * Lead terminal: no vuelve a «Por contactar» al entrar a otra campaña ni recupera estado, etapa, resultado o motivo de
+ * un paso que se reabre. Es el vendido, el pagado (aunque no esté en Vendido), el dado de baja y el que tiene una
+ * supresión vigente (descarte del vehículo, baja o número equivocado).
+ *
+ * El «No contactable» por sí solo no lo es: el número equivocado es del teléfono (D12) y llega en `supresion` mientras
+ * el lead siga con ese teléfono. Si el teléfono cambió y el nuevo no tiene supresión, el lead se vuelve a trabajar en la
+ * siguiente campaña. Por lo mismo, un lead nuevo cuyo teléfono ya es un número equivocado nace «Sin intentar» (no «No
+ * contactable»): es terminal por su `supresion`, y en cuanto el BDC corrige el lead donde se capturó, deja de serlo.
+ */
+export function esTerminal(l: LeadExistente): boolean {
+  return l.estado === "ganada" || l.estado_contacto === "baja" || l.supresion != null || l.pagado === true;
+}
 
 export type PlanLeads = {
   filasFuente: number;
@@ -43,8 +66,11 @@ export type PlanLeads = {
   siguen: { leadId: string; pasoId: string; datos: DatosFuente }[];
   /** Compatibilidad 6M→5M / 28M viejo→28M: el paso abierto toma la clave nueva y conserva todo. */
   renombrados: { leadId: string; pasoId: string; datos: DatosFuente }[];
-  /** Un paso ya cerrado vuelve a la ventana: se reabre tal cual. */
-  reabiertos: { leadId: string; pasoId: string; datos: DatosFuente }[];
+  /**
+   * Un paso ya cerrado vuelve a la ventana: se reabre tal cual. `restaurar` = el lead puede recuperar de la foto del paso
+   * su estado, etapa, resultado y motivo (false en un lead terminal: solo recupera lo propio de la campaña).
+   */
+  reabiertos: { leadId: string; pasoId: string; datos: DatosFuente; restaurar: boolean }[];
   /** Otra campaña: paso nuevo; `reiniciar` = el lead vuelve a «Por contactar». */
   pasosNuevos: { leadId: string; datos: DatosFuente; reiniciar: boolean }[];
   cerrados: { leadId: string; pasoId: string; estado: Exclude<EstadoCartera, "ACTIVA">; motivo: MotivoCierre }[];
@@ -165,14 +191,14 @@ export function planificarLeads(
     // La campaña de hoy es otra: lo abierto se cierra por cambio de campaña (en el Sheet esa fila queda FUERA_DE_VENTANA).
     if (abierto) cierre(lead.id, abierto, "FUERA_DE_VENTANA", "CAMBIO_CAMPANA");
 
+    const terminal = esTerminal(lead);
     const previo = lead.pasosCerrados.find((p) => p.clave === hoy.clave);
     if (previo) {
-      plan.reabiertos.push({ leadId: lead.id, pasoId: previo.id, datos: hoy });
+      plan.reabiertos.push({ leadId: lead.id, pasoId: previo.id, datos: hoy, restaurar: !terminal });
     } else {
       // Un lead que nunca tuvo paso (creado antes del historial por campaña) solo abre el suyo: no hay campaña anterior
       // de la cual reiniciarlo, y lo que el BDC capturó es de esta.
       const sinPasos = !abierto && lead.pasosCerrados.length === 0;
-      const terminal = lead.estado === "ganada" || lead.estado_contacto === "baja";
       plan.pasosNuevos.push({ leadId: lead.id, datos: hoy, reiniciar: !terminal && !sinPasos });
     }
   }

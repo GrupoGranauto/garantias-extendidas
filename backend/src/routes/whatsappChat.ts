@@ -10,17 +10,22 @@ import { emitirEventoChat, suscribirEventosChat } from "../lib/eventosChat.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
 import { leadsDeContactos, registrarSalienteChat } from "../lib/vinculoWhatsapp.js";
 import { getPool } from "../lib/db.js";
+import { telefono10 } from "../lib/campanasLogica.js";
 
-/** El teléfono pidió no recibir más mensajes (escribió «Baja»/STOP): no se le manda ninguna plantilla. */
-async function telefonoDeBaja(sucursalId: string, waId: string): Promise<boolean> {
-  const tel = waId.replace(/\D/g, "").slice(-10);
-  if (tel.length < 10) return false;
-  const { rows } = await getPool().query(
-    `SELECT EXISTS (SELECT 1 FROM crm_contactos WHERE sucursal_id = $1 AND whatsapp_baja
-                     AND right(regexp_replace(coalesce(telefono, ''), '\\D', '', 'g'), 10) = $2) AS v`,
-    [sucursalId, tel],
-  );
-  return rows[0]?.v === true;
+/**
+ * Por qué no se le puede mandar una plantilla a este teléfono, o null si se puede: pidió no recibir más mensajes (aunque
+ * no esté en la base) o es un número equivocado / no contactable. El texto libre y las imágenes dentro de la ventana de
+ * 24h no pasan por aquí (D15 pendiente).
+ */
+async function bloqueoDePlantilla(sucursalId: string, waId: string): Promise<string | null> {
+  const tel = telefono10(waId);
+  if (!tel) return null;
+  const { rows } = await getPool().query(`SELECT crm_bloqueo_telefono($1::uuid, $2::text) AS motivo`, [sucursalId, tel]);
+  const motivo = rows[0]?.motivo as string | null | undefined;
+  if (!motivo) return null;
+  return motivo === "supresion_numero_equivocado"
+    ? "Este número está marcado como equivocado o no contactable. No se le pueden mandar plantillas."
+    : "Este cliente pidió no recibir más mensajes (Baja). No se le pueden mandar plantillas.";
 }
 
 /** Cuántas variables numeradas ({{1}}, {{2}}…) tiene el cuerpo de una plantilla. */
@@ -470,8 +475,9 @@ whatsappChatRouter.post(
         res.status(400).json({ error: "Esta sucursal no tiene WhatsApp configurado." });
         return;
       }
-      if (await telefonoDeBaja(req.params.id, conversacion.wa_id)) {
-        res.status(400).json({ error: "Este cliente pidió no recibir más mensajes (Baja). No se le pueden mandar plantillas." });
+      const bloqueo = await bloqueoDePlantilla(req.params.id, conversacion.wa_id);
+      if (bloqueo) {
+        res.status(400).json({ error: bloqueo });
         return;
       }
 

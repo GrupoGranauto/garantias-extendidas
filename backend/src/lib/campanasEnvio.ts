@@ -1002,15 +1002,32 @@ export async function procesarAhoraNo(sucursalId: string, tel: string): Promise<
 /**
  * El contacto pidió no recibir más: queda en baja (para siempre), se cancela lo que tenía pendiente y
  * sus oportunidades activas pasan a estado de contacto "Baja". Devuelve cuántos contactos tocó.
+ *
+ * Lo primero es la supresión del teléfono, exista o no el contacto: si la persona aún no está en la base (o su número
+ * llega después con otro contacto), nace en baja. `waMessageId` es el mensaje en que la pidió, como evidencia.
+ *
+ * La fecha de la baja (whatsapp_baja_en) es historia: quien ya estaba en baja conserva la suya aunque vuelva a escribir
+ * BAJA; solo quien pasa a baja hoy toma la de hoy (aunque guarde la de una baja anterior que se quitó).
  */
-export async function procesarBaja(sucursalId: string, tel: string): Promise<number> {
+export async function procesarBaja(sucursalId: string, tel: string, waMessageId: string | null = null): Promise<number> {
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
-    const { rows } = await cliente.query(
-      `UPDATE crm_contactos SET whatsapp_baja = true, whatsapp_baja_en = now()
-        WHERE sucursal_id = $1 AND right(regexp_replace(coalesce(telefono, ''), '\\D', '', 'g'), 10) = $2 RETURNING id`,
+    // Quién no estaba en baja: se lee antes de registrar la supresión, porque al registrarla la base ya marca los
+    // contactos del número.
+    const { rows: previos } = await cliente.query(
+      `SELECT id FROM crm_contactos WHERE sucursal_id = $1 AND crm_tel10(telefono) = $2 AND NOT whatsapp_baja`,
       [sucursalId, tel],
+    );
+    await cliente.query(
+      `SELECT crm_registrar_supresion($1::uuid, 'telefono', $2::text, 'baja', 'whatsapp', $3::jsonb)`,
+      [sucursalId, tel, waMessageId ? { wa_message_id: waMessageId } : {}],
+    );
+    const { rows } = await cliente.query(
+      `UPDATE crm_contactos SET whatsapp_baja = true,
+              whatsapp_baja_en = CASE WHEN id = ANY($3::uuid[]) THEN now() ELSE coalesce(whatsapp_baja_en, now()) END
+        WHERE sucursal_id = $1 AND crm_tel10(telefono) = $2 RETURNING id`,
+      [sucursalId, tel, previos.map((r) => r.id as string)],
     );
     const ids = rows.map((r) => r.id as string);
     if (ids.length > 0) {
@@ -1027,7 +1044,10 @@ export async function procesarBaja(sucursalId: string, tel: string): Promise<num
            RETURNING id
          )
          INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle)
-         SELECT $1, m.id, 'baja', 'Pidió no recibir más mensajes', '{"canal":"whatsapp"}'::jsonb FROM marcados m`,
+         SELECT $1, m.id, 'baja', 'Pidió no recibir más mensajes', '{"canal":"whatsapp"}'::jsonb FROM marcados m
+          -- Un BAJA repetido no vuelve a llenar el historial: la actividad queda una sola vez por lead.
+          WHERE NOT EXISTS (SELECT 1 FROM crm_actividades a
+                             WHERE a.oportunidad_id = m.id AND a.tipo = 'baja' AND a.detalle->>'canal' = 'whatsapp')`,
         [sucursalId, ids],
       );
       await cliente.query(`UPDATE crm_contactos SET baja_canal = 'whatsapp' WHERE id = ANY($1::uuid[])`, [ids]);
