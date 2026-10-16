@@ -925,72 +925,99 @@ export async function registrarEstadoEnvio(
 }
 
 /**
- * El cliente tocó «Ahora no» (o lo escribió). NO es una baja: deja de recibir lo que falta de la campaña que le escribió
- * (mensajes y seguimientos, incluidas las tareas y llamadas aún pendientes) y vuelve a contactarse en la siguiente campaña,
- * que es otra oportunidad (por ejemplo, de 48H pasa a 5M). La campaña es la del último mensaje real que recibió (30 días).
+ * El cliente tocó «Ahora no» (o lo escribió). NO es una baja: deja de recibir lo que falta de esa campaña y vuelve a
+ * contactarse en la siguiente, que es otra oportunidad (por ejemplo, de 48H pasa a 5M).
  *
- * Para que el planificador no vuelva a crear lo que falta, los pasos y seguimientos de esa campaña quedan registrados como
- * omitidos «ahora_no» (cada envío y cada seguimiento son únicos por oportunidad). Devuelve la campaña, o null si no aplica.
+ * D17 (15-oct-2026): la pausa es por teléfono y campaña. La campaña es la del mensaje que citó al contestar (si no citó,
+ * la del último mensaje que recibió en 30 días), y se pausan TODOS sus autos con un paso abierto en esa campaña: es lo que
+ * la persona entiende que pidió. Sus autos en otra campaña siguen.
+ *
+ * Cada lead pausado queda con una actividad «ahora_no» ligada a su paso abierto (el freno de envíos la lee y omite
+ * masivos y primer mensaje de esa campaña); lo pendiente se omite y se cancelan las tareas automáticas del paso.
+ * Devuelve la campaña y los leads pausados, o null si no hay mensaje al cual atribuirlo.
  */
-export async function procesarAhoraNo(sucursalId: string, tel: string): Promise<{ campana: string; oportunidadId: string } | null> {
+export async function procesarAhoraNo(
+  sucursalId: string,
+  tel: string,
+  citado: string | null = null,
+): Promise<{ campana: string; oportunidades: string[] } | null> {
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
     const { rows } = await cliente.query(
-      `SELECT e.oportunidad_id, e.campana, e.inicio FROM crm_envios e
+      `SELECT e.oportunidad_id, e.campana FROM crm_envios e
          JOIN crm_oportunidades o ON o.id = e.oportunidad_id
          JOIN crm_contactos c ON c.id = o.contacto_id
-        WHERE e.sucursal_id = $1 AND right(regexp_replace(coalesce(c.telefono, ''), '\\D', '', 'g'), 10) = $2
-          AND e.estado IN ('enviado', 'entregado', 'leido') AND e.enviado_en > now() - interval '30 days'
+        WHERE e.sucursal_id = $1 AND crm_tel10(c.telefono) = $2
+          AND e.estado IN ('enviado', 'entregado', 'leido')
+          AND (e.wa_message_id = $3 OR ($3::text IS NULL AND e.enviado_en > now() - interval '30 days'))
         ORDER BY e.enviado_en DESC LIMIT 1`,
-      [sucursalId, tel],
+      [sucursalId, tel, citado],
     );
-    const ultimo = rows[0];
-    if (!ultimo) {
+    // Si citó un mensaje que no es de campaña (por ejemplo, una plantilla del chat), se usa el último que recibió.
+    const origen =
+      rows[0] ??
+      (citado
+        ? (
+            await cliente.query(
+              `SELECT e.oportunidad_id, e.campana FROM crm_envios e
+                 JOIN crm_oportunidades o ON o.id = e.oportunidad_id
+                 JOIN crm_contactos c ON c.id = o.contacto_id
+                WHERE e.sucursal_id = $1 AND crm_tel10(c.telefono) = $2
+                  AND e.estado IN ('enviado', 'entregado', 'leido') AND e.enviado_en > now() - interval '30 days'
+                ORDER BY e.enviado_en DESC LIMIT 1`,
+              [sucursalId, tel],
+            )
+          ).rows[0]
+        : undefined);
+    if (!origen) {
       await cliente.query("ROLLBACK");
       return null;
     }
-    const opp = ultimo.oportunidad_id as string;
-    const campana = ultimo.campana as string;
+    const campana = origen.campana as string;
 
-    // Lo pendiente de esa campaña se cancela (lo que está saliendo en este momento no se toca).
-    await cliente.query(
-      `UPDATE crm_envios SET estado = 'omitido', motivo = 'ahora_no'
-        WHERE oportunidad_id = $1 AND campana = $2 AND estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando'`,
-      [opp, campana],
+    // Todos los autos de ese teléfono con un paso abierto en esa campaña.
+    const { rows: pasos } = await cliente.query(
+      `SELECT p.oportunidad_id, p.id AS paso_id
+         FROM crm_oportunidad_campanas p
+         JOIN crm_oportunidades o ON o.id = p.oportunidad_id
+         JOIN crm_contactos c ON c.id = o.contacto_id
+        WHERE p.sucursal_id = $1 AND p.cerrada_en IS NULL AND p.campana = $2 AND crm_tel10(c.telefono) = $3`,
+      [sucursalId, campana, tel],
     );
-    // Los pasos que aún no se planificaban quedan cerrados para que no se creen después.
+    const leads = pasos.map((r) => r.oportunidad_id as string);
+    const idsPasos = pasos.map((r) => r.paso_id as string);
+
+    if (idsPasos.length > 0) {
+      // Lo pendiente de esos pasos se omite (lo que está saliendo en este momento no se toca).
+      await cliente.query(
+        `UPDATE crm_envios SET estado = 'omitido', motivo = 'ahora_no'
+          WHERE campana_id = ANY($1::uuid[]) AND estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando'`,
+        [idsPasos],
+      );
+      // Las tareas automáticas de esos pasos («Retomar lead», seguimientos) ya no tienen sentido.
+      await cliente.query(
+        `UPDATE crm_tareas SET estado = 'cancelada', completada_en = now()
+          WHERE campana_id = ANY($1::uuid[]) AND estado = 'pendiente'
+            AND (automatizacion_id IS NOT NULL OR seguimiento_id IS NOT NULL)`,
+        [idsPasos],
+      );
+    }
+    // La actividad queda en cada lead pausado (el trigger la liga a su paso abierto); si ninguno sigue en esa campaña,
+    // queda solo en el del mensaje, como historial.
+    const conActividad = leads.length > 0 ? leads : [origen.oportunidad_id as string];
     await cliente.query(
-      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, paso_id, campana, campana_id, plantilla_id, inicio, programado_para, estado, motivo)
-       SELECT $1, $2, p.id, $3,
-              -- El paso de campaña del lead en esa campaña (aunque ya haya pasado a otra).
-              (SELECT oc.id FROM crm_oportunidad_campanas oc WHERE oc.oportunidad_id = $2 AND oc.campana = $3 ORDER BY oc.abierta_en DESC LIMIT 1),
-              p.plantilla_id, $4::date, now(), 'omitido', 'ahora_no'
-         FROM crm_campana_pasos p JOIN crm_campanas_envio cfg ON cfg.id = p.config_id
-        WHERE cfg.sucursal_id = $1 AND cfg.campana = $3
-       ON CONFLICT DO NOTHING`,
-      [sucursalId, opp, campana, ultimo.inicio],
-    );
-    // Seguimientos de esa campaña: los pendientes se omiten y los que aún no existían se crean ya omitidos.
-    await cliente.query(
-      `INSERT INTO crm_seguimiento_ejecuciones (sucursal_id, seguimiento_id, oportunidad_id, referencia_en, programado_para, estado, motivo)
-       SELECT $1, s.id, $2, now(), now(), 'omitido', 'ahora_no' FROM crm_seguimientos s WHERE s.sucursal_id = $1 AND s.campana = $3
-       ON CONFLICT (seguimiento_id, oportunidad_id) DO UPDATE SET estado = 'omitido', motivo = 'ahora_no'
-         WHERE crm_seguimiento_ejecuciones.estado = 'pendiente'`,
-      [sucursalId, opp, campana],
-    );
-    // Las tareas y llamadas que dejaron los seguimientos de esa campaña ya no tienen sentido.
-    await cliente.query(
-      `UPDATE crm_tareas t SET estado = 'cancelada' FROM crm_seguimientos s
-        WHERE t.seguimiento_id = s.id AND s.campana = $3 AND t.oportunidad_id = $2 AND t.sucursal_id = $1 AND t.estado = 'pendiente'`,
-      [sucursalId, opp, campana],
-    );
-    await cliente.query(
-      `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle) VALUES ($1, $2, 'ahora_no', $3, $4)`,
-      [sucursalId, opp, `Respondió «Ahora no» a la campaña ${campana}: sin más mensajes de esta campaña`, { campana, canal: "whatsapp" }],
+      `INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle)
+       SELECT $1, x.id, 'ahora_no', $3, $4 FROM unnest($2::uuid[]) AS x(id)`,
+      [
+        sucursalId,
+        conActividad,
+        `Respondió «Ahora no» a la campaña ${campana}: sin más mensajes de esta campaña`,
+        { campana, canal: "whatsapp", autos: conActividad.length },
+      ],
     );
     await cliente.query("COMMIT");
-    return { campana, oportunidadId: opp };
+    return { campana, oportunidades: leads };
   } catch (err) {
     await cliente.query("ROLLBACK").catch(() => {});
     throw err;

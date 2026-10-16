@@ -313,9 +313,9 @@ async function atenderBajaOAhoraNo(msg: MensajeEntrante, config: ConfigSucursal)
       console.error("[campanas] no se pudo registrar una baja");
     }
   } else if (esAhoraNo(escrito)) {
-    // «Ahora no»: no es baja. Se pausa solo la campaña que le escribió; la siguiente campaña lo vuelve a contactar.
+    // «Ahora no»: no es baja. Se pausa esa campaña en todos los autos del teléfono (D17); la siguiente lo vuelve a contactar.
     try {
-      await procesarAhoraNo(config.sucursal_id, tel);
+      await procesarAhoraNo(config.sucursal_id, tel, msg.context?.id ?? null);
     } catch {
       console.error("[campanas] no se pudo registrar un «Ahora no»");
     }

@@ -12,20 +12,33 @@ import { leadsDeContactos, registrarSalienteChat } from "../lib/vinculoWhatsapp.
 import { getPool } from "../lib/db.js";
 import { telefono10 } from "../lib/campanasLogica.js";
 
-/**
- * Por qué no se le puede mandar una plantilla a este teléfono, o null si se puede: pidió no recibir más mensajes (aunque
- * no esté en la base) o es un número equivocado / no contactable. El texto libre y las imágenes dentro de la ventana de
- * 24h no pasan por aquí (D15 pendiente).
- */
-async function bloqueoDePlantilla(sucursalId: string, waId: string): Promise<string | null> {
+/** Bloqueo de cumplimiento del teléfono: baja (aunque no esté en la base) o número equivocado; null si no hay. */
+async function motivoBloqueo(sucursalId: string, waId: string): Promise<string | null> {
   const tel = telefono10(waId);
   if (!tel) return null;
   const { rows } = await getPool().query(`SELECT crm_bloqueo_telefono($1::uuid, $2::text) AS motivo`, [sucursalId, tel]);
-  const motivo = rows[0]?.motivo as string | null | undefined;
+  return (rows[0]?.motivo as string | null | undefined) ?? null;
+}
+
+/** Por qué no se le puede mandar una plantilla a este teléfono, o null si se puede: pidió baja o es número equivocado. */
+async function bloqueoDePlantilla(sucursalId: string, waId: string): Promise<string | null> {
+  const motivo = await motivoBloqueo(sucursalId, waId);
   if (!motivo) return null;
   return motivo === "supresion_numero_equivocado"
     ? "Este número está marcado como equivocado o no contactable. No se le pueden mandar plantillas."
     : "Este cliente pidió no recibir más mensajes (Baja). No se le pueden mandar plantillas.";
+}
+
+/**
+ * D15 (15-oct-2026): a quien pidió la baja tampoco se le escribe texto libre ni se le mandan archivos, aunque la ventana
+ * de 24h siga abierta (justo porque acaba de escribir «BAJA»). El número equivocado no bloquea el texto libre: si la
+ * persona escribe desde ese número, se le puede contestar.
+ */
+async function bloqueoDeMensajeLibre(sucursalId: string, waId: string): Promise<string | null> {
+  const motivo = await motivoBloqueo(sucursalId, waId);
+  return motivo === "baja" || motivo === "supresion_baja"
+    ? "Este cliente pidió no recibir más mensajes (Baja). No se le puede escribir."
+    : null;
 }
 
 /** Cuántas variables numeradas ({{1}}, {{2}}…) tiene el cuerpo de una plantilla. */
@@ -195,6 +208,11 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
       res.status(400).json({ error: "Ventana de 24h cerrada: manda una plantilla, o espera a que el cliente escriba de nuevo." });
       return;
     }
+    const bajaLibre = await bloqueoDeMensajeLibre(req.params.id, conversacion.wa_id);
+    if (bajaLibre) {
+      res.status(400).json({ error: bajaLibre });
+      return;
+    }
 
     const enviado = await enviarMensaje(config, conversacion.wa_id, { tipo: "texto", texto: parsed.data.texto });
 
@@ -277,6 +295,11 @@ whatsappChatRouter.post("/sucursales/:id/whatsapp/conversaciones/:conversacionId
     }
     if (ventanaCerrada(conversacion.ultimo_mensaje_cliente_en)) {
       res.status(400).json({ error: "Ventana de 24h cerrada: manda una plantilla, o espera a que el cliente escriba de nuevo." });
+      return;
+    }
+    const bajaLibre = await bloqueoDeMensajeLibre(req.params.id, conversacion.wa_id);
+    if (bajaLibre) {
+      res.status(400).json({ error: bajaLibre });
       return;
     }
 
