@@ -24,7 +24,7 @@ const aConfig = (r: Record<string, any> | undefined): ConfigPrimerMensaje => ({
   activa: r?.activa === true,
   plantillaId: (r?.plantilla_id as string | null) ?? null,
   diasSemana: ((r?.dias_semana as number[] | null) ?? [1, 2, 3, 4, 5, 6]).map(Number),
-  hora: r?.hora ? hhmm(r.hora) : "10:30",
+  hora: r?.hora ? hhmm(r.hora) : "09:30",
   telefonosPrueba: (r?.telefonos_prueba as string[] | null) ?? [],
 });
 

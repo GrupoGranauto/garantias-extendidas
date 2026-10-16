@@ -5,7 +5,7 @@ import { vincularConversaciones } from "./vinculoWhatsapp.js";
 import { ESTADOS_MEXICO } from "./programaGeLogica.js";
 import { adaptarFilaCruda, campanaDeVehiculo, esFilaCruda, type EtapaVehiculo } from "./origenCrudoLogica.js";
 import { leerDefinicionesActivas } from "./campanasDefinidas.js";
-import { ahoraLocal } from "./campanasLogica.js";
+import { ahoraLocal, aMinutos } from "./campanasLogica.js";
 import { recalcularEtapas } from "./cicloVehiculo.js";
 import type { DefinicionCampana } from "./campanasDefLogica.js";
 import { planificarLeads, type LeadExistente, type PasoExistente, type PlanLeads } from "./cicloLeadLogica.js";
@@ -381,7 +381,7 @@ export function validarSensatez(plan: PlanLeads, leads: LeadExistente[], esPrueb
 }
 
 /**
- * La maestra se rearma cada mañana (09:30). Si la corrida de hoy no terminó bien, la tabla trae los datos de ayer y
+ * La maestra se rearma cada mañana (08:30). Si la corrida de hoy no terminó bien, la tabla trae los datos de ayer y
  * sincronizar abriría o cerraría campañas con la fecha equivocada: mejor no escribir.
  */
 async function verificarFrescura(tabla: string): Promise<string | null> {
@@ -1082,28 +1082,25 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
 /* ---------- Corrida diaria programada ---------- */
 
 const ZONA_NEGOCIO = "America/Hermosillo";
-/** Hora local (Hermosillo) en que corre: la maestra se refresca a las 09:30. */
-const HORA_SYNC = 10;
+/**
+ * Ventana de la corrida diaria (hora de Hermosillo). La maestra se rehace a las 08:30 y la sincronización corre en
+ * cuanto la corrida de hoy de la maestra terminó bien (verificarFrescura), normalmente antes de las 09:00. Si la maestra
+ * se atrasa, sigue intentando hasta el fin de la ventana en lugar de perder el día; el primer mensaje (09:30) la espera.
+ */
+export const VENTANA_SYNC = { desde: "08:30", hasta: "11:00" } as const;
+const MINUTOS_ENTRE_REVISIONES = 5;
 
 let temporizadorSync: NodeJS.Timeout | null = null;
 let sincronizando = false;
 
-function ahoraEnNegocio(): { fecha: string; hora: number } {
-  const partes = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ZONA_NEGOCIO,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const g = (t: string) => partes.find((p) => p.type === t)?.value ?? "";
-  return { fecha: `${g("year")}-${g("month")}-${g("day")}`, hora: Number(g("hour")) };
+/** Si a esta hora (minutos del día en Hermosillo) toca intentar la sincronización del día. */
+export function enVentanaSync(minutos: number): boolean {
+  return minutos >= aMinutos(VENTANA_SYNC.desde) && minutos < aMinutos(VENTANA_SYNC.hasta);
 }
 
 async function sincronizarPendientesDeHoy(): Promise<void> {
-  const { fecha, hora } = ahoraEnNegocio();
-  if (hora !== HORA_SYNC) return;
+  const { fecha, minutos } = ahoraLocal();
+  if (!enVentanaSync(minutos)) return;
   const { rows } = await getPool().query(
     `SELECT c.sucursal_id FROM crm_config c
       WHERE c.sync_bigquery AND NOT EXISTS (
@@ -1125,7 +1122,7 @@ async function sincronizarPendientesDeHoy(): Promise<void> {
 }
 
 /**
- * Arranca la sincronización diaria en este proceso. Revisa cada 10 minutos y, dentro de la hora
+ * Arranca la sincronización diaria en este proceso. Revisa cada 5 minutos y, dentro de la ventana
  * configurada, corre una vez por sucursal y día. Solo se enciende con CRM_SYNC_AUTO=true.
  */
 export function iniciarSyncProgramadoCrm(): void {
@@ -1138,7 +1135,7 @@ export function iniciarSyncProgramadoCrm(): void {
       .finally(() => {
         sincronizando = false;
       });
-  }, 10 * 60 * 1000);
+  }, MINUTOS_ENTRE_REVISIONES * 60 * 1000);
   temporizadorSync.unref();
 }
 

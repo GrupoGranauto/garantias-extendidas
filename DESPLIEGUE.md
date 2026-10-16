@@ -38,7 +38,7 @@ Interruptores del CRM (todos opcionales; ver `docs/salida-a-produccion.md`):
 | Variable | Efecto |
 |---|---|
 | `CRM_MOTOR` | El motor (automatizaciones, reglas, cálculo de campañas, cobertura) arranca solo en producción (`NODE_ENV=production` o dentro de Railway). `off` lo apaga; `on` lo enciende en una copia local, que trabaja sobre la base de producción |
-| `CRM_SYNC_AUTO` | `true` enciende la sincronización diaria con BigQuery (10:00 a 10:59, hora de Hermosillo) |
+| `CRM_SYNC_AUTO` | `true` enciende la sincronización diaria con BigQuery (desde las 08:30, hora de Hermosillo, en cuanto la base maestra del día está lista; normalmente antes de las 09:00, y reintenta hasta las 11:00 si se atrasa) |
 | `CRM_ENVIOS` | `on` enciende los envíos de campañas (simulados y reales) y los seguimientos. Un envío real además exige la campaña activa en modo real |
 | `GMAIL_SENDER`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `SMTP_FROM_NAME` | Correo propio (recuperación de contraseña e invitaciones) por la API de Gmail |
 

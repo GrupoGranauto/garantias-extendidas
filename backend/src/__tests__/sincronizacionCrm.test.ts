@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   claveContacto,
   clasificarCierre,
+  enVentanaSync,
   normalizarCp,
   normalizarEstado,
   oportunidadActiva,
@@ -25,6 +26,23 @@ const maestra = (extra: FilaMaestra = {}): FilaMaestra => ({
   fecha_fin_5m: "2026-10-31",
   etapa: "ETAPA_1",
   ...extra,
+});
+
+describe("enVentanaSync", () => {
+  const m = (hhmm: string) => {
+    const [h, mm] = hhmm.split(":").map(Number);
+    return h * 60 + mm;
+  };
+  it("intenta desde las 08:30 (la maestra se rehace a esa hora) y no antes", () => {
+    expect(enVentanaSync(m("08:29"))).toBe(false);
+    expect(enVentanaSync(m("08:30"))).toBe(true);
+    expect(enVentanaSync(m("08:55"))).toBe(true);
+  });
+  it("si la maestra se atrasa sigue intentando hasta las 11:00, no después", () => {
+    expect(enVentanaSync(m("09:40"))).toBe(true);
+    expect(enVentanaSync(m("10:59"))).toBe(true);
+    expect(enVentanaSync(m("11:00"))).toBe(false);
+  });
 });
 
 describe("sumarMeses", () => {

@@ -105,7 +105,8 @@ function TarjetaSincronizacion({ sucursalId }: { sucursalId: string }) {
       <p className="rep-ayuda">
         Última sincronización completa: <strong>{cuando(estado.ultima_real)}</strong>
         {estado.corrio_hoy ? " (hoy)" : ""} · La base se actualizó: <strong>{cuando(estado.fuente_actualizada_en)}</strong> · Corre sola cada
-        día a las 10:00 (hora de Hermosillo) cuando está activada en el servidor.
+        día entre las 08:30 y las 09:00 (hora de Hermosillo), en cuanto la base del día está lista, cuando está activada en
+        el servidor.
       </p>
       <div className="ficha-fila">
         <button type="button" className="boton-secundario-claro" disabled={trabajando} onClick={() => correr(false)}>
