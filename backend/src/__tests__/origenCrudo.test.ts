@@ -57,6 +57,13 @@ describe("campaña calculada por la web", () => {
     expect(campanaDeVehiculo(cruda({ fecha_factura: "2025-10-31" }), DEFS, HOY, undefined)).toMatchObject({ campana: "12M_NURTURING", inicio: "2026-09-30" });
   });
 
+  it("no entra lo que la web ya resolvió (venta del BDC, descarte, baja, número equivocado) aunque no cuente como «tiene GE»", () => {
+    for (const motivo of ["VENDIDA_BDC", "DESCARTADO", "BAJA", "NUMERO_EQUIVOCADO"]) {
+      expect(campanaDeVehiculo(cruda({ fecha_factura: "2026-05-15", motivo_no_elegible: motivo }), DEFS, HOY, undefined), motivo).toBeNull();
+    }
+    expect(campanaDeVehiculo(cruda({ fecha_factura: "2026-05-15", motivo_no_elegible: "FUERA_DE_VENTANA" }), DEFS, HOY, undefined)?.campana).toBe("5M");
+  });
+
   it("no entra quien ya tiene GE, quien no es contactable ni el vehículo excluido", () => {
     expect(campanaDeVehiculo(cruda({ fecha_factura: "2026-05-15", tiene_ge: true }), DEFS, HOY, undefined)).toBeNull();
     expect(campanaDeVehiculo(cruda({ fecha_factura: "2026-05-15", telefono: null, correo: null }), DEFS, HOY, undefined)).toBeNull();

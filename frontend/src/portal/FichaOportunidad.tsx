@@ -156,6 +156,8 @@ const MOTIVO_CIERRE: Record<string, string> = {
   CAMBIO_CAMPANA: "Pasó a la siguiente campaña",
   FUERA_DE_VENTANA: "Terminó la ventana de la campaña",
   YA_TIENE_GE: "Ya tiene garantía extendida",
+  VENDIDA_BDC: "La vendió el BDC",
+  DESCARTADO: "Vehículo descartado",
   NO_CONTACTABLE_FUENTE: "Quedó como no contactable en la cartera",
   NO_EN_MAESTRA: "Salió de la cartera",
 };

@@ -14,6 +14,9 @@ const texto = (v: unknown): string | null => {
   return s === "" ? null : s;
 };
 
+/** Motivos de la maestra para lo que ya se resolvió en la web (llegan cuando la maestra cruza el envío nocturno). */
+const MOTIVOS_RESUELTOS_EN_WEB = new Set(["VENDIDA_BDC", "DESCARTADO", "BAJA", "NUMERO_EQUIVOCADO"]);
+
 /** ¿La fila viene en formato crudo (sin la campaña calculada por BigQuery)? */
 export const esFilaCruda = (m: Fila): boolean => !("campania_actual" in m) && ("nombre" in m || "apellido_paterno" in m || "telefono" in m);
 
@@ -78,6 +81,10 @@ export function campanaDeVehiculo(
   etapa: EtapaVehiculo | undefined,
 ): CampanaCalculada | null {
   if (m.tiene_ge === true || m.es_contactable === false) return null;
+  // Con la maestra que cruza el envío nocturno: lo que la web resolvió (venta del BDC, descarte, baja, número equivocado)
+  // tampoco entra, aunque la venta del BDC ya no cuente como «tiene GE».
+  const motivo = texto(m.motivo_no_elegible)?.toUpperCase();
+  if (motivo && MOTIVOS_RESUELTOS_EN_WEB.has(motivo)) return null;
   const activas = defs.filter((d) => d.activa);
   const fechaDe = (d: DefinicionCampana) => texto(d.columna_fecha === "fecha_reporte" ? m.fecha_reporte : m.fecha_factura);
   const { elegida } = asignarCampana(activas, (d) => ({ fecha: fechaDe(d), etapaOrden: etapa?.etapaOrden ?? null, excluido: etapa?.excluido ?? false }), hoy);

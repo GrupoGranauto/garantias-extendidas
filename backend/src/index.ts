@@ -21,6 +21,7 @@ import { crmMasivosRouter } from "./routes/crmMasivos.js";
 import { crmReglasContratoRouter } from "./routes/crmReglasContrato.js";
 import { iniciarMotorCrm } from "./lib/motorCrm.js";
 import { iniciarSyncProgramadoCrm } from "./lib/sincronizacionCrm.js";
+import { iniciarExportacionProgramada } from "./lib/exportacionBigQuery.js";
 import { entidadDatosRouter } from "./routes/entidadDatos.js";
 import { whatsappChatRouter } from "./routes/whatsappChat.js";
 import { entidadesIngestaRouter } from "./routes/entidadesIngesta.js";
@@ -157,6 +158,7 @@ const motorEncendido =
 app.listen(env.PORT, () => {
   if (flags.supabase && motorEncendido) iniciarMotorCrm();
   if (flags.supabase && flags.bigquery && process.env.CRM_SYNC_AUTO === "true") iniciarSyncProgramadoCrm();
+  if (flags.supabase && flags.bigquery && process.env.CRM_EXPORT_BQ === "true") iniciarExportacionProgramada();
   console.log(`[backend] http://localhost:${env.PORT}  (${env.NODE_ENV})`);
   console.log(`[backend] sitio: ${fs.existsSync(sitio) ? sitio : "no compilado (modo desarrollo)"}`);
   console.log(`[backend] supabase: ${flags.supabase ? "ok" : "sin configurar"} | bigquery: ${flags.bigquery ? "ok" : "sin configurar"}`);

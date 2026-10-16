@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { esTerminal, planificarLeads, type LeadExistente } from "../lib/cicloLeadLogica.js";
+import { esTerminal, estadoDeCierre, planificarLeads, type LeadExistente } from "../lib/cicloLeadLogica.js";
 import type { FilaMaestra } from "../lib/sincronizacionCrm.js";
 
 const VIN = "3N1AB7AP0RY000001";
@@ -201,6 +201,50 @@ describe("planificarLeads", () => {
     const sinPaso = lead({ estado_cartera: "FUERA_DE_VENTANA", pasoAbierto: null });
     expect(planificarLeads([fueraDeCampana({ tiene_ge: true })], [sinPaso], ROSTER).carteraCambiada).toEqual([{ leadId: "lead-1", estado: "YA_TIENE_GE" }]);
     expect(planificarLeads([fueraDeCampana()], [sinPaso], ROSTER).carteraCambiada).toEqual([]);
+  });
+
+  describe("estado con que sale de cartera (decisión del 16-oct-2026)", () => {
+    it("lo que vendió el BDC sale como VENDIDA_BDC aunque la maestra ya lo vea con GE", () => {
+      for (const extra of [{ estado: "ganada" }, { pagado: true }] as Partial<LeadExistente>[]) {
+        expect(estadoDeCierre(fueraDeCampana({ tiene_ge: true }), lead(extra)), JSON.stringify(extra)).toBe("VENDIDA_BDC");
+        expect(estadoDeCierre(fueraDeCampana(), lead(extra)), JSON.stringify(extra)).toBe("VENDIDA_BDC");
+      }
+    });
+    it("una venta del BDC ya cerrada como «ya tiene GE» se corrige a VENDIDA_BDC", () => {
+      const vendida = lead({ estado: "ganada", estado_cartera: "YA_TIENE_GE", pasoAbierto: null });
+      expect(planificarLeads([fueraDeCampana({ tiene_ge: true })], [vendida], ROSTER).carteraCambiada).toEqual([
+        { leadId: "lead-1", estado: "VENDIDA_BDC" },
+      ]);
+    });
+    it("al cerrar el paso, la venta del BDC queda como motivo", () => {
+      const p = planificarLeads([fueraDeCampana({ tiene_ge: true })], [lead({ estado: "ganada" })], ROSTER);
+      expect(p.cerrados).toEqual([{ leadId: "lead-1", pasoId: "paso-5m", estado: "VENDIDA_BDC", motivo: "VENDIDA_BDC" }]);
+    });
+    it("un vehículo descartado en la web sale como DESCARTADO, salvo que la maestra diga que ya tiene GE", () => {
+      const descartado = lead({ estado: "perdida", supresion: "flotilla" });
+      expect(estadoDeCierre(fueraDeCampana(), descartado)).toBe("DESCARTADO");
+      expect(estadoDeCierre(undefined, descartado)).toBe("DESCARTADO");
+      expect(estadoDeCierre(fueraDeCampana({ tiene_ge: true }), descartado)).toBe("YA_TIENE_GE");
+    });
+    it("la baja o el número equivocado del teléfono no cambian el estado: decide la maestra", () => {
+      expect(estadoDeCierre(fueraDeCampana(), lead({ supresion: "baja" }))).toBe("FUERA_DE_VENTANA");
+      expect(estadoDeCierre(fueraDeCampana({ motivo_no_elegible: "NUMERO_EQUIVOCADO" }), lead({ supresion: "numero_equivocado" }))).toBe(
+        "NO_CONTACTABLE_FUENTE",
+      );
+    });
+    it("una venta con el contrato cancelado ya no cuenta como venta del BDC (igual que el envío nocturno)", () => {
+      expect(estadoDeCierre(fueraDeCampana(), lead({ estado: "ganada", contratoCancelado: true }))).toBe("FUERA_DE_VENTANA");
+      expect(estadoDeCierre(fueraDeCampana({ tiene_ge: true }), lead({ pagado: true, contratoCancelado: true }))).toBe("YA_TIENE_GE");
+    });
+    it("una baja del teléfono no tapa el descarte del vehículo", () => {
+      expect(estadoDeCierre(fueraDeCampana(), lead({ supresion: "baja", descarteVin: "flotilla" }))).toBe("DESCARTADO");
+      expect(estadoDeCierre(fueraDeCampana(), lead({ supresion: "flotilla", descarteVin: null }))).toBe("FUERA_DE_VENTANA");
+    });
+    it("sin venta ni descarte en la web, lo que diga la maestra", () => {
+      expect(estadoDeCierre(fueraDeCampana({ motivo_no_elegible: "VENDIDA_BDC" }), lead())).toBe("VENDIDA_BDC");
+      expect(estadoDeCierre(fueraDeCampana({ motivo_no_elegible: "DESCARTADO" }), lead())).toBe("DESCARTADO");
+      expect(estadoDeCierre(fueraDeCampana(), lead())).toBe("FUERA_DE_VENTANA");
+    });
   });
 
   it("6M histórico pasa a 5M renombrando el mismo paso (conserva todo, como la migración del Sheet)", () => {

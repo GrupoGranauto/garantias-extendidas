@@ -40,6 +40,13 @@ export type LeadExistente = {
   supresion: string | null;
   /** Hay pago o compra capturados: fecha de pago, fecha de compra o contrato pagado. */
   pagado: boolean;
+  /** Tiene un contrato cancelado y ninguno pagado: deja de contar como venta del BDC (igual que en el envío nocturno). */
+  contratoCancelado?: boolean;
+  /**
+   * Descarte vigente del vehículo (motivo), leído aparte de `supresion`: ahí la baja del teléfono va primero y lo taparía.
+   * Sin el dato (pruebas viejas), se deduce de `supresion`.
+   */
+  descarteVin?: string | null;
   pasoAbierto: PasoExistente | null;
   pasosCerrados: PasoExistente[];
 };
@@ -58,6 +65,28 @@ export function esTerminal(l: LeadExistente): boolean {
   return l.estado === "ganada" || l.estado_contacto === "baja" || l.supresion != null || l.pagado === true;
 }
 
+/** Motivos de supresión que son descartes del vehículo (alcance VIN); los demás (baja, número equivocado) son del teléfono. */
+const DESCARTES_VEHICULO = new Set(["ya_no_tiene_auto", "flotilla", "uso_no_elegible", "fuera_km_tiempo"]);
+
+/**
+ * Con qué estado sale de cartera un lead cuyo VIN ya no está en campaña. Combina lo que dice la maestra con lo que sabe la
+ * web, en el mismo orden que la maestra cuando cruza el envío nocturno (decisión del 16-oct-2026):
+ *  1. Lo vendió el BDC desde la web (Vendido, pago o compra capturados, sin contrato cancelado) → VENDIDA_BDC, aunque la
+ *     maestra ya lo vea con GE: esa venta cuenta para el BDC, no como «ya tenía GE». Es la misma regla que manda el envío
+ *     nocturno (esVentaBdc).
+ *  2. La maestra dice que ya tiene GE (vendida fuera) o que lo vendió el BDC → lo que diga.
+ *  3. El vehículo tiene un descarte vigente en la web → DESCARTADO.
+ *  4. Lo demás, como lo clasifique la maestra.
+ */
+export function estadoDeCierre(m: FilaMaestra | undefined, lead: LeadExistente): Exclude<EstadoCartera, "ACTIVA"> {
+  if ((lead.estado === "ganada" || lead.pagado === true) && lead.contratoCancelado !== true) return "VENDIDA_BDC";
+  const deMaestra = clasificarCierre(m);
+  if (deMaestra === "YA_TIENE_GE" || deMaestra === "VENDIDA_BDC") return deMaestra;
+  const descarte = lead.descarteVin !== undefined ? lead.descarteVin : lead.supresion;
+  if (descarte != null && DESCARTES_VEHICULO.has(descarte)) return "DESCARTADO";
+  return deMaestra;
+}
+
 export type PlanLeads = {
   filasFuente: number;
   activasFuente: number;
@@ -74,7 +103,7 @@ export type PlanLeads = {
   /** Otra campaña: paso nuevo; `reiniciar` = el lead vuelve a «Por contactar». */
   pasosNuevos: { leadId: string; datos: DatosFuente; reiniciar: boolean }[];
   cerrados: { leadId: string; pasoId: string; estado: Exclude<EstadoCartera, "ACTIVA">; motivo: MotivoCierre }[];
-  /** Leads sin paso abierto cuyo estado de cartera cambió (p. ej. FUERA_DE_VENTANA → YA_TIENE_GE). */
+  /** Leads sin paso abierto cuyo estado de cartera cambió (p. ej. FUERA_DE_VENTANA → YA_TIENE_GE, YA_TIENE_GE → VENDIDA_BDC). */
   carteraCambiada: { leadId: string; estado: Exclude<EstadoCartera, "ACTIVA"> }[];
   conflictos: string[];
   /** Contactos y vehículos a upsertar. */
@@ -170,8 +199,9 @@ export function planificarLeads(
     const abierto = lead.pasoAbierto;
 
     if (!hoy) {
-      // Sin campaña hoy: se cierra lo abierto con el motivo de la maestra; lo ya cerrado solo actualiza su estado.
-      const estado = clasificarCierre(porVin.get(vin));
+      // Sin campaña hoy: se cierra lo abierto con el motivo de la maestra y lo que sabe la web; lo ya cerrado solo
+      // actualiza su estado.
+      const estado = estadoDeCierre(porVin.get(vin), lead);
       if (abierto) cierre(lead.id, abierto, estado, estado);
       else if (lead.estado_cartera !== estado) plan.carteraCambiada.push({ leadId: lead.id, estado });
       continue;

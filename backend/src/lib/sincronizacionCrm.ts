@@ -29,7 +29,14 @@ import { DESTINO_DE_RESULTADO } from "./resultadoBdcLogica.js";
 
 export type FilaMaestra = Record<string, unknown>;
 
-export type EstadoCartera = "ACTIVA" | "YA_TIENE_GE" | "NO_CONTACTABLE_FUENTE" | "FUERA_DE_VENTANA" | "NO_EN_MAESTRA";
+export type EstadoCartera =
+  | "ACTIVA"
+  | "YA_TIENE_GE"
+  | "VENDIDA_BDC"
+  | "DESCARTADO"
+  | "NO_CONTACTABLE_FUENTE"
+  | "FUERA_DE_VENTANA"
+  | "NO_EN_MAESTRA";
 
 /** Datos de fuente de una oportunidad activa, listos para escribir. */
 export type DatosFuente = {
@@ -195,10 +202,19 @@ export function oportunidadWeb(
   };
 }
 
-/** Por qué una oportunidad dejó de estar activa, según el estado actual de su VIN en la maestra. */
+/**
+ * Por qué una oportunidad dejó de estar activa, según el estado actual de su VIN en la maestra. Cuando la maestra cruza
+ * el envío nocturno de la web, su motivo manda: VENDIDA_BDC (la vendió el BDC desde la web; con eso `tiene_ge` queda solo
+ * para la GE vendida fuera), DESCARTADO, y BAJA o NUMERO_EQUIVOCADO, que son no contactables. Con la maestra de antes
+ * (sin esos motivos) se decide por sus columnas, como siempre.
+ */
 export function clasificarCierre(m: FilaMaestra | undefined): Exclude<EstadoCartera, "ACTIVA"> {
   if (!m) return "NO_EN_MAESTRA";
+  const motivo = texto(m.motivo_no_elegible)?.toUpperCase();
+  if (motivo === "VENDIDA_BDC") return "VENDIDA_BDC";
   if (m.tiene_ge === true) return "YA_TIENE_GE";
+  if (motivo === "DESCARTADO") return "DESCARTADO";
+  if (motivo === "BAJA" || motivo === "NUMERO_EQUIVOCADO") return "NO_CONTACTABLE_FUENTE";
   if (m.es_contactable === false) return "NO_CONTACTABLE_FUENTE";
   return "FUERA_DE_VENTANA";
 }
@@ -275,7 +291,14 @@ async function cargarLeads(sucursalId: string): Promise<{ leads: LeadExistente[]
     `SELECT o.id, v.vin, o.ejecutivo, o.estado, o.estado_cartera,
             CASE WHEN c.whatsapp_baja THEN 'baja' ELSE o.estado_contacto END AS estado_contacto,
             crm_supresion_terminal(o.id) AS supresion,
-            ${SQL_PAGADO} AS pagado
+            ${SQL_PAGADO} AS pagado,
+            (EXISTS (SELECT 1 FROM crm_contratos ct WHERE ct.oportunidad_id = o.id AND ct.estado = 'cancelado')
+             AND NOT EXISTS (SELECT 1 FROM crm_contratos ct WHERE ct.oportunidad_id = o.id
+                                AND ct.estado IN ('pago_confirmado', 'certificado_entregado', 'cobertura_iniciada'))) AS contrato_cancelado,
+            (SELECT s.motivo FROM crm_supresiones s
+              WHERE s.sucursal_id = o.sucursal_id AND s.alcance = 'vin' AND s.valor = v.vin AND s.revocada_en IS NULL
+                AND (s.vigente_hasta IS NULL OR s.vigente_hasta > now())
+              ORDER BY s.creado_en LIMIT 1) AS descarte_vin
        FROM crm_oportunidades o
        JOIN crm_vehiculos v ON v.id = o.vehiculo_id
        JOIN crm_contactos c ON c.id = o.contacto_id
@@ -305,6 +328,8 @@ async function cargarLeads(sucursalId: string): Promise<{ leads: LeadExistente[]
       estado_cartera: l.estado_cartera as EstadoCartera,
       supresion: (l.supresion as string | null) ?? null,
       pagado: l.pagado === true,
+      contratoCancelado: l.contrato_cancelado === true,
+      descarteVin: (l.descarte_vin as string | null) ?? null,
       pasoAbierto: porLead.get(l.id as string)?.abierto ?? null,
       pasosCerrados: porLead.get(l.id as string)?.cerrados ?? [],
     })),
@@ -592,7 +617,9 @@ const filaVehiculo = (m: FilaMaestra) => ({
   tipo_venta: texto(m.tipo_venta),
   fecha_factura: texto(m.fecha_factura),
   fecha_reporte: texto(m.fecha_reporte),
-  tiene_ge: typeof m.tiene_ge === "boolean" ? m.tiene_ge : null,
+  // El vehículo tiene GE si la tiene (vendida fuera) o si la vendió el BDC: con la maestra que cruza el envío nocturno,
+  // tiene_ge ya no incluye la venta del BDC, que llega en venta_bdc.
+  tiene_ge: m.venta_bdc === true ? true : typeof m.tiene_ge === "boolean" ? m.tiene_ge : null,
   cantidad_ge_activas: m.cantidad_ge_activas ?? null,
   fecha_fin_garantia: texto(m.fecha_fin_garantia),
   numero_factura: texto(m.numero_factura)?.toUpperCase() ?? null,
