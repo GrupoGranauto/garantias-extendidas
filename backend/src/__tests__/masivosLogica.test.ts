@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  telefonosOcupadosHoy,
   clasificarDestinatarios,
   contarOmitidos,
   cubiertoPorTelefono,
@@ -33,6 +34,17 @@ const base = (extra: Partial<Candidato> = {}): Candidato => ({
   estadoContacto: "sin_intentar",
   parametros: ["Versa", "Navojoa"],
   ...extra,
+});
+
+describe("telefonosOcupadosHoy", () => {
+  it("sin exentos, todo teléfono con mensaje hoy queda ocupado (clientes: uno al día, siempre)", () => {
+    expect([...telefonosOcupadosHoy(["6620000001", "6620000002"])]).toEqual(["6620000001", "6620000002"]);
+  });
+  it("los teléfonos de prueba del primer mensaje no cuentan para el límite de uno al día", () => {
+    const ocupados = telefonosOcupadosHoy(["6620000001", "6620000002"], ["6620000002"]);
+    expect(clasificarDestinatarios([base({ telefono: "6620000002" })], ocupados)[0].motivo).toBeNull();
+    expect(clasificarDestinatarios([base({ telefono: "6620000001" })], ocupados)[0].motivo).toBe("mensaje_hoy");
+  });
 });
 
 describe("clasificarDestinatarios", () => {

@@ -183,6 +183,16 @@ export type Candidato = {
 export type Destinatario = { oportunidadId: string; tel10: string | null; motivo: MotivoOmision | null };
 
 /**
+ * Teléfonos que ya recibieron (o tienen en cola) un mensaje hoy, sin los exentos. Solo se exentan los teléfonos de prueba
+ * del primer mensaje automático (modo prueba): son del equipo y hay que poder repetir las pruebas el mismo día. A los
+ * clientes el límite de un mensaje por día se les aplica siempre.
+ */
+export function telefonosOcupadosHoy(ocupados: string[], exentos: string[] = []): Set<string> {
+  const fuera = new Set(exentos);
+  return new Set(ocupados.filter((t) => !fuera.has(t)));
+}
+
+/**
  * A quién le sale el mensaje. Cada persona recibe a lo sumo uno por día: se omite a quien ya recibió (o tiene en cola)
  * un mensaje hoy, y si dos filas elegidas comparten teléfono, solo la primera que sí puede recibirlo.
  */

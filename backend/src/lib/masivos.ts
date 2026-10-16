@@ -20,6 +20,7 @@ import {
   ordenCampana,
   plantillaNoUsable,
   reglasParaEnvio,
+  telefonosOcupadosHoy,
   vistaMensaje,
   type Componentes,
   type DatosLead,
@@ -228,7 +229,15 @@ type Preparado = {
  * Carga la plantilla y las filas elegidas, arma los datos de cada mensaje y decide a quién sí le sale: las reglas «A quién»,
  * el freno de la base (supresiones, venta, contrato y campaña, según el origen) y un mensaje por teléfono al día.
  */
-async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantillaId: string, origen: Origen): Promise<Resultado<Preparado>> {
+async function preparar(
+  cl: Consulta,
+  sucursalId: string,
+  ids: string[],
+  plantillaId: string,
+  origen: Origen,
+  /** Modo prueba del primer mensaje: estos teléfonos (del equipo) no cuentan para el límite de uno al día. */
+  telefonosPrueba: string[] = [],
+): Promise<Resultado<Preparado>> {
   const unicos = [...new Set(ids)];
   if (unicos.length === 0) return { ok: false, error: "Elige al menos una fila." };
   if (unicos.length > MAX_DESTINATARIOS) return { ok: false, error: `Un masivo puede llevar hasta ${MAX_DESTINATARIOS.toLocaleString("es-MX")} filas.` };
@@ -289,7 +298,10 @@ async function preparar(cl: Consulta, sucursalId: string, ids: string[], plantil
       estadoContacto: (f.r.estado_contacto as string | null) ?? null,
       parametros: f.parametros,
     })),
-    new Set(ocupados.map((o) => o.t as string)),
+    telefonosOcupadosHoy(
+      ocupados.map((o) => o.t as string),
+      telefonosPrueba,
+    ),
   );
 
   return {
@@ -472,9 +484,10 @@ export async function crearMasivoAutomatico(
     // D10, un primer mensaje por teléfono y campaña: los mensajes de esta campaña que pudieron llegar (o siguen en cola) a los
     // teléfonos de los candidatos, de cualquier vehículo: primeros mensajes y envíos de masivos manuales ligados a un paso de
     // esta campaña. Cuáles cubren a cada candidato (por fecha) lo decide cubiertoPorTelefono.
+    // Modo prueba (solo teléfonos de prueba, del equipo): sin D10, para poder repetir la prueba de una campaña.
     let previos: EnvioPrevio[] = [];
     const telefonos = [...new Set(candidatos.map((c) => c.tel10).filter((t): t is string => t !== null))];
-    if (telefonos.length > 0) {
+    if (telefonos.length > 0 && soloTelefonos.length === 0) {
       const { rows } = await cliente.query(
         `SELECT e.id, crm_tel10(c.telefono) AS tel10, e.estado, e.error_codigo,
                 (coalesce(e.enviado_en, e.creado_en) AT TIME ZONE '${ZONA_ENVIOS}')::date::text AS fecha
@@ -526,7 +539,7 @@ export async function crearMasivoAutomatico(
     let omitidos: { motivo: string; texto: string; n: number }[] = [];
     let nota: string | null = null;
     if (libres.length > 0) {
-      const p = await preparar(cliente, sucursalId, libres.map((c) => c.oportunidadId), plantillaId, "primer_mensaje");
+      const p = await preparar(cliente, sucursalId, libres.map((c) => c.oportunidadId), plantillaId, "primer_mensaje", soloTelefonos);
       if (!p.ok) {
         nota = p.error;
       } else {
