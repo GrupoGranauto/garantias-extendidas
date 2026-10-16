@@ -79,8 +79,12 @@ type Consulta = { query: (sql: string, params?: unknown[]) => Promise<{ rows: an
  * cambio que corrige, y la apagan después para que no alcance a nada más de la transacción. Nunca en lote ni en caminos
  * automáticos (la sync, el ciclo diario, los envíos): sin ella, nada libera un bloqueo.
  */
-export async function marcarCorreccion(cliente: Consulta, encendida: boolean): Promise<void> {
-  await cliente.query(`SELECT set_config('crm.corregir_supresion', $1, true)`, [encendida ? "on" : "off"]);
+export async function marcarCorreccion(cliente: Consulta, encendida: boolean, usuarioId: string | null = null): Promise<void> {
+  // Quién corrige: la base lo guarda en la supresión revocada y en la actividad del lead (0040).
+  await cliente.query(
+    `SELECT set_config('crm.corregir_supresion', $1, true), set_config('crm.usuario_correccion', $2, true)`,
+    [encendida ? "on" : "off", encendida && usuarioId ? usuarioId : ""],
+  );
 }
 
 /** El historial y las actividades referencian a public.usuarios: sin fila ahí (ej. admin de plataforma) queda sin autor. */
@@ -857,7 +861,7 @@ export async function editarEnTransaccion(cliente: Consulta, params: ParamsEdici
         motivoAntes,
         motivoDespues: tocaEstado ? motivoClaveNuevo : motivoAntes,
       });
-      if (corrige) await marcarCorreccion(cliente, true);
+      if (corrige) await marcarCorreccion(cliente, true, await autorValido(cliente, usuarioId));
       args.push(oportunidadId, sucursalId);
       await cliente.query(
         `UPDATE crm_oportunidades SET ${sets.join(", ")} WHERE id = $${args.length - 1} AND sucursal_id = $${args.length}`,
@@ -1084,7 +1088,7 @@ export async function moverOportunidad(params: {
       motivoAntes: (actual.motivo_clave as string | null) ?? null,
       motivoDespues: motivoQueda,
     });
-    if (corrige) await marcarCorreccion(cliente, true);
+    if (corrige) await marcarCorreccion(cliente, true, await autorValido(cliente, params.usuarioId));
 
     if (cambioEtapa) {
       await cliente.query(

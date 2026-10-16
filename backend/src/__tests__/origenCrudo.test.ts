@@ -15,7 +15,7 @@ const HOY = "2026-10-06";
 const SIN_ETAPAS = new Map();
 
 const cruda = (extra: Record<string, unknown>) =>
-  adaptarFilaCruda({ vin: "VIN", nombre: "Miguel", apellido_paterno: "Borbon", apellido_materno: null, telefono: "662-358-7553", correo: "x@example.com", tiene_ge: false, ...extra });
+  adaptarFilaCruda({ vin: "VIN", nombre: "Juan", apellido_paterno: "Prueba", apellido_materno: null, telefono: "662-000-0001", correo: "x@example.com", tiene_ge: false, ...extra });
 
 describe("adaptar la fila cruda", () => {
   it("reconoce el formato crudo", () => {
@@ -25,8 +25,8 @@ describe("adaptar la fila cruda", () => {
 
   it("arma el nombre completo y la contactabilidad", () => {
     const f = cruda({});
-    expect(f.cliente).toBe("Miguel Borbon");
-    expect(f.telefono_principal).toBe("6623587553");
+    expect(f.cliente).toBe("Juan Prueba");
+    expect(f.telefono_principal).toBe("6620000001");
     expect(f.es_contactable).toBe(true);
     expect(nombreCompleto({ nombre: " Ana ", apellido_paterno: "Lopez", apellido_materno: "Ruiz" })).toBe("Ana Lopez Ruiz");
   });
@@ -66,10 +66,10 @@ describe("campaña calculada por la web", () => {
 
 describe("ciclo de leads con el origen crudo", () => {
   const filas = [
-    cruda({ vin: "V1", telefono: "6623587553", fecha_factura: "2026-10-04", fecha_reporte: "2026-10-05" }),
-    cruda({ vin: "V2", telefono: "6621464226", fecha_factura: "2026-05-15", fecha_reporte: "2026-05-17" }),
-    cruda({ vin: "V3", telefono: "6623254234", fecha_factura: "2025-10-31", fecha_reporte: "2025-11-02" }),
-    cruda({ vin: "V4", telefono: "6624305938", fecha_factura: "2024-06-10", fecha_reporte: "2024-06-12" }),
+    cruda({ vin: "V1", telefono: "6620000001", fecha_factura: "2026-10-04", fecha_reporte: "2026-10-05" }),
+    cruda({ vin: "V2", telefono: "6620000002", fecha_factura: "2026-05-15", fecha_reporte: "2026-05-17" }),
+    cruda({ vin: "V3", telefono: "6620000003", fecha_factura: "2025-10-31", fecha_reporte: "2025-11-02" }),
+    cruda({ vin: "V4", telefono: "6620000004", fecha_factura: "2024-06-10", fecha_reporte: "2024-06-12" }),
     cruda({ vin: "V5", telefono: "6620000000", fecha_factura: "2023-01-10", fecha_reporte: "2023-01-12" }), // en ninguna campaña
   ];
   const activar = (m: Record<string, unknown>) => oportunidadWeb(m, DEFS, HOY, SIN_ETAPAS);

@@ -85,7 +85,7 @@ export async function registrarContacto(p: {
     // Contestó el titular en un lead «No contactable»: el número sí es suyo. Lo registra una persona sobre este lead, así
     // que se declara como corrección (solo para este cambio) y la base revoca el número equivocado de ese teléfono.
     const corrige = corrigeBloqueo({ contactoAntes: rows[0].estado_contacto as string, contactoDespues: ef.contacto, motivoAntes: null, motivoDespues: null });
-    if (corrige) await marcarCorreccion(cliente, true);
+    if (corrige) await marcarCorreccion(cliente, true, await autorValido(cliente, p.usuarioId));
 
     await cliente.query(
       `UPDATE crm_oportunidades

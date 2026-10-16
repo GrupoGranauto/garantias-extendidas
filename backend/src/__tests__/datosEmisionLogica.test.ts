@@ -3,7 +3,7 @@ import { evaluarCompletitud, normalizarDatosEmision, type BaseEmision } from "..
 import { PROGRAMA_POR_OMISION as P, type ProgramaGe } from "../lib/programaGeLogica.js";
 
 const base: BaseEmision = {
-  vin: "JN8AT3MT1TW067049",
+  vin: "JN8AT3MT1TW000001",
   modelo: "Xtrail",
   version: "Advance",
   ano_modelo: 2026,

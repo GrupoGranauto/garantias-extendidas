@@ -82,7 +82,7 @@ describe("configuración válida", () => {
     expect(validarConfig({ ...cfg, diasSemana: [] })).toMatch(/al menos un día/);
     expect(validarConfig({ ...cfg, plantillaId: null })).toMatch(/plantilla/);
     expect(validarConfig({ ...cfg, activa: false, plantillaId: null, diasSemana: [] })).toBeNull();
-    expect(validarConfig({ ...cfg, telefonosPrueba: ["6623587553"] })).toBeNull();
+    expect(validarConfig({ ...cfg, telefonosPrueba: ["6620000001"] })).toBeNull();
     expect(validarConfig({ ...cfg, telefonosPrueba: ["662358755"] })).toMatch(/10 dígitos/);
   });
 });
