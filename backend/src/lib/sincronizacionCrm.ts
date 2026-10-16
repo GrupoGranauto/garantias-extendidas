@@ -220,7 +220,56 @@ export function clasificarCierre(m: FilaMaestra | undefined): Exclude<EstadoCart
   return "FUERA_DE_VENTANA";
 }
 
-export const TABLA_MAESTRA = "base-maestra-gn.garantias_extendidas.nis_ge_cartera_maestra";
+/**
+ * Base maestra de la web (decisión del 16-oct-2026). La arma la propia web en app_ge con su proceso
+ * (sp_refresh_ge_cartera_web), que copia la lógica de la base maestra oficial y le cruza el envío nocturno de la web:
+ * lo vendido por el BDC, la GE declarada, los descartes, las bajas y los números equivocados salen de cartera. La base
+ * maestra oficial (garantias_extendidas.nis_ge_cartera_maestra) y su proceso no se tocan.
+ */
+export const TABLA_MAESTRA = "base-maestra-gn.app_ge.ge_cartera_web";
+const PROCESO_MAESTRA = "base-maestra-gn.app_ge.sp_refresh_ge_cartera_web";
+/** Intentos por día de rehacer la base maestra de la web: si falla (por ejemplo, por uno de sus frenos), no se insiste sin fin. */
+const INTENTOS_MAESTRA_POR_DIA = 3;
+
+/** Bitácora de corridas de la maestra: vive junto a la tabla (mismo proyecto y dataset). */
+const bitacoraDe = (tabla: string) => {
+  const [proyecto, dataset] = tabla.split(".");
+  return `${proyecto}.${dataset}.ge_cartera_refresh_runs`;
+};
+
+let rehaciendo: Promise<void> | null = null;
+
+/**
+ * Rehace la base maestra de la web si hoy todavía no tiene una corrida buena. Solo desde que abre la ventana de la
+ * sincronización (08:30), cuando las fuentes ya traen el día anterior, y como mucho INTENTOS_MAESTRA_POR_DIA veces. Si
+ * falla, el motivo queda en su bitácora y verificarFrescura no deja sincronizar con datos viejos.
+ */
+async function rehacerMaestraSiHaceFalta(): Promise<void> {
+  const { fecha, minutos } = ahoraLocal();
+  if (minutos < aMinutos(VENTANA_SYNC.desde)) return;
+  if (rehaciendo) return rehaciendo;
+  rehaciendo = (async () => {
+    const [filas] = await getBigQuery().query({
+      query: `SELECT COUNTIF(fecha_negocio = DATE(@hoy)) AS intentos,
+                     COUNTIF(fecha_negocio = DATE(@hoy) AND status = 'SUCCEEDED') AS buenas
+                FROM \`${bitacoraDe(TABLA_MAESTRA)}\``,
+      params: { hoy: fecha },
+      location: env.BIGQUERY_LOCATION,
+    });
+    const r = (filas as { intentos: number; buenas: number }[])[0];
+    if (Number(r?.buenas ?? 0) > 0 || Number(r?.intentos ?? 0) >= INTENTOS_MAESTRA_POR_DIA) return;
+    try {
+      await getBigQuery().query({ query: `CALL \`${PROCESO_MAESTRA}\`()`, location: env.BIGQUERY_LOCATION });
+      console.log("[maestra-web] rehecha");
+    } catch (err) {
+      // El motivo técnico (los frenos del proceso no llevan datos de clientes).
+      console.error(`[maestra-web] falló: ${err instanceof Error ? err.message : "error"}`);
+    }
+  })().finally(() => {
+    rehaciendo = null;
+  });
+  return rehaciendo;
+}
 const TABLA_VALIDA = /^[a-z0-9-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+$/;
 
 /**
@@ -413,9 +462,8 @@ export function validarSensatez(plan: PlanLeads, leads: LeadExistente[], esPrueb
  * sincronizar abriría o cerraría campañas con la fecha equivocada: mejor no escribir.
  */
 async function verificarFrescura(tabla: string): Promise<string | null> {
-  const [proyecto, dataset] = tabla.split(".");
   const [filas] = await getBigQuery().query({
-    query: `SELECT status, CAST(fecha_negocio AS STRING) AS fecha FROM \`${proyecto}.${dataset}.ge_cartera_refresh_runs\` ORDER BY inicio DESC LIMIT 1`,
+    query: `SELECT status, CAST(fecha_negocio AS STRING) AS fecha FROM \`${bitacoraDe(tabla)}\` ORDER BY inicio DESC LIMIT 1`,
     location: env.BIGQUERY_LOCATION,
   });
   const ultima = (filas as { status: string; fecha: string }[])[0];
@@ -477,8 +525,9 @@ export async function sincronizarCrm(sucursalId: string, aplicar: boolean): Prom
   const tabla = (habilitada[0]?.bq_tabla_fuente as string | null) ?? TABLA_MAESTRA;
   const esPrueba = tabla !== TABLA_MAESTRA;
 
-  // Con la maestra real, solo se sincroniza contra la corrida de hoy.
+  // Con la maestra real, solo se sincroniza contra la corrida de hoy (si hoy no la hay, primero se rehace).
   if (!esPrueba) {
+    await rehacerMaestraSiHaceFalta();
     const vieja = await verificarFrescura(tabla);
     if (vieja) throw new Error(vieja);
   }
@@ -1113,9 +1162,9 @@ async function aplicarLeads(sucursalId: string, plan: PlanLeads): Promise<void> 
 
 const ZONA_NEGOCIO = "America/Hermosillo";
 /**
- * Ventana de la corrida diaria (hora de Hermosillo). La maestra se rehace a las 08:30 y la sincronización corre en
- * cuanto la corrida de hoy de la maestra terminó bien (verificarFrescura), normalmente antes de las 09:00. Si la maestra
- * se atrasa, sigue intentando hasta el fin de la ventana en lugar de perder el día; el primer mensaje (09:30) la espera.
+ * Ventana de la corrida diaria (hora de Hermosillo). A las 08:30 la web rehace su base maestra (rehacerMaestraSiHaceFalta)
+ * y sincroniza en cuanto esa corrida de hoy terminó bien (verificarFrescura), normalmente antes de las 09:00. Si falla,
+ * lo reintenta y sigue revisando hasta el fin de la ventana en lugar de perder el día; el primer mensaje (09:30) la espera.
  */
 export const VENTANA_SYNC = { desde: "08:30", hasta: "11:00" } as const;
 const MINUTOS_ENTRE_REVISIONES = 5;
