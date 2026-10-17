@@ -36,6 +36,7 @@ import {
   registrarNoContactar,
 } from "../lib/crmProceso.js";
 import { guardarDatosEmision, leerDatosEmision } from "../lib/datosEmision.js";
+import { avanceDelLead, revisarSinRespuestaDelLead } from "../lib/sinRespuesta.js";
 
 /**
  * Proceso comercial del CRM en el portal: ficha de oportunidad (contacto, notas, contrato, línea de
@@ -150,6 +151,8 @@ crmProcesoRouter.get("/sucursales/:id/crm/oportunidades/:oid", async (req, res, 
       tareas,
       linea_tiempo: await lineaDeTiempo(req.params.id, req.params.oid),
       campanas: await historialCampanas(req.params.id, req.params.oid),
+      // Cómo va hacia el mensaje automático por llamadas sin respuesta (null si su campaña no lo tiene encendido).
+      sin_respuesta: await avanceDelLead(req.params.id, req.params.oid).catch(() => null),
       estados_contrato: ESTADOS_CONTRATO,
     });
   } catch (err) {
@@ -206,6 +209,8 @@ crmProcesoRouter.post("/sucursales/:id/crm/oportunidades/:oid/contacto", async (
       res.status(r.estado).json({ error: r.error });
       return;
     }
+    // Si con esta llamada llegó al número de llamadas sin respuesta, el mensaje automático queda en cola ya.
+    if (d.canal === "llamada") await revisarSinRespuestaDelLead(req.params.oid);
     avisarCambio(req.params.id, req.params.oid);
     res.json({ ok: true });
   } catch (err) {

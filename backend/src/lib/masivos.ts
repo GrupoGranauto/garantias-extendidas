@@ -344,6 +344,74 @@ export async function revisarMasivo(sucursalId: string, ids: string[], plantilla
   return { ok: true as const, valor: resumen(p.valor) };
 }
 
+/**
+ * Mensaje por llamadas sin respuesta para UN lead (lo llama el motor): un masivo de origen «sin_respuesta» con un solo envío,
+ * con el mismo freno que un masivo manual (baja, supresiones, GE, pago, «Ahora no», un mensaje al día). Una sola vez por paso
+ * de campaña: si ese paso ya tiene un envío de este origen, no hace nada. Si el lead hoy no puede recibirlo (por ejemplo, ya
+ * recibió otro mensaje hoy), no deja nada y se vuelve a revisar en la siguiente vuelta del motor.
+ */
+export async function crearMasivoSinRespuesta(p: {
+  sucursalId: string;
+  oportunidadId: string;
+  pasoId: string;
+  campana: string;
+  plantillaId: string;
+  telefonosPrueba: string[];
+}): Promise<{ creado: boolean; motivo: string | null }> {
+  const cliente = await getPool().connect();
+  try {
+    await cliente.query("BEGIN");
+    await cliente.query(`SELECT pg_advisory_xact_lock(hashtext('masivo:' || $1))`, [p.sucursalId]);
+    const { rows: ya } = await cliente.query(
+      `SELECT 1 FROM crm_envios e JOIN crm_masivos m ON m.id = e.masivo_id WHERE e.campana_id = $1 AND m.origen = 'sin_respuesta' LIMIT 1`,
+      [p.pasoId],
+    );
+    if (ya[0]) {
+      await cliente.query("ROLLBACK");
+      return { creado: false, motivo: "ya_enviado" };
+    }
+    const prep = await preparar(cliente, p.sucursalId, [p.oportunidadId], p.plantillaId, "masivo", p.telefonosPrueba);
+    if (!prep.ok) {
+      await cliente.query("ROLLBACK");
+      return { creado: false, motivo: prep.error };
+    }
+    const destino = prep.valor.destinatarios[0];
+    const fila = prep.valor.filas[0];
+    if (!destino || !fila || destino.motivo) {
+      await cliente.query("ROLLBACK");
+      return { creado: false, motivo: destino?.motivo ?? "no_encontrada" };
+    }
+    const r = resumen(prep.valor);
+    const { rows } = await cliente.query(
+      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, origen, campana, fecha_local)
+       VALUES ($1, $2, $3, 'sin_respuesta', $4, (now() AT TIME ZONE '${ZONA_ENVIOS}')::date) RETURNING id`,
+      [p.sucursalId, prep.valor.plantilla.id, prep.valor.plantilla.nombre, p.campana],
+    );
+    await cliente.query(
+      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, masivo_id, parametros, campana_id)
+       VALUES ($1, $2, $3, $4, CASE WHEN $5::text IS NULL THEN now() ELSE ($5::timestamp AT TIME ZONE '${ZONA_ENVIOS}') END,
+               'pendiente', $6, $7::jsonb, $8)`,
+      [
+        p.sucursalId,
+        p.oportunidadId,
+        fila.campana,
+        prep.valor.plantilla.id,
+        r.sale ? `${r.sale.fecha} ${r.sale.hora}:00` : null,
+        rows[0].id,
+        JSON.stringify(fila.parametros),
+        p.pasoId,
+      ],
+    );
+    await cliente.query("COMMIT");
+    return { creado: true, motivo: null };
+  } catch (err) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    cliente.release();
+  }
+}
+
 /** Deja el masivo en cola y vuelve enseguida; el motor lo manda. */
 export async function crearMasivo(sucursalId: string, ids: string[], plantillaId: string, usuarioId: string | null) {
   const cliente = await getPool().connect();

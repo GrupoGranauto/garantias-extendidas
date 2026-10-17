@@ -39,6 +39,8 @@ type PasoCampana = {
   respuestas: number;
   masivos: number;
 };
+/** Cómo va el lead hacia el mensaje automático por llamadas sin respuesta (null si su campaña no lo tiene encendido). */
+type SinRespuesta = { llamadas: number; contadas: number; faltan: number; listo: boolean; intentos: number; resultados: string[]; enviado: boolean };
 type Ficha = {
   oportunidad: Record<string, unknown>;
   resultado: { actual: string; opciones: OpcionResultado[] };
@@ -49,6 +51,7 @@ type Ficha = {
   tareas: TareaPendiente[];
   linea_tiempo: Entrada[];
   campanas: PasoCampana[];
+  sin_respuesta: SinRespuesta | null;
   gestion: Gestion;
   estados_contrato: string[];
 };
@@ -516,6 +519,19 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
               <button type="button" className="boton-guardar" disabled={enviando || faltaEnLlamada} onClick={registrarLlamada}>
                 Registrar
               </button>
+              {ficha.sin_respuesta && (
+                <p className="ficha-ayuda">
+                  {ficha.sin_respuesta.llamadas === 1 ? "1 llamada" : `${ficha.sin_respuesta.llamadas} llamadas`} en esta campaña
+                  {", "}
+                  {ficha.sin_respuesta.contadas} de {ficha.sin_respuesta.intentos} sin respuesta.{" "}
+                  {ficha.sin_respuesta.enviado
+                    ? "Ya se le mandó el mensaje de sin respuesta a la llamada."
+                    : ficha.sin_respuesta.listo
+                      ? "Ya llegó: el mensaje de sin respuesta a la llamada sale en cuanto se pueda."
+                      : `${ficha.sin_respuesta.faltan === 1 ? "Falta 1" : `Faltan ${ficha.sin_respuesta.faltan}`} para mandarle el mensaje de sin respuesta a la llamada.`}{" "}
+                  Cuentan: {ficha.sin_respuesta.resultados.join(", ").toLowerCase()}.
+                </p>
+              )}
               <p className="ficha-ayuda">Suma un intento y pone hoy como último contacto. Solo hablar con el titular es contacto efectivo: si el lead estaba en «Por contactar», pasa a «Contactado». Su respuesta lo mueve (pide precio → Interesado; no interesado, ya tiene GE o flotilla → Perdido con ese motivo). Los mensajes de WhatsApp se registran solos.</p>
             </section>
 

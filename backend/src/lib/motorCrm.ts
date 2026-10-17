@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getPool } from "./db.js";
 import { despacharMasivos } from "./masivos.js";
 import { programarPrimerosMensajes } from "./primerMensaje.js";
+import { programarSinRespuesta } from "./sinRespuesta.js";
 import { emitirBroadcast } from "./realtime.js";
 import { validarFechaCoherente } from "./entidades.js";
 import { ejecutarReglasContrato, iniciarCoberturasVencidas, planificarReglasContrato } from "./reglasContrato.js";
@@ -417,9 +418,11 @@ export function iniciarMotorCrm(cadaMs = 5000): void {
           await etapa("ejecutar reglas del contrato", ejecutarReglasContrato, 0);
           await etapa("cobertura automática", iniciarCoberturasVencidas, 0);
         }
-        // Lo único automático de WhatsApp es el primer mensaje de cada campaña: una vez al día, en sus días y desde su hora,
-        // se arma su masivo. Los demás masivos los arma el admin a mano. Todos se despachan en cada vuelta.
+        // Lo automático de WhatsApp: el primer mensaje de cada campaña (una vez al día, en sus días y desde su hora) y el
+        // mensaje por llamadas sin respuesta (sale al registrar la llamada; aquí solo se repasan, cada 15 minutos, los que se
+        // tuvieron que posponer). Los demás masivos los arma el admin a mano. Todos se despachan en cada vuelta.
         if (porTiempo) await etapa("primer mensaje automático", programarPrimerosMensajes, 0);
+        if (porTiempo) await etapa("sin respuesta a la llamada", programarSinRespuesta, 0);
         await etapa("despachar masivos", despacharMasivos, 0);
         if (r.tareas + extra > 0) console.log(`[motor-crm] ${r.tareas + extra} tarea(s) creada(s)`);
       })

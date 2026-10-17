@@ -14,6 +14,8 @@ import {
 } from "../lib/masivos.js";
 import { MAX_DESTINATARIOS } from "../lib/masivosLogica.js";
 import { guardarPrimerMensaje, leerPrimerMensaje } from "../lib/primerMensaje.js";
+import { guardarSinRespuesta, leerSinRespuesta } from "../lib/sinRespuesta.js";
+import { INTENTOS_MAXIMOS } from "../lib/sinRespuestaLogica.js";
 
 /** Masivos manuales de WhatsApp: solo el admin del grupo los ve y los manda. */
 export const crmMasivosRouter = Router();
@@ -155,6 +157,41 @@ crmMasivosRouter.put("/sucursales/:id/crm/masivos/primer-mensaje/:campana", asyn
       return;
     }
     res.json(await leerPrimerMensaje(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Mensaje por llamadas sin respuesta, por campaña: su configuración y cuántos leads ya llegaron al número de llamadas. */
+crmMasivosRouter.get("/sucursales/:id/crm/masivos/sin-respuesta", async (req, res, next) => {
+  try {
+    res.json(await leerSinRespuesta(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const sinRespuestaSchema = z.object({
+  activa: z.boolean(),
+  plantilla_id: z.string().uuid().nullable(),
+  intentos: z.number().int().min(1, `El número de llamadas va de 1 a ${INTENTOS_MAXIMOS}.`).max(INTENTOS_MAXIMOS, `El número de llamadas va de 1 a ${INTENTOS_MAXIMOS}.`),
+  resultados: z.array(z.string().trim().max(40)).max(20),
+  telefonos_prueba: z.array(z.string().trim().max(20)).max(10).default([]),
+});
+
+crmMasivosRouter.put("/sucursales/:id/crm/masivos/sin-respuesta/:campana", async (req, res, next) => {
+  const parsed = sinRespuestaSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." });
+    return;
+  }
+  try {
+    const r = await guardarSinRespuesta(req.params.id, req.params.campana, parsed.data, req.usuario?.id ?? null);
+    if (!r.ok) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    res.json(await leerSinRespuesta(req.params.id));
   } catch (err) {
     next(err);
   }

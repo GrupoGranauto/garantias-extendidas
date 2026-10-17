@@ -7,6 +7,7 @@ import { apiFetch } from "../lib/api";
 import EtapasVehiculo from "./EtapasVehiculo";
 import DefinirCampanas from "./DefinirCampanas";
 import PrimerMensajeAutomatico from "./PrimerMensajeAutomatico";
+import SinRespuestaLlamada from "./SinRespuestaLlamada";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -85,13 +86,13 @@ export default function Automatizaciones() {
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
-  // Apartados: el primer mensaje automático, las automatizaciones por estado, las etapas del vehículo y, si la web define las
-  // campañas, «Definir campañas».
-  type Apartado = "primer" | "etapas" | "vehiculo" | "definir";
+  // Apartados: el primer mensaje automático, el mensaje por llamadas sin respuesta, las automatizaciones por estado, las
+  // etapas del vehículo y, si la web define las campañas, «Definir campañas».
+  type Apartado = "primer" | "sin_respuesta" | "etapas" | "vehiculo" | "definir";
   const [apartadoElegido, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "primer" || guardado === "vehiculo" || guardado === "definir" ? guardado : "etapas";
+      return guardado === "primer" || guardado === "sin_respuesta" || guardado === "vehiculo" || guardado === "definir" ? guardado : "etapas";
     } catch {
       return "etapas";
     }
@@ -111,6 +112,9 @@ export default function Automatizaciones() {
     <div className="vista-selector auto-apartados" role="tablist" aria-label="Apartado de automatizaciones">
       <button type="button" role="tab" aria-selected={apartado === "primer"} className={`vista-opcion${apartado === "primer" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("primer")}>
         Primer mensaje
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "sin_respuesta"} className={`vista-opcion${apartado === "sin_respuesta" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("sin_respuesta")}>
+        Sin respuesta a la llamada
       </button>
       <button type="button" role="tab" aria-selected={apartado === "etapas"} className={`vista-opcion${apartado === "etapas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("etapas")}>
         Por estado
@@ -214,6 +218,15 @@ export default function Automatizaciones() {
       <div className="pagina-formulario">
         {apartados}
         <PrimerMensajeAutomatico />
+      </div>
+    );
+  }
+
+  if (apartado === "sin_respuesta") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <SinRespuestaLlamada />
       </div>
     );
   }
