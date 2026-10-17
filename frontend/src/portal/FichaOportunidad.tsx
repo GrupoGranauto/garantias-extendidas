@@ -523,7 +523,9 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
                 <p className="ficha-ayuda">
                   {ficha.sin_respuesta.llamadas === 1 ? "1 llamada" : `${ficha.sin_respuesta.llamadas} llamadas`} en esta campaña
                   {", "}
-                  {ficha.sin_respuesta.contadas} de {ficha.sin_respuesta.intentos} sin respuesta.{" "}
+                  {ficha.sin_respuesta.contadas < ficha.sin_respuesta.intentos
+                    ? `${ficha.sin_respuesta.contadas} de ${ficha.sin_respuesta.intentos} sin respuesta.`
+                    : `${ficha.sin_respuesta.contadas} sin respuesta (el mensaje sale al llegar a ${ficha.sin_respuesta.intentos}).`}{" "}
                   {ficha.sin_respuesta.enviado
                     ? "Ya se le mandó el mensaje de sin respuesta a la llamada."
                     : ficha.sin_respuesta.listo
