@@ -11,7 +11,7 @@ import { emitirEventoChat } from "../lib/eventosChat.js";
 import { motivoFallaWhatsApp } from "../lib/erroresMeta.js";
 import { procesarAhoraNo, procesarBaja, registrarEstadoEnvio } from "../lib/campanasEnvio.js";
 import { buscarVinculo, elegirConversacion, registrarEntrante, type Vinculo } from "../lib/vinculoWhatsapp.js";
-import { esAhoraNo, esPeticionDeBaja, telefono10, textoEntrante } from "../lib/campanasLogica.js";
+import { cuentaComoRespuesta, esAhoraNo, esPeticionDeBaja, telefono10, textoEntrante } from "../lib/campanasLogica.js";
 import { buscarContactoPorTelefono } from "../lib/entidades.js";
 import { getPool } from "../lib/db.js";
 
@@ -300,7 +300,7 @@ async function obtenerOCrearConversacion(
   return existente.id;
 }
 
-/** «BAJA», «STOP»… y «Ahora no». Cada uno falla por separado y nunca depende de que se pueda guardar el chat. */
+/** «BAJA» y «Ahora no». Cada uno falla por separado y nunca depende de que se pueda guardar el chat. */
 async function atenderBajaOAhoraNo(msg: MensajeEntrante, config: ConfigSucursal) {
   const escrito = textoEntrante(msg);
   const tel = telefono10(msg.from);
@@ -421,6 +421,13 @@ async function procesarMensajeEntrante(msg: MensajeEntrante, config: ConfigSucur
 
   const { error } = await getSupabase().from("whatsapp_mensajes").insert(fila);
   if (error) throw new Error(error.message);
+
+  // La conversación aparece en el chat cuando el cliente contesta; un «Ahora no» no cuenta.
+  if (cuentaComoRespuesta(textoEntrante(msg))) {
+    await getPool()
+      .query(`UPDATE whatsapp_conversaciones SET respondio_en = now() WHERE id = $1 AND respondio_en IS NULL`, [conversacionId])
+      .catch(() => console.error("[whatsapp] no se pudo marcar la conversación como respondida"));
+  }
 
   // Lo que escribió el cliente queda en el historial de su oportunidad y cae en la cola «por clasificar» (salvo una baja:
   // registrarEntrante no abre la cola a quien la pidió, y la baja ya quedó registrada arriba).

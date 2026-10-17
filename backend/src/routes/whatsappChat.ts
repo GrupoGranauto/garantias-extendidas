@@ -80,7 +80,10 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/eventos", (req, res) => {
   });
 });
 
-/** Listado de conversaciones de la sucursal, más recientes primero. Por defecto solo las activas (no resueltas). */
+/**
+ * Listado de conversaciones de la sucursal, más recientes primero. Por defecto solo las activas (no resueltas). Solo las
+ * que el cliente ya contestó (respondio_en): un mensaje que salió no la hace aparecer, y un «Ahora no» tampoco.
+ */
 whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, res, next) => {
   try {
     const resueltas = req.query.resueltas === "true";
@@ -90,7 +93,8 @@ whatsappChatRouter.get("/sucursales/:id/whatsapp/conversaciones", async (req, re
         "id, wa_id, nombre_contacto, ultimo_mensaje_en, ultimo_mensaje_tipo, ultimo_mensaje_texto, ultimo_mensaje_direccion, ultimo_mensaje_estado, ultimo_mensaje_cliente_en, no_leidos, resuelto, asignado_a, creado_en, contacto_id",
       )
       .eq("sucursal_id", req.params.id)
-      .eq("resuelto", resueltas);
+      .eq("resuelto", resueltas)
+      .not("respondio_en", "is", null);
     // Un asesor con ejecutivo asignado solo ve sus chats (los de su ejecutivo)
     // más los sueltos sin dueño. Un admin ve todos.
     if (req.perfil && req.perfil.rol !== "admin" && req.perfil.ejecutivo_asignado) {

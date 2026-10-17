@@ -276,9 +276,14 @@ export function normalizarTexto(t: string): string {
     .trim();
 }
 
-const PALABRAS_BAJA = new Set(["baja", "stop", "alto", "cancelar", "no mas", "ya no", "no quiero mas mensajes", "no me escriban", "dejen de escribirme"]);
+/**
+ * Palabras de baja por WhatsApp: solo «BAJA», la que piden las plantillas (decisión de Miguel Borbón, 16-oct-2026). «Stop»,
+ * «alto», «ya no»… son respuestas normales: aparecen en el chat y el ejecutivo decide. La misma lista está en
+ * crm_reconciliar_bajas (0044).
+ */
+const PALABRAS_BAJA = new Set(["baja"]);
 
-/** ¿El mensaje es una petición clara de dejar de recibir mensajes? Solo coincidencias exactas: no se adivina. */
+/** ¿El mensaje es una petición de baja? Solo «BAJA» exacta (sin importar mayúsculas, acentos ni puntuación): no se adivina. */
 export function esPeticionDeBaja(texto: string): boolean {
   return PALABRAS_BAJA.has(normalizarTexto(texto));
 }
@@ -292,4 +297,13 @@ const PALABRAS_AHORA_NO = new Set(["ahora no", "ahorita no", "por ahora no", "no
  */
 export function esAhoraNo(texto: string): boolean {
   return PALABRAS_AHORA_NO.has(normalizarTexto(texto));
+}
+
+/**
+ * ¿Este mensaje del cliente hace aparecer su conversación en el chat? Sí cualquier respuesta (texto, botón, foto, audio…)
+ * menos «Ahora no» y «BAJA» (el botón o lo mismo escrito): la campaña se pausa o el teléfono se bloquea, y el ejecutivo no
+ * tiene nada que atender. `texto` es lo que dijo (textoEntrante), o null si no es texto.
+ */
+export function cuentaComoRespuesta(texto: string | null): boolean {
+  return texto === null || (!esAhoraNo(texto) && !esPeticionDeBaja(texto));
 }

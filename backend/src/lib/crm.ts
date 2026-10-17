@@ -368,7 +368,7 @@ export async function opcionesDinamicas(sucursalId: string): Promise<Record<stri
 
 /**
  * Quitar «no contactar» (solo un administrador, para corregir un error de captura, y con motivo). Una baja pedida por
- * WhatsApp (STOP o clasificada así) no se quita nunca: esa la decidió la persona. La baja es del teléfono: se revoca su
+ * WhatsApp («BAJA» o clasificada así) no se quita nunca: esa la decidió la persona. La baja es del teléfono: se revoca su
  * supresión y salen de baja todos los contactos con ese número. Sus leads en «Baja» vuelven a «Contactado» si ya se
  * había hablado con el titular, o a «Sin intentar». La fecha de la baja se queda en el contacto como historia.
  *

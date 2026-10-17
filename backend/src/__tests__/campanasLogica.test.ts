@@ -8,6 +8,7 @@ import {
   dentroDeVentana,
   diaSemana,
   esAhoraNo,
+  cuentaComoRespuesta,
   esPeticionDeBaja,
   proximoDiaPermitido,
   siguienteApertura,
@@ -72,10 +73,28 @@ describe("telefono10 y bajas", () => {
 
   it("detecta peticiones de baja claras y nada más", () => {
     expect(esPeticionDeBaja("BAJA")).toBe(true);
-    expect(esPeticionDeBaja("  Stop. ")).toBe(true);
-    expect(esPeticionDeBaja("No más")).toBe(true);
+    expect(esPeticionDeBaja(" baja. ")).toBe(true);
+    // Solo «BAJA» (16-oct-2026): lo demás es una respuesta normal.
+    expect(esPeticionDeBaja("  Stop. ")).toBe(false);
+    expect(esPeticionDeBaja("No más")).toBe(false);
+    expect(esPeticionDeBaja("ya no")).toBe(false);
     expect(esPeticionDeBaja("quiero la baja de mi garantía actual")).toBe(false);
     expect(esPeticionDeBaja("hola")).toBe(false);
+  });
+
+  it("una baja tampoco hace aparecer el chat", () => {
+    expect(cuentaComoRespuesta("BAJA")).toBe(false);
+    expect(cuentaComoRespuesta(" Stop. ")).toBe(true); // ya no es baja: es una respuesta normal
+    expect(cuentaComoRespuesta(textoEntrante({ type: "button", button: { text: "Baja" } }))).toBe(false);
+  });
+
+  it("el chat aparece cuando el cliente contesta, salvo con «Ahora no»", () => {
+    expect(cuentaComoRespuesta(textoEntrante({ type: "button", button: { text: "Quiero informes" } }))).toBe(true);
+    expect(cuentaComoRespuesta("Hola, ¿cuánto cuesta?")).toBe(true);
+    expect(cuentaComoRespuesta(null)).toBe(true); // foto, audio, ubicación…
+    expect(cuentaComoRespuesta(textoEntrante({ type: "button", button: { text: "Ahora no" } }))).toBe(false);
+    expect(cuentaComoRespuesta("ahora no")).toBe(false);
+    expect(cuentaComoRespuesta("ahora no puedo, mañana te marco")).toBe(true);
   });
 
   it("«Ahora no» pausa la campaña pero NO es baja", () => {
