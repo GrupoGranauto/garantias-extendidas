@@ -347,8 +347,11 @@ export async function revisarMasivo(sucursalId: string, ids: string[], plantilla
 /**
  * Mensaje por llamadas sin respuesta para UN lead (lo llama el motor): un masivo de origen «sin_respuesta» con un solo envío,
  * con el mismo freno que un masivo manual (baja, supresiones, GE, pago, «Ahora no», un mensaje al día). Una sola vez por paso
- * de campaña: si ese paso ya tiene un envío de este origen, no hace nada. Si el lead hoy no puede recibirlo (por ejemplo, ya
- * recibió otro mensaje hoy), no deja nada y se vuelve a revisar en la siguiente vuelta del motor.
+ * de campaña: si ese paso ya tiene un envío de este origen, no hace nada.
+ * - Si hoy no puede recibirlo porque ya recibió otro mensaje, no deja nada: el repaso del motor lo vuelve a intentar.
+ * - Si no puede recibirlo por otra razón (no es para él según las reglas de la plantilla, no es celular, le falta un dato…),
+ *   queda omitido con su motivo: así no se repasa para siempre y la ficha dice por qué no salió.
+ * - `general` = la plantilla o WhatsApp no están disponibles (no es cosa del lead).
  */
 export async function crearMasivoSinRespuesta(p: {
   sucursalId: string;
@@ -357,7 +360,7 @@ export async function crearMasivoSinRespuesta(p: {
   campana: string;
   plantillaId: string;
   telefonosPrueba: string[];
-}): Promise<{ creado: boolean; motivo: string | null }> {
+}): Promise<{ creado: boolean; motivo: string | null; general?: boolean }> {
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
@@ -373,20 +376,31 @@ export async function crearMasivoSinRespuesta(p: {
     const prep = await preparar(cliente, p.sucursalId, [p.oportunidadId], p.plantillaId, "masivo", p.telefonosPrueba);
     if (!prep.ok) {
       await cliente.query("ROLLBACK");
-      return { creado: false, motivo: prep.error };
+      return { creado: false, motivo: prep.error, general: true };
     }
     const destino = prep.valor.destinatarios[0];
     const fila = prep.valor.filas[0];
-    if (!destino || !fila || destino.motivo) {
+    const motivo = !destino || !fila ? "no_encontrada" : destino.motivo;
+    if (motivo === "mensaje_hoy") {
       await cliente.query("ROLLBACK");
-      return { creado: false, motivo: destino?.motivo ?? "no_encontrada" };
+      return { creado: false, motivo };
     }
     const r = resumen(prep.valor);
     const { rows } = await cliente.query(
-      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, origen, campana, fecha_local)
-       VALUES ($1, $2, $3, 'sin_respuesta', $4, (now() AT TIME ZONE '${ZONA_ENVIOS}')::date) RETURNING id`,
-      [p.sucursalId, prep.valor.plantilla.id, prep.valor.plantilla.nombre, p.campana],
+      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, origen, campana, fecha_local, estado, terminado_en)
+       VALUES ($1, $2, $3, 'sin_respuesta', $4, (now() AT TIME ZONE '${ZONA_ENVIOS}')::date,
+               CASE WHEN $5::boolean THEN 'terminado' ELSE 'enviando' END, CASE WHEN $5::boolean THEN now() END) RETURNING id`,
+      [p.sucursalId, prep.valor.plantilla.id, prep.valor.plantilla.nombre, p.campana, motivo !== null],
     );
+    if (motivo) {
+      await cliente.query(
+        `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, motivo, masivo_id, parametros, campana_id)
+         VALUES ($1, $2, $3, $4, now(), 'omitido', $5, $6, '[]'::jsonb, $7)`,
+        [p.sucursalId, p.oportunidadId, fila?.campana ?? p.campana, prep.valor.plantilla.id, motivo, rows[0].id, p.pasoId],
+      );
+      await cliente.query("COMMIT");
+      return { creado: false, motivo };
+    }
     await cliente.query(
       `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, masivo_id, parametros, campana_id)
        VALUES ($1, $2, $3, $4, CASE WHEN $5::text IS NULL THEN now() ELSE ($5::timestamp AT TIME ZONE '${ZONA_ENVIOS}') END,
@@ -394,11 +408,11 @@ export async function crearMasivoSinRespuesta(p: {
       [
         p.sucursalId,
         p.oportunidadId,
-        fila.campana,
+        fila!.campana,
         prep.valor.plantilla.id,
         r.sale ? `${r.sale.fecha} ${r.sale.hora}:00` : null,
         rows[0].id,
-        JSON.stringify(fila.parametros),
+        JSON.stringify(fila!.parametros),
         p.pasoId,
       ],
     );
@@ -488,8 +502,8 @@ export async function crearMasivoAutomatico(
       [plantillaId, sucursalId],
     );
     const { rows: nuevo } = await cliente.query(
-      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, automatico, campana, fecha_local, config_version)
-       VALUES ($1, $2, $3, true, $4, $5::date, $6::timestamptz) ON CONFLICT DO NOTHING RETURNING id`,
+      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, automatico, origen, campana, fecha_local, config_version)
+       VALUES ($1, $2, $3, true, 'primer_mensaje', $4, $5::date, $6::timestamptz) ON CONFLICT DO NOTHING RETURNING id`,
       [sucursalId, plantillaId, (pl[0]?.nombre as string | undefined) ?? "Plantilla", campana, fecha, configVersion],
     );
     if (!nuevo[0]) {
@@ -675,7 +689,8 @@ export async function listarMasivos(sucursalId: string, limite = 30) {
        FROM crm_masivos m
        LEFT JOIN usuarios u ON u.id = m.creado_por
        LEFT JOIN crm_envios e ON e.masivo_id = m.id
-      WHERE m.sucursal_id = $1
+      -- Los mensajes por llamadas sin respuesta (uno por lead) se ven en su pantalla, no en el historial de masivos.
+      WHERE m.sucursal_id = $1 AND m.origen <> 'sin_respuesta'
       GROUP BY m.id, u.nombre
       ORDER BY m.creado_en DESC
       LIMIT $2`,

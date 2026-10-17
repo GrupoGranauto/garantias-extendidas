@@ -123,6 +123,11 @@ export default function SinRespuestaLlamada() {
                   onChange={(e) => cambiar({ plantilla_id: e.target.value || null })}
                 >
                   <option value="">Elige una plantilla</option>
+                  {b.plantilla_id && !c.plantillas.some((p) => p.id === b.plantilla_id) && (
+                    <option value={b.plantilla_id} disabled>
+                      La plantilla guardada ya no se puede usar
+                    </option>
+                  )}
                   {propias.length > 0 && (
                     <optgroup label={`De ${c.etiqueta}`}>
                       {propias.map((p) => (

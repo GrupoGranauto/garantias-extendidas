@@ -2,7 +2,15 @@ import { getPool } from "./db.js";
 import { CAMPANAS_CONOCIDAS, ZONA_ENVIOS, ahoraLocal, dentroDeVentana } from "./campanasLogica.js";
 import { ETIQUETA_LLAMADA } from "./gestionLogica.js";
 import { crearMasivoSinRespuesta, type Resultado } from "./masivos.js";
-import { etiquetaCampana, ordenCampana, plantillaNoUsable, usoDePlantilla, VENTANA_MASIVOS, type Componentes } from "./masivosLogica.js";
+import {
+  TEXTO_MOTIVO,
+  etiquetaCampana,
+  ordenCampana,
+  plantillaNoUsable,
+  usoDePlantilla,
+  VENTANA_MASIVOS,
+  type Componentes,
+} from "./masivosLogica.js";
 import {
   INTENTOS_POR_OMISION,
   RESULTADOS_LLAMADA,
@@ -29,9 +37,28 @@ const aConfig = (r: Record<string, any> | undefined): ConfigSinRespuesta => ({
 const SQL_LLAMADAS_QUE_CUENTAN = `(SELECT count(*)::int FROM crm_actividades a
    WHERE a.campana_id = p.id AND a.tipo = 'llamada' AND a.detalle ->> 'resultado_llamada' = ANY(cfg.resultados))`;
 
-/** Ya se le mandó (o está en cola) el mensaje de este origen en ese paso. */
+/** El paso ya tiene su mensaje de este origen: en cola, mandado, fallido u omitido para siempre (una sola vez por paso). */
 const SQL_YA_ENVIADO = `EXISTS (SELECT 1 FROM crm_envios e JOIN crm_masivos m ON m.id = e.masivo_id
    WHERE e.campana_id = p.id AND m.origen = 'sin_respuesta')`;
+
+/** La última llamada del paso fue sin respuesta: si después contestó el titular, ya no se le manda. */
+const SQL_ULTIMA_CUENTA = `(SELECT a.detalle ->> 'resultado_llamada' FROM crm_actividades a
+   WHERE a.campana_id = p.id AND a.tipo = 'llamada' ORDER BY a.creado_en DESC LIMIT 1) = ANY(cfg.resultados)`;
+
+/**
+ * Listo para el mensaje (sin contar el modo prueba): lead abierto, con el número de llamadas que cuentan, la última sin
+ * respuesta, sin el mensaje todavía y sin un freno para siempre (baja, supresión, GE, pago).
+ */
+const SQL_LISTO = `o.estado = 'abierta'
+   AND ${SQL_LLAMADAS_QUE_CUENTAN} >= cfg.intentos
+   AND ${SQL_ULTIMA_CUENTA}
+   AND NOT ${SQL_YA_ENVIADO}
+   AND (cfg.plantilla_id IS NULL OR crm_motivo_no_enviar(o.id, cfg.plantilla_id, 'masivo') IS NULL)`;
+
+const textoMotivo = (m: string) => TEXTO_MOTIVO[m] ?? (m === "no_encontrada" ? "ya no está en la base" : m);
+
+/** En modo prueba solo cuentan los teléfonos de prueba. */
+const SQL_EN_PRUEBA = `(cardinality(cfg.telefonos_prueba) = 0 OR crm_tel10(k.telefono) = ANY(cfg.telefonos_prueba))`;
 
 /** Para la pantalla: cada campaña con su configuración, las plantillas posibles y cómo va. */
 export async function leerSinRespuesta(sucursalId: string) {
@@ -52,18 +79,19 @@ export async function leerSinRespuesta(sucursalId: string) {
       [sucursalId],
     ),
     pool.query(`SELECT id::text AS id FROM crm_etapas WHERE sucursal_id = $1 AND clave = 'por_contactar'`, [sucursalId]),
-    // Por campaña configurada: cuántos leads ya llegaron al número de llamadas y esperan su mensaje, y cuántos lo recibieron hoy.
+    // Por campaña configurada: cuántos leads ya llegaron al número de llamadas y esperan su mensaje (sin contar el modo
+    // prueba: es a cuántos les llegaría con la regla abierta a todos), y cuántos mensajes salieron hoy.
     pool.query(
       `SELECT cfg.campana,
-              count(*) FILTER (WHERE ${SQL_LLAMADAS_QUE_CUENTAN} >= cfg.intentos AND NOT ${SQL_YA_ENVIADO})::int AS esperando,
+              (SELECT count(*)::int FROM crm_oportunidad_campanas p
+                 JOIN crm_oportunidades o ON o.id = p.oportunidad_id
+                WHERE p.sucursal_id = cfg.sucursal_id AND p.campana = cfg.campana AND p.cerrada_en IS NULL AND ${SQL_LISTO}) AS esperando,
               (SELECT count(*)::int FROM crm_envios e JOIN crm_masivos m ON m.id = e.masivo_id
                 WHERE m.sucursal_id = cfg.sucursal_id AND m.origen = 'sin_respuesta' AND m.campana = cfg.campana
-                  AND m.fecha_local = (now() AT TIME ZONE '${ZONA_ENVIOS}')::date
-                  AND e.estado IN ('pendiente', 'enviado', 'entregado', 'leido')) AS hoy
+                  AND e.estado IN ('enviado', 'entregado', 'leido')
+                  AND (e.enviado_en AT TIME ZONE '${ZONA_ENVIOS}')::date = (now() AT TIME ZONE '${ZONA_ENVIOS}')::date) AS hoy
          FROM crm_sin_respuesta_config cfg
-         LEFT JOIN crm_oportunidad_campanas p ON p.sucursal_id = cfg.sucursal_id AND p.campana = cfg.campana AND p.cerrada_en IS NULL
-        WHERE cfg.sucursal_id = $1
-        GROUP BY cfg.sucursal_id, cfg.campana`,
+        WHERE cfg.sucursal_id = $1`,
       [sucursalId],
     ),
   ]);
@@ -124,7 +152,8 @@ export async function guardarSinRespuesta(
   const info = await leerSinRespuesta(sucursalId);
   const fila = info.campanas.find((c) => c.campana === campana);
   if (!fila) return { ok: false, error: "Esa campaña no existe." };
-  if (cfg.plantillaId && !fila.plantillas.some((p) => p.id === cfg.plantillaId)) {
+  // Solo para encenderla: apagada se puede guardar aunque su plantilla ya no se ofrezca (por ejemplo, la pausó Meta).
+  if (cfg.activa && cfg.plantillaId && !fila.plantillas.some((p) => p.id === cfg.plantillaId)) {
     return { ok: false, error: "Esa plantilla no se puede usar: tiene que ser de campaña, estar aprobada, con sus datos ligados y ser de esta campaña o general." };
   }
   await getPool().query(
@@ -140,13 +169,19 @@ export async function guardarSinRespuesta(
 
 /**
  * Para la ficha del lead: cómo va su paso abierto hacia el mensaje de sin respuesta (null si su campaña no lo tiene
- * encendido o el lead no tiene paso abierto).
+ * encendido o el lead no tiene paso abierto). `envio` es el mensaje de ese paso, si ya hay uno (en cola, mandado, fallido u
+ * omitido, con su motivo).
  */
 export async function avanceDelLead(sucursalId: string, oportunidadId: string) {
   const { rows } = await getPool().query(
-    `SELECT cfg.intentos, cfg.resultados, ${SQL_LLAMADAS_QUE_CUENTAN} AS contadas, ${SQL_YA_ENVIADO} AS enviado,
-            (SELECT count(*)::int FROM crm_actividades a WHERE a.campana_id = p.id AND a.tipo = 'llamada') AS llamadas
+    `SELECT cfg.intentos, cfg.resultados, ${SQL_LLAMADAS_QUE_CUENTAN} AS contadas, ${SQL_EN_PRUEBA} AS en_prueba,
+            coalesce(${SQL_ULTIMA_CUENTA}, false) AS ultima_cuenta,
+            (SELECT count(*)::int FROM crm_actividades a WHERE a.campana_id = p.id AND a.tipo = 'llamada') AS llamadas,
+            (SELECT jsonb_build_object('estado', e.estado, 'motivo', e.motivo) FROM crm_envios e JOIN crm_masivos m ON m.id = e.masivo_id
+              WHERE e.campana_id = p.id AND m.origen = 'sin_respuesta' ORDER BY e.creado_en DESC LIMIT 1) AS envio
        FROM crm_oportunidad_campanas p
+       JOIN crm_oportunidades o ON o.id = p.oportunidad_id
+       JOIN crm_contactos k ON k.id = o.contacto_id
        JOIN crm_sin_respuesta_config cfg ON cfg.sucursal_id = p.sucursal_id AND cfg.campana = p.campana AND cfg.activa
       WHERE p.sucursal_id = $1 AND p.oportunidad_id = $2 AND p.cerrada_en IS NULL
       LIMIT 1`,
@@ -154,12 +189,17 @@ export async function avanceDelLead(sucursalId: string, oportunidadId: string) {
   );
   const r = rows[0];
   if (!r) return null;
+  const envio = r.envio as { estado: string; motivo: string | null } | null;
   return {
     llamadas: r.llamadas as number,
     ...avanceSinRespuesta(r.contadas as number, r.intentos as number),
     intentos: r.intentos as number,
     resultados: (r.resultados as string[]).map((x) => ETIQUETA_LLAMADA[x as keyof typeof ETIQUETA_LLAMADA] ?? x),
-    enviado: r.enviado === true,
+    // Modo prueba y este lead no es de prueba: a él no le sale.
+    fuera_de_prueba: r.en_prueba !== true,
+    // Su última llamada sí tuvo respuesta: ya no se le manda.
+    contesto: r.ultima_cuenta !== true && (r.llamadas as number) > 0,
+    envio: envio ? { estado: envio.estado, motivo: envio.motivo ? textoMotivo(envio.motivo) : null } : null,
   };
 }
 
@@ -168,29 +208,29 @@ const REPASO_MS = 15 * 60_000;
 let ultimoRepaso = 0;
 
 /**
- * Leads listos para el mensaje: paso abierto en una campaña encendida, ya con el número de llamadas que cuentan y sin el
- * mensaje todavía. En modo prueba, solo los teléfonos de prueba. Con `oportunidadId`, solo ese lead.
+ * Leads listos para el mensaje (SQL_LISTO, y en modo prueba solo los teléfonos de prueba). Con `oportunidadId`, solo ese
+ * lead. Si la plantilla o WhatsApp no están disponibles, no se insiste con los demás leads de esa campaña en esta vuelta.
  */
 async function listos(oportunidadId: string | null) {
   const { rows } = await getPool().query(
     `SELECT cfg.sucursal_id, cfg.campana, cfg.plantilla_id, cfg.telefonos_prueba, p.id AS paso_id, o.id AS oportunidad_id
        FROM crm_sin_respuesta_config cfg
        JOIN crm_oportunidad_campanas p ON p.sucursal_id = cfg.sucursal_id AND p.campana = cfg.campana AND p.cerrada_en IS NULL
-       JOIN crm_oportunidades o ON o.id = p.oportunidad_id AND o.estado = 'abierta'
+       JOIN crm_oportunidades o ON o.id = p.oportunidad_id
        JOIN crm_contactos k ON k.id = o.contacto_id
       WHERE cfg.activa AND cfg.plantilla_id IS NOT NULL
         AND ($1::uuid IS NULL OR o.id = $1::uuid)
-        AND (cardinality(cfg.telefonos_prueba) = 0 OR crm_tel10(k.telefono) = ANY(cfg.telefonos_prueba))
-        AND ${SQL_LLAMADAS_QUE_CUENTAN} >= cfg.intentos
-        AND NOT ${SQL_YA_ENVIADO}
-        -- Los frenados para siempre (baja, supresión, GE, pago) no se repasan.
-        AND crm_motivo_no_enviar(o.id, cfg.plantilla_id, 'masivo') IS NULL
+        AND ${SQL_EN_PRUEBA}
+        AND ${SQL_LISTO}
       ORDER BY p.id
       LIMIT 200`,
     [oportunidadId],
   );
   let armados = 0;
+  const caidas = new Set<string>();
   for (const r of rows) {
+    const clave = `${r.sucursal_id}|${r.campana}`;
+    if (caidas.has(clave)) continue;
     const res = await crearMasivoSinRespuesta({
       sucursalId: r.sucursal_id as string,
       oportunidadId: r.oportunidad_id as string,
@@ -200,6 +240,10 @@ async function listos(oportunidadId: string | null) {
       telefonosPrueba: (r.telefonos_prueba as string[]) ?? [],
     });
     if (res.creado) armados++;
+    if (res.general) {
+      caidas.add(clave);
+      console.error(`[sin-respuesta] ${r.campana}: ${res.motivo}`);
+    }
   }
   return armados;
 }

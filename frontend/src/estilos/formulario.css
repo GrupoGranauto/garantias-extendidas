@@ -2022,6 +2022,16 @@ textarea.auto-input { resize: vertical; }
 .ficha-fila { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .ficha-sec .boton-guardar, .ficha-sec .boton-secundario-claro { align-self: flex-start; }
 .ficha-ayuda { margin: 0; font-size: 12px; color: var(--gris-500); }
+/* Contador de llamadas en la campaña actual (sección «Registrar llamada»). */
+.ficha-llamadas { display: flex; align-items: center; gap: 14px; padding: 12px 14px; background: var(--gris-50); border: 1px solid var(--gris-200); border-radius: 10px; }
+.ficha-llamadas-num { min-width: 44px; font-size: 32px; font-weight: 700; line-height: 1; text-align: center; color: var(--marca); font-variant-numeric: tabular-nums; }
+.ficha-llamadas-info { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ficha-llamadas-info strong { font-size: 13px; color: var(--gris-900); }
+.ficha-llamadas-pasos { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.ficha-llamadas-punto { width: 10px; height: 10px; border-radius: 50%; background: var(--gris-200); }
+.ficha-llamadas-punto-lleno { background: var(--marca); }
+.ficha-llamadas-cuenta { margin-left: 4px; font-size: 12px; color: var(--gris-600); }
+.ficha-llamadas-estado { font-size: 12px; color: var(--gris-500); }
 .ficha-datos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 0; }
 .ficha-datos dt { font-size: 11px; color: var(--gris-500); }
 .ficha-datos dd { margin: 2px 0 0; font-size: 13px; color: var(--gris-900); overflow-wrap: anywhere; }

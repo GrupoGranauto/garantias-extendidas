@@ -40,7 +40,70 @@ type PasoCampana = {
   masivos: number;
 };
 /** Cómo va el lead hacia el mensaje automático por llamadas sin respuesta (null si su campaña no lo tiene encendido). */
-type SinRespuesta = { llamadas: number; contadas: number; faltan: number; listo: boolean; intentos: number; resultados: string[]; enviado: boolean };
+type SinRespuesta = {
+  llamadas: number;
+  contadas: number;
+  faltan: number;
+  listo: boolean;
+  intentos: number;
+  resultados: string[];
+  /** La regla está en modo prueba y este lead no es de prueba. */
+  fuera_de_prueba: boolean;
+  /** Su última llamada sí tuvo respuesta. */
+  contesto: boolean;
+  envio: { estado: string; motivo: string | null } | null;
+};
+
+/** Qué pasa con el mensaje de sin respuesta a la llamada de este lead, en una frase. */
+function textoSinRespuesta(s: SinRespuesta): string {
+  const m = "el mensaje de sin respuesta a la llamada";
+  if (s.envio) {
+    if (["enviado", "entregado", "leido"].includes(s.envio.estado)) return `Ya se le mandó ${m}.`;
+    if (s.envio.estado === "pendiente") return `${m[0].toUpperCase()}${m.slice(1)} está en cola.`;
+    if (s.envio.estado === "fallido") return `${m[0].toUpperCase()}${m.slice(1)} no se pudo entregar.`;
+    return `No se le mandó ${m}${s.envio.motivo ? `: ${s.envio.motivo}` : ""}.`;
+  }
+  if (!s.listo) return `${s.faltan === 1 ? "Falta 1" : `Faltan ${s.faltan}`} para mandarle ${m}.`;
+  if (s.contesto) return `Su última llamada sí tuvo respuesta: no se le manda ${m}.`;
+  if (s.fuera_de_prueba) return `Ya llegó, pero ${m} está en modo prueba y este lead no es de prueba.`;
+  return `Ya llegó: ${m} sale en cuanto se pueda.`;
+}
+
+/**
+ * Contador de llamadas del lead en su campaña actual. Si su campaña tiene encendido el mensaje por llamadas sin respuesta,
+ * muestra también el avance hacia ese mensaje (un punto por llamada que cuenta) y en qué quedó.
+ */
+function ContadorLlamadas({ llamadas, sinRespuesta: s }: { llamadas: number; sinRespuesta: SinRespuesta | null }) {
+  return (
+    <div className="ficha-llamadas">
+      <div className="ficha-llamadas-num" aria-hidden="true">
+        {llamadas}
+      </div>
+      <div className="ficha-llamadas-info">
+        <strong>{llamadas === 1 ? "Llamada en esta campaña" : "Llamadas en esta campaña"}</strong>
+        {s && (
+          <>
+            <div
+              className="ficha-llamadas-pasos"
+              role="img"
+              aria-label={`${s.contadas} de ${s.intentos} llamadas sin respuesta`}
+              title={`Cuentan: ${s.resultados.join(", ").toLowerCase()}`}
+            >
+              {Array.from({ length: s.intentos }, (_, i) => (
+                <span key={i} className={i < s.contadas ? "ficha-llamadas-punto ficha-llamadas-punto-lleno" : "ficha-llamadas-punto"} />
+              ))}
+              <span className="ficha-llamadas-cuenta">
+                {Math.min(s.contadas, s.intentos)} de {s.intentos} sin respuesta
+                {s.contadas > s.intentos && ` (${s.contadas} en total)`}
+              </span>
+            </div>
+            <span className="ficha-llamadas-estado">{textoSinRespuesta(s)}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 type Ficha = {
   oportunidad: Record<string, unknown>;
   resultado: { actual: string; opciones: OpcionResultado[] };
@@ -468,6 +531,7 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
 
             <section className="ficha-sec">
               <h3>Registrar llamada</h3>
+              <ContadorLlamadas llamadas={ficha.sin_respuesta?.llamadas ?? ficha.gestion.calculados.intentos_llamada ?? 0} sinRespuesta={ficha.sin_respuesta} />
               <select className="auto-input" value={resultado} onChange={(e) => setResultado(e.target.value)} aria-label="Resultado de la llamada">
                 {ficha.gestion.llamada.map((r) => (
                   <option key={r.valor} value={r.valor}>
@@ -519,21 +583,6 @@ export default function FichaOportunidad({ sucursalId, oportunidadId, onCerrar, 
               <button type="button" className="boton-guardar" disabled={enviando || faltaEnLlamada} onClick={registrarLlamada}>
                 Registrar
               </button>
-              {ficha.sin_respuesta && (
-                <p className="ficha-ayuda">
-                  {ficha.sin_respuesta.llamadas === 1 ? "1 llamada" : `${ficha.sin_respuesta.llamadas} llamadas`} en esta campaña
-                  {", "}
-                  {ficha.sin_respuesta.contadas < ficha.sin_respuesta.intentos
-                    ? `${ficha.sin_respuesta.contadas} de ${ficha.sin_respuesta.intentos} sin respuesta.`
-                    : `${ficha.sin_respuesta.contadas} sin respuesta (el mensaje sale al llegar a ${ficha.sin_respuesta.intentos}).`}{" "}
-                  {ficha.sin_respuesta.enviado
-                    ? "Ya se le mandó el mensaje de sin respuesta a la llamada."
-                    : ficha.sin_respuesta.listo
-                      ? "Ya llegó: el mensaje de sin respuesta a la llamada sale en cuanto se pueda."
-                      : `${ficha.sin_respuesta.faltan === 1 ? "Falta 1" : `Faltan ${ficha.sin_respuesta.faltan}`} para mandarle el mensaje de sin respuesta a la llamada.`}{" "}
-                  Cuentan: {ficha.sin_respuesta.resultados.join(", ").toLowerCase()}.
-                </p>
-              )}
               <p className="ficha-ayuda">Suma un intento y pone hoy como último contacto. Solo hablar con el titular es contacto efectivo: si el lead estaba en «Por contactar», pasa a «Contactado». Su respuesta lo mueve (pide precio → Interesado; no interesado, ya tiene GE o flotilla → Perdido con ese motivo). Los mensajes de WhatsApp se registran solos.</p>
             </section>
 

@@ -925,6 +925,21 @@ export async function registrarEstadoEnvio(
 }
 
 /**
+ * Un masivo se cierra al despachar su último envío; si su último pendiente se omite aquí (baja o «Ahora no»), se cierra ya
+ * para que no se quede «enviando» (los del mensaje por llamadas sin respuesta tienen un solo envío).
+ */
+async function cerrarMasivosSinPendientes(cl: Consulta, ids: (string | null)[]) {
+  const masivos = [...new Set(ids.filter((x): x is string => !!x))];
+  if (masivos.length === 0) return;
+  await cl.query(
+    `UPDATE crm_masivos m SET estado = 'terminado', terminado_en = now()
+      WHERE m.id = ANY($1::uuid[]) AND m.estado = 'enviando'
+        AND NOT EXISTS (SELECT 1 FROM crm_envios e WHERE e.masivo_id = m.id AND e.estado = 'pendiente')`,
+    [masivos],
+  );
+}
+
+/**
  * El cliente tocó «Ahora no» (o lo escribió). NO es una baja: deja de recibir lo que falta de esa campaña y vuelve a
  * contactarse en la siguiente, que es otra oportunidad (por ejemplo, de 48H pasa a 5M).
  *
@@ -990,11 +1005,12 @@ export async function procesarAhoraNo(
 
     if (idsPasos.length > 0) {
       // Lo pendiente de esos pasos se omite (lo que está saliendo en este momento no se toca).
-      await cliente.query(
+      const { rows: omitidos } = await cliente.query(
         `UPDATE crm_envios SET estado = 'omitido', motivo = 'ahora_no'
-          WHERE campana_id = ANY($1::uuid[]) AND estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando'`,
+          WHERE campana_id = ANY($1::uuid[]) AND estado = 'pendiente' AND motivo IS DISTINCT FROM 'enviando' RETURNING masivo_id`,
         [idsPasos],
       );
+      await cerrarMasivosSinPendientes(cliente, omitidos.map((o) => o.masivo_id as string | null));
       // Las tareas automáticas de esos pasos («Retomar lead», seguimientos) ya no tienen sentido.
       await cliente.query(
         `UPDATE crm_tareas SET estado = 'cancelada', completada_en = now()
@@ -1058,11 +1074,12 @@ export async function procesarBaja(sucursalId: string, tel: string, waMessageId:
     );
     const ids = rows.map((r) => r.id as string);
     if (ids.length > 0) {
-      await cliente.query(
+      const { rows: omitidos } = await cliente.query(
         `UPDATE crm_envios e SET estado = 'omitido', motivo = 'baja' FROM crm_oportunidades o
-          WHERE e.oportunidad_id = o.id AND o.contacto_id = ANY($1::uuid[]) AND e.estado = 'pendiente'`,
+          WHERE e.oportunidad_id = o.id AND o.contacto_id = ANY($1::uuid[]) AND e.estado = 'pendiente' RETURNING e.masivo_id`,
         [ids],
       );
+      await cerrarMasivosSinPendientes(cliente, omitidos.map((o) => o.masivo_id as string | null));
       // Todos sus leads salvo las ventas (también los que están fuera de ventana: así el ciclo diario no los reabre).
       await cliente.query(
         `WITH marcados AS (
