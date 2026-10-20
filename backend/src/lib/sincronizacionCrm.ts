@@ -10,6 +10,7 @@ import { recalcularEtapas } from "./cicloVehiculo.js";
 import type { DefinicionCampana } from "./campanasDefLogica.js";
 import { planificarLeads, type LeadExistente, type PasoExistente, type PlanLeads } from "./cicloLeadLogica.js";
 import { DESTINO_DE_RESULTADO } from "./resultadoBdcLogica.js";
+import { nombrePilaDe } from "./nombrePila.js";
 
 /**
  * Sincronización BigQuery -> modelo relacional del CRM.
@@ -639,7 +640,8 @@ async function correrCiclo(sucursalId: string, crudas: FilaMaestra[], o: Opcione
 const filaContacto = (m: FilaMaestra) => ({
   clave: claveContacto(m),
   nombre: texto(m.cliente),
-  nombre_pila: texto(m.nombre),
+  // Si la base de clientes no manda el nombre de pila, se saca del nombre completo («Apellido Apellido Nombre»).
+  nombre_pila: texto(m.nombre) ?? nombrePilaDe(texto(m.cliente)),
   apellido_paterno: texto(m.apellido_paterno),
   apellido_materno: texto(m.apellido_materno),
   telefono: texto(m.telefono_principal),
