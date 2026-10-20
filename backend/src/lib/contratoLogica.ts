@@ -50,14 +50,24 @@ export function coberturaYaInicio(fechaFactura: string | null, hoy: string, mese
   return hoy >= inicioDeCobertura(fechaFactura, mesesOriginal);
 }
 
+/** Qué hace una regla del contrato: crear una tarea para el ejecutivo o mandar una plantilla de WhatsApp de servicio. */
+export const ACCIONES_REGLA = ["tarea", "whatsapp"] as const;
+export type AccionRegla = (typeof ACCIONES_REGLA)[number];
+
 export type ReglaContratoEntrada = {
   nombre: string;
   activa: boolean;
   estado: string;
   espera_horas: number;
+  /** Solo en las de tarea; en las de WhatsApp va vacío. */
   titulo: string;
   descripcion: string | null;
+  /** Tarea: en cuántas horas vence. WhatsApp: la vigencia (si ya no puede salir en ese plazo desde que le tocaba, no sale). */
   vence_horas: number | null;
+  accion: AccionRegla;
+  plantilla_id: string | null;
+  /** Modo prueba de las de WhatsApp: mientras haya alguno, solo se les manda a esos teléfonos. */
+  telefonos_prueba: string[];
 };
 
 /** Revisa una regla. Devuelve el texto del error, o null. */
@@ -66,9 +76,25 @@ export function validarReglaContrato(r: ReglaContratoEntrada): string | null {
   if (!nombre) return "Cada regla necesita un nombre.";
   if (!(ESTADOS_CON_REGLA as readonly string[]).includes(r.estado)) return `«${nombre}»: el estado del contrato no es válido.`;
   if (!Number.isInteger(r.espera_horas) || r.espera_horas < 0 || r.espera_horas > 8760) return `«${nombre}»: la espera debe estar entre 0 y 8,760 horas (un año).`;
-  if (!r.titulo.trim()) return `«${nombre}»: escribe el título de la tarea.`;
+  if (!(ACCIONES_REGLA as readonly string[]).includes(r.accion)) return `«${nombre}»: la acción no es válida.`;
   if (r.vence_horas !== null && (!Number.isInteger(r.vence_horas) || r.vence_horas < 0 || r.vence_horas > 8760)) return `«${nombre}»: el vencimiento no es válido.`;
+  if (r.accion === "tarea" && !r.titulo.trim()) return `«${nombre}»: escribe el título de la tarea.`;
+  if (r.accion === "whatsapp") {
+    if (r.activa && !r.plantilla_id) return `«${nombre}»: para encenderla, elige la plantilla.`;
+    // Sin vigencia, al encenderla le llegaría a contratos que entraron al estado hace meses.
+    if (r.vence_horas === null || r.vence_horas < 1) return `«${nombre}»: indica en cuánto tiempo deja de tener sentido mandar el mensaje.`;
+    if (r.telefonos_prueba.some((t) => !/^\d{10}$/.test(t))) return `«${nombre}»: los teléfonos de prueba van a 10 dígitos.`;
+  }
   return null;
+}
+
+/**
+ * Si un mensaje de una regla del contrato todavía sale: le tocaba en `programado` y, por el horario de envíos, saldría en
+ * `salida`. Pasada la vigencia ya no tiene sentido (por ejemplo, el recordatorio de una liga que ya venció).
+ */
+export function dentroDeVigencia(salida: Date, programado: Date, vigenciaHoras: number | null): boolean {
+  if (vigenciaHoras === null) return true;
+  return salida.getTime() <= programado.getTime() + vigenciaHoras * 3_600_000;
 }
 
 export function validarReglasContrato(lista: ReglaContratoEntrada[]): string | null {

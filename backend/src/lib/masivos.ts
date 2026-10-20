@@ -237,6 +237,8 @@ async function preparar(
   origen: Origen,
   /** Modo prueba del primer mensaje: estos teléfonos (del equipo) no cuentan para el límite de uno al día. */
   telefonosPrueba: string[] = [],
+  /** Mensajes de servicio de una compra en curso (reglas del contrato): no esperan al día siguiente por el límite diario. */
+  sinLimiteDiario = false,
 ): Promise<Resultado<Preparado>> {
   const unicos = [...new Set(ids)];
   if (unicos.length === 0) return { ok: false, error: "Elige al menos una fila." };
@@ -299,7 +301,7 @@ async function preparar(
       parametros: f.parametros,
     })),
     telefonosOcupadosHoy(
-      ocupados.map((o) => o.t as string),
+      sinLimiteDiario ? [] : ocupados.map((o) => o.t as string),
       telefonosPrueba,
     ),
   );
@@ -346,15 +348,81 @@ export async function revisarMasivo(sucursalId: string, ids: string[], plantilla
 
 /** Mensajes automáticos de un paso de campaña: por llamadas sin respuesta y de seguimiento a leads «Contactado». */
 export type OrigenDePaso = "sin_respuesta" | "seguimiento";
+/** Mensajes automáticos de un solo lead: los de un paso de campaña y los de las reglas del contrato. */
+export type OrigenUnico = OrigenDePaso | "contrato";
+
+export type ResultadoUnico = { creado: boolean; motivo: string | null; general?: boolean; envioId?: string };
 
 /**
- * Mensaje automático de un paso para UN lead (lo llama el motor): un masivo de ese origen con un solo envío, con el mismo
- * freno que un masivo manual (baja, supresiones, GE, pago, «Ahora no», un mensaje al día). Una sola vez por paso de campaña
- * y origen: si ese paso ya tiene un envío de ese origen, no hace nada.
- * - Si hoy no puede recibirlo porque ya recibió otro mensaje, no deja nada: el repaso del motor lo vuelve a intentar.
- * - Si no puede recibirlo por otra razón (no es para él según las reglas de la plantilla, no es celular, le falta un dato…),
- *   queda omitido con su motivo: así no se repasa para siempre y la ficha dice por qué no salió.
+ * Arma UN mensaje automático para UN lead dentro de la transacción de quien lo llama: un masivo de ese origen con un solo
+ * envío, con el mismo freno que un masivo manual (baja, supresiones, GE, pago, «Ahora no», reglas de la plantilla) y, salvo
+ * `sinLimiteDiario`, el límite de un mensaje al día.
+ * - «Ya recibió mensaje hoy»: no deja nada; quien llama decide si lo vuelve a intentar.
+ * - Otra razón para no mandarlo (no es para él según las reglas, no es celular, le falta un dato…): con `registrarOmitido`
+ *   queda un envío omitido con su motivo.
  * - `general` = la plantilla o WhatsApp no están disponibles (no es cosa del lead).
+ */
+export async function armarEnvioUnico(
+  cl: Consulta,
+  p: {
+    origen: OrigenUnico;
+    sucursalId: string;
+    oportunidadId: string;
+    pasoId: string | null;
+    campana: string | null;
+    plantillaId: string;
+    telefonosPrueba: string[];
+    sinLimiteDiario?: boolean;
+    registrarOmitido: boolean;
+  },
+): Promise<ResultadoUnico> {
+  await cl.query(`SELECT pg_advisory_xact_lock(hashtext('masivo:' || $1))`, [p.sucursalId]);
+  const prep = await preparar(cl, p.sucursalId, [p.oportunidadId], p.plantillaId, "masivo", p.telefonosPrueba, p.sinLimiteDiario === true);
+  if (!prep.ok) return { creado: false, motivo: prep.error, general: true };
+  const destino = prep.valor.destinatarios[0];
+  const fila = prep.valor.filas[0];
+  const motivo = !destino || !fila ? "no_encontrada" : destino.motivo;
+  if (motivo === "mensaje_hoy") return { creado: false, motivo };
+  if (motivo && !p.registrarOmitido) return { creado: false, motivo };
+  const r = resumen(prep.valor);
+  const { rows } = await cl.query(
+    `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, origen, campana, fecha_local, estado, terminado_en)
+     VALUES ($1, $2, $3, $6, $4, (now() AT TIME ZONE '${ZONA_ENVIOS}')::date,
+             CASE WHEN $5::boolean THEN 'terminado' ELSE 'enviando' END, CASE WHEN $5::boolean THEN now() END) RETURNING id`,
+    [p.sucursalId, prep.valor.plantilla.id, prep.valor.plantilla.nombre, p.campana, motivo !== null, p.origen],
+  );
+  if (motivo) {
+    await cl.query(
+      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, motivo, masivo_id, parametros, campana_id)
+       VALUES ($1, $2, $3, $4, now(), 'omitido', $5, $6, '[]'::jsonb, $7)`,
+      [p.sucursalId, p.oportunidadId, fila?.campana ?? p.campana ?? "MASIVO", prep.valor.plantilla.id, motivo, rows[0].id, p.pasoId],
+    );
+    return { creado: false, motivo };
+  }
+  const { rows: env } = await cl.query(
+    `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, masivo_id, parametros, campana_id)
+     VALUES ($1, $2, $3, $4, CASE WHEN $5::text IS NULL THEN now() ELSE ($5::timestamp AT TIME ZONE '${ZONA_ENVIOS}') END,
+             'pendiente', $6, $7::jsonb, $8)
+     RETURNING id`,
+    [
+      p.sucursalId,
+      p.oportunidadId,
+      fila!.campana,
+      prep.valor.plantilla.id,
+      r.sale ? `${r.sale.fecha} ${r.sale.hora}:00` : null,
+      rows[0].id,
+      JSON.stringify(fila!.parametros),
+      p.pasoId,
+    ],
+  );
+  return { creado: true, motivo: null, envioId: env[0].id as string };
+}
+
+/**
+ * Mensaje automático de un paso para UN lead (lo llama el motor). Una sola vez por paso de campaña y origen: si ese paso ya
+ * tiene un envío de ese origen, no hace nada. Si hoy no puede recibirlo porque ya recibió otro mensaje, no deja nada y el
+ * repaso del motor lo vuelve a intentar; si no puede recibirlo por otra razón, queda omitido con su motivo (así no se repasa
+ * para siempre y la ficha dice por qué no salió).
  */
 export async function crearMasivoDePaso(p: {
   origen: OrigenDePaso;
@@ -364,7 +432,7 @@ export async function crearMasivoDePaso(p: {
   campana: string;
   plantillaId: string;
   telefonosPrueba: string[];
-}): Promise<{ creado: boolean; motivo: string | null; general?: boolean }> {
+}): Promise<ResultadoUnico> {
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
@@ -377,51 +445,10 @@ export async function crearMasivoDePaso(p: {
       await cliente.query("ROLLBACK");
       return { creado: false, motivo: "ya_enviado" };
     }
-    const prep = await preparar(cliente, p.sucursalId, [p.oportunidadId], p.plantillaId, "masivo", p.telefonosPrueba);
-    if (!prep.ok) {
-      await cliente.query("ROLLBACK");
-      return { creado: false, motivo: prep.error, general: true };
-    }
-    const destino = prep.valor.destinatarios[0];
-    const fila = prep.valor.filas[0];
-    const motivo = !destino || !fila ? "no_encontrada" : destino.motivo;
-    if (motivo === "mensaje_hoy") {
-      await cliente.query("ROLLBACK");
-      return { creado: false, motivo };
-    }
-    const r = resumen(prep.valor);
-    const { rows } = await cliente.query(
-      `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, origen, campana, fecha_local, estado, terminado_en)
-       VALUES ($1, $2, $3, $6, $4, (now() AT TIME ZONE '${ZONA_ENVIOS}')::date,
-               CASE WHEN $5::boolean THEN 'terminado' ELSE 'enviando' END, CASE WHEN $5::boolean THEN now() END) RETURNING id`,
-      [p.sucursalId, prep.valor.plantilla.id, prep.valor.plantilla.nombre, p.campana, motivo !== null, p.origen],
-    );
-    if (motivo) {
-      await cliente.query(
-        `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, motivo, masivo_id, parametros, campana_id)
-         VALUES ($1, $2, $3, $4, now(), 'omitido', $5, $6, '[]'::jsonb, $7)`,
-        [p.sucursalId, p.oportunidadId, fila?.campana ?? p.campana, prep.valor.plantilla.id, motivo, rows[0].id, p.pasoId],
-      );
-      await cliente.query("COMMIT");
-      return { creado: false, motivo };
-    }
-    await cliente.query(
-      `INSERT INTO crm_envios (sucursal_id, oportunidad_id, campana, plantilla_id, programado_para, estado, masivo_id, parametros, campana_id)
-       VALUES ($1, $2, $3, $4, CASE WHEN $5::text IS NULL THEN now() ELSE ($5::timestamp AT TIME ZONE '${ZONA_ENVIOS}') END,
-               'pendiente', $6, $7::jsonb, $8)`,
-      [
-        p.sucursalId,
-        p.oportunidadId,
-        fila!.campana,
-        prep.valor.plantilla.id,
-        r.sale ? `${r.sale.fecha} ${r.sale.hora}:00` : null,
-        rows[0].id,
-        JSON.stringify(fila!.parametros),
-        p.pasoId,
-      ],
-    );
-    await cliente.query("COMMIT");
-    return { creado: true, motivo: null };
+    const r = await armarEnvioUnico(cliente, { ...p, registrarOmitido: true });
+    // Sin nada que guardar (ya recibió mensaje hoy, o la plantilla no está disponible) no se deja nada a medias.
+    await cliente.query(r.creado || (r.motivo && r.motivo !== "mensaje_hoy" && !r.general) ? "COMMIT" : "ROLLBACK");
+    return r;
   } catch (err) {
     await cliente.query("ROLLBACK").catch(() => {});
     throw err;
@@ -694,7 +721,7 @@ export async function listarMasivos(sucursalId: string, limite = 30) {
        LEFT JOIN usuarios u ON u.id = m.creado_por
        LEFT JOIN crm_envios e ON e.masivo_id = m.id
       -- Los mensajes automáticos de un paso (uno por lead) se ven en su pantalla, no en el historial de masivos.
-      WHERE m.sucursal_id = $1 AND m.origen NOT IN ('sin_respuesta', 'seguimiento')
+      WHERE m.sucursal_id = $1 AND m.origen NOT IN ('sin_respuesta', 'seguimiento', 'contrato')
       GROUP BY m.id, u.nombre
       ORDER BY m.creado_en DESC
       LIMIT $2`,

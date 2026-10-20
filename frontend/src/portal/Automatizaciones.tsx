@@ -9,6 +9,7 @@ import DefinirCampanas from "./DefinirCampanas";
 import PrimerMensajeAutomatico from "./PrimerMensajeAutomatico";
 import SinRespuestaLlamada from "./SinRespuestaLlamada";
 import SeguimientoContactado from "./SeguimientoContactado";
+import ReglasContrato from "./ReglasContrato";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -88,12 +89,13 @@ export default function Automatizaciones() {
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
   // Apartados: el primer mensaje automático, el mensaje por llamadas sin respuesta, el seguimiento de los «Contactado», las
-  // automatizaciones por estado, las etapas del vehículo y, si la web define las campañas, «Definir campañas».
-  type Apartado = "primer" | "sin_respuesta" | "seguimiento" | "etapas" | "vehiculo" | "definir";
+  // reglas del contrato (pago y póliza), las automatizaciones por estado, las etapas del vehículo y, si la web define las
+  // campañas, «Definir campañas».
+  type Apartado = "primer" | "sin_respuesta" | "seguimiento" | "contrato" | "etapas" | "vehiculo" | "definir";
   const [apartadoElegido, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "primer" || guardado === "sin_respuesta" || guardado === "seguimiento" || guardado === "vehiculo" || guardado === "definir"
+      return guardado === "primer" || guardado === "sin_respuesta" || guardado === "seguimiento" || guardado === "contrato" || guardado === "vehiculo" || guardado === "definir"
         ? guardado
         : "etapas";
     } catch {
@@ -121,6 +123,9 @@ export default function Automatizaciones() {
       </button>
       <button type="button" role="tab" aria-selected={apartado === "seguimiento"} className={`vista-opcion${apartado === "seguimiento" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("seguimiento")}>
         Seguimiento
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "contrato"} className={`vista-opcion${apartado === "contrato" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("contrato")}>
+        Contrato
       </button>
       <button type="button" role="tab" aria-selected={apartado === "etapas"} className={`vista-opcion${apartado === "etapas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("etapas")}>
         Por estado
@@ -242,6 +247,15 @@ export default function Automatizaciones() {
       <div className="pagina-formulario">
         {apartados}
         <SeguimientoContactado />
+      </div>
+    );
+  }
+
+  if (apartado === "contrato") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <ReglasContrato />
       </div>
     );
   }

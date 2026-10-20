@@ -2,9 +2,9 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, requireAccesoSucursal, requireAdminSucursal } from "../middleware/auth.js";
 import { guardarReglasContrato, leerReglasContrato } from "../lib/reglasContrato.js";
-import { ESTADOS_CON_REGLA } from "../lib/contratoLogica.js";
+import { ACCIONES_REGLA, ESTADOS_CON_REGLA } from "../lib/contratoLogica.js";
 
-/** Reglas del contrato (tareas por tiempo en un estado) y cobertura automática: solo el admin de la sucursal. */
+/** Reglas del contrato (tareas o WhatsApp por tiempo en un estado) y cobertura automática: solo el admin de la sucursal. */
 export const crmReglasContratoRouter = Router();
 
 crmReglasContratoRouter.use(requireAuth);
@@ -24,9 +24,13 @@ const reglaSchema = z.object({
   activa: z.boolean(),
   estado: z.enum(ESTADOS_CON_REGLA),
   espera_horas: z.number().int().min(0).max(8760),
-  titulo: z.string().trim().min(1, "Escribe el título de la tarea.").max(160),
+  // En las de WhatsApp el título va vacío: lo revisa validarReglaContrato según la acción.
+  titulo: z.string().trim().max(160).default(""),
   descripcion: z.string().trim().max(1000).nullable(),
   vence_horas: z.number().int().min(0).max(8760).nullable(),
+  accion: z.enum(ACCIONES_REGLA).default("tarea"),
+  plantilla_id: z.string().uuid().nullable().default(null),
+  telefonos_prueba: z.array(z.string().trim().max(20)).max(10).default([]),
 });
 
 const guardarSchema = z.object({

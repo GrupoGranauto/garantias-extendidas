@@ -6,6 +6,7 @@ import { apiFetch } from "../lib/api";
 import { usePortal } from "./PortalProvider";
 
 type Unidad = "horas" | "dias";
+type Accion = "tarea" | "whatsapp";
 type Servidor = {
   id: string;
   nombre: string;
@@ -15,6 +16,9 @@ type Servidor = {
   titulo: string;
   descripcion: string | null;
   vence_horas: number | null;
+  accion: Accion;
+  plantilla_id: string | null;
+  telefonos_prueba: string[];
   resumen: { pendientes: number; hechos: number; omitidos: number };
 };
 type Respuesta = {
@@ -23,6 +27,8 @@ type Respuesta = {
   cobertura_automatica: boolean;
   contratos_en_certificado: number;
   recientes: { id: string; regla: string; estado: string; motivo: string | null; programado_para: string; actualizado_en: string; cliente: string | null }[];
+  /** Plantillas de servicio aprobadas que puede mandar una regla. */
+  plantillas: { id: string; nombre: string }[];
 };
 type Fila = {
   clave: string;
@@ -36,6 +42,9 @@ type Fila = {
   descripcion: string;
   venceValor: string; // "" = sin fecha
   venceUnidad: Unidad;
+  accion: Accion;
+  plantillaId: string | null;
+  prueba: string;
   resumen?: Servidor["resumen"];
 };
 
@@ -51,6 +60,18 @@ const MOTIVOS: Record<string, string> = {
   supresion_flotilla: "Su vehículo es de flotilla",
   supresion_uso_no_elegible: "El uso de su vehículo no es elegible",
   supresion_fuera_km_tiempo: "Su vehículo ya pasó el kilometraje o el tiempo de la garantía",
+  // Reglas que mandan WhatsApp.
+  modo_prueba: "Modo prueba: no es uno de los teléfonos de prueba",
+  vencido: "Ya no estaba vigente cuando podía salir",
+  sin_plantilla: "La regla no tiene plantilla",
+  plantilla_no_disponible: "La plantilla o WhatsApp no estaban disponibles",
+  pagado: "Ya tiene un pago registrado",
+  fuera_de_regla: "La plantilla no es para su situación",
+  contrato_cancelado: "Su contrato está cancelado",
+  sin_telefono: "No tiene teléfono válido",
+  sin_celular: "Su número no es celular",
+  variable_vacia: "Le falta un dato que usa la plantilla",
+  no_encontrada: "La oportunidad ya no está en la base",
 };
 
 let contador = 0;
@@ -74,6 +95,9 @@ function deServidor(r: Servidor): Fila {
     descripcion: r.descripcion ?? "",
     venceValor: vence ? String(vence.valor) : r.vence_horas === 0 ? "0" : "",
     venceUnidad: vence?.unidad ?? "horas",
+    accion: r.accion,
+    plantillaId: r.plantilla_id,
+    prueba: r.telefonos_prueba.join(", "),
     resumen: r.resumen,
   };
 }
@@ -89,11 +113,15 @@ const nueva = (estado: string): Fila => ({
   descripcion: "",
   venceValor: "24",
   venceUnidad: "horas",
+  accion: "tarea",
+  plantillaId: null,
+  prueba: "",
 });
 
 /**
- * Pago y cierre automáticos: tareas que se crean solas cuando un contrato lleva cierto tiempo en un estado (por ejemplo,
- * la liga de pago que dura 24 horas) y paso automático a «Cobertura iniciada» cuando termina la garantía original.
+ * Pago y cierre automáticos: cuando un contrato lleva cierto tiempo en un estado (por ejemplo, la liga de pago que dura 24
+ * horas) se crea sola una tarea para el ejecutivo o se le manda al cliente una plantilla de WhatsApp de servicio; y paso
+ * automático a «Cobertura iniciada» cuando termina la garantía original.
  */
 export default function ReglasContrato() {
   const { portal } = usePortal();
@@ -150,9 +178,12 @@ export default function ReglasContrato() {
             activa: f.activa,
             estado: f.estado,
             espera_horas: aHoras(f.esperaValor, f.esperaUnidad),
-            titulo: f.titulo.trim(),
-            descripcion: f.descripcion.trim() || null,
+            titulo: f.accion === "whatsapp" ? "" : f.titulo.trim(),
+            descripcion: f.accion === "whatsapp" ? null : f.descripcion.trim() || null,
             vence_horas: f.venceValor === "" ? null : aHoras(Number(f.venceValor) || 0, f.venceUnidad),
+            accion: f.accion,
+            plantilla_id: f.accion === "whatsapp" ? f.plantillaId : null,
+            telefonos_prueba: f.accion === "whatsapp" ? f.prueba.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean) : [],
           })),
         }),
       });
@@ -171,16 +202,24 @@ export default function ReglasContrato() {
   const etiquetaEstado = (v: string) => datos.estados.find((e) => e.valor === v)?.etiqueta ?? v;
   const frase = (f: Fila) => {
     const unidad = f.esperaUnidad === "dias" ? (f.esperaValor === 1 ? "día" : "días") : f.esperaValor === 1 ? "hora" : "horas";
-    return `Si el contrato lleva ${f.esperaValor} ${unidad} en «${etiquetaEstado(f.estado)}», se crea la tarea para el ejecutivo.`;
+    const cuando = f.esperaValor === 0 ? `En cuanto el contrato entra a «${etiquetaEstado(f.estado)}»` : `Si el contrato lleva ${f.esperaValor} ${unidad} en «${etiquetaEstado(f.estado)}»`;
+    if (f.accion === "tarea") return `${cuando}, se crea la tarea para el ejecutivo.`;
+    const plantilla = datos.plantillas.find((p) => p.id === f.plantillaId)?.nombre;
+    const prueba = f.prueba.trim() ? " Está en modo prueba: solo les llega a los teléfonos de prueba." : "";
+    return `${cuando}, se le manda al cliente ${plantilla ? `«${plantilla}»` : "la plantilla elegida"}.${prueba}`;
   };
 
   return (
     <>
       <p className="pestana-descripcion">
-        Para que el pago y el cierre no se queden a medias: cuando un contrato lleva cierto tiempo en un estado, se crea sola una tarea para el ejecutivo. Por ejemplo, la liga
-        de pago que llega por correo dura 24 horas, así que conviene recordarle al ejecutivo antes de que venza y reemitirla si venció.
+        Para que el pago y el cierre no se queden a medias: cuando un contrato lleva cierto tiempo en un estado, se crea sola una tarea para el ejecutivo o se le manda al
+        cliente una plantilla de WhatsApp. Por ejemplo, la liga de pago que llega por correo dura 24 horas: se le avisa al generarla, se le recuerda antes de que venza y se
+        le dice si venció.
       </p>
-      <Alerta tipo="info">Estas reglas no mandan mensajes: solo crean tareas. Nacen apagadas y no dependen del envío automático de WhatsApp.</Alerta>
+      <Alerta tipo="info">
+        Los mensajes son de servicio: pasan por el freno de siempre (baja, supresiones, contrato cancelado; los de cobro nunca a quien ya pagó), pero no esperan por el límite
+        de un mensaje al día. Salen de {"08:00"} a {"20:00"}; lo que toque de noche sale a la apertura solo si sigue vigente. Si el contrato cambia de estado antes, no salen.
+      </Alerta>
       {aviso && <Alerta tipo={aviso.tipo}>{aviso.texto}</Alerta>}
 
       <section className="rep-tarjeta">
@@ -249,7 +288,51 @@ export default function ReglasContrato() {
             </div>
 
             <div className="seg-bloque">
-              <h4>Qué hace: crea una tarea</h4>
+              <h4>Qué hace</h4>
+              <div className="camp-def-campos">
+                <label className="auto-campo">
+                  <span>Acción</span>
+                  <select className="auto-input" value={f.accion} onChange={(e) => editar(f.clave, { accion: e.target.value as Accion })}>
+                    <option value="tarea">Crear una tarea para el ejecutivo</option>
+                    <option value="whatsapp">Mandar WhatsApp al cliente</option>
+                  </select>
+                </label>
+              </div>
+              {f.accion === "whatsapp" ? (
+                <div className="camp-def-campos">
+                  <label className="auto-campo seg-ancho">
+                    <span>Plantilla</span>
+                    <select className="auto-input" value={f.plantillaId ?? ""} onChange={(e) => editar(f.clave, { plantillaId: e.target.value || null })}>
+                      <option value="">Elige una plantilla de servicio</option>
+                      {f.plantillaId && !datos.plantillas.some((p) => p.id === f.plantillaId) && (
+                        <option value={f.plantillaId} disabled>
+                          La plantilla guardada ya no se puede usar
+                        </option>
+                      )}
+                      {datos.plantillas.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="auto-campo">
+                    <span>Ya no sale si pasan</span>
+                    <input type="number" min={1} className="auto-input" value={f.venceValor} onChange={(e) => editar(f.clave, { venceValor: e.target.value === "" ? "" : String(entero(e.target.value, 0, 8760)) })} />
+                  </label>
+                  <label className="auto-campo">
+                    <span>Unidad</span>
+                    <select className="auto-input" value={f.venceUnidad} onChange={(e) => editar(f.clave, { venceUnidad: e.target.value as Unidad })}>
+                      <option value="horas">Horas</option>
+                      <option value="dias">Días</option>
+                    </select>
+                  </label>
+                  <label className="auto-campo seg-ancho">
+                    <span>Solo para probar: teléfonos (10 dígitos, separados con coma)</span>
+                    <input type="text" inputMode="numeric" className="auto-input" placeholder="Vacío = a todos los clientes" value={f.prueba} onChange={(e) => editar(f.clave, { prueba: e.target.value })} />
+                  </label>
+                </div>
+              ) : (
               <div className="camp-def-campos">
                 <label className="auto-campo seg-ancho">
                   <span>Título</span>
@@ -271,6 +354,7 @@ export default function ReglasContrato() {
                   </select>
                 </label>
               </div>
+              )}
             </div>
 
             <p className="rep-ayuda">
@@ -278,7 +362,8 @@ export default function ReglasContrato() {
               {f.resumen && f.resumen.pendientes + f.resumen.hechos + f.resumen.omitidos > 0 && (
                 <>
                   {" "}
-                  Hasta ahora: {f.resumen.pendientes} pendientes, {f.resumen.hechos} hechas y {f.resumen.omitidos} omitidas.
+                  Hasta ahora: {f.resumen.pendientes} pendientes, {f.resumen.hechos} {f.accion === "whatsapp" ? "mandados" : "hechas"} y {f.resumen.omitidos}{" "}
+                  {f.accion === "whatsapp" ? "omitidos" : "omitidas"}.
                 </>
               )}
             </p>

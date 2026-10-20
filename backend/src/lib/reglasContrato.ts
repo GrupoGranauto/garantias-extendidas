@@ -1,14 +1,18 @@
 import { getPool } from "./db.js";
 import { emitirBroadcast } from "./realtime.js";
-import { ahoraLocal } from "./campanasLogica.js";
+import { ZONA_ENVIOS, ahoraLocal, dentroDeVentana, siguienteApertura } from "./campanasLogica.js";
 import { rellenarTexto } from "./seguimientosLogica.js";
 import {
   ESTADOS_CON_REGLA,
   coberturaYaInicio,
+  dentroDeVigencia,
   entradaAlEstado,
   validarReglasContrato,
+  type AccionRegla,
   type ReglaContratoEntrada,
 } from "./contratoLogica.js";
+import { armarEnvioUnico } from "./masivos.js";
+import { plantillaNoUsable, usoDePlantilla, VENTANA_MASIVOS, type Componentes } from "./masivosLogica.js";
 import { guardarContrato } from "./crmProceso.js";
 import { motivoSinTarea } from "./noContactarLogica.js";
 
@@ -21,7 +25,10 @@ import { motivoSinTarea } from "./noContactarLogica.js";
  *  - Cobertura automática: cuando termina la garantía original (36 meses desde la factura), los contratos en «Certificado
  *    entregado» pasan solos a «Cobertura iniciada».
  *
- * Nada de esto manda mensajes: solo crea tareas y cambia el estado de un contrato, así que no depende de CRM_ENVIOS.
+ * Cada regla hace una de dos cosas: crea la tarea para el ejecutivo o manda una plantilla de WhatsApp de servicio (aviso de
+ * la liga de pago, recordatorio, liga vencida, póliza contratada…; pedido de Miguel Borbón, 20-oct-2026). Los mensajes pasan
+ * por el mismo freno que un masivo pero no por el límite de uno al día (son de una compra en curso), salen dentro del horario
+ * de envíos y solo mientras sigan vigentes.
  */
 
 type Consulta = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount: number | null }> };
@@ -45,6 +52,9 @@ const SEMILLAS: ReglaContratoEntrada[] = [
     titulo: "La liga de pago de {cliente} vence en 4 horas",
     descripcion: "La orden de pago que llegó por correo dura 24 horas. Contacta al cliente para que pague antes de que venza.",
     vence_horas: 2,
+    accion: "tarea",
+    plantilla_id: null,
+    telefonos_prueba: [],
   },
   {
     nombre: "Reemitir orden de pago",
@@ -54,6 +64,9 @@ const SEMILLAS: ReglaContratoEntrada[] = [
     titulo: "Reemitir la orden de pago de {cliente}",
     descripcion: "La liga de pago ya venció sin pago. Genera una nueva orden en el portal de emisión y avisa al cliente.",
     vence_horas: 8,
+    accion: "tarea",
+    plantilla_id: null,
+    telefonos_prueba: [],
   },
   {
     nombre: "Pedir datos para facturar",
@@ -63,10 +76,36 @@ const SEMILLAS: ReglaContratoEntrada[] = [
     titulo: "Pedir los datos de facturación de {cliente}",
     descripcion: "Solicita la constancia de situación fiscal. Para facturar se necesita también el recibo de pago y la carátula del certificado.",
     vence_horas: 48,
+    accion: "tarea",
+    plantilla_id: null,
+    telefonos_prueba: [],
   },
+  // Mensajes al cliente (apagados y sin plantilla: cada grupo elige la suya). La vigencia evita mandar algo que ya no aplica.
+  ...(
+    [
+      ["Aviso de liga de pago", "orden_pago", 0, 20],
+      ["Recordatorio de pago", "orden_pago", 20, 3],
+      ["Liga vencida", "orden_pago", 25, 48],
+      ["Póliza contratada", "pago_confirmado", 0, 72],
+      ["Cómo mantenerla vigente", "certificado_entregado", 24, 72],
+    ] as const
+  ).map(
+    ([nombre, estado, espera, vigencia]): ReglaContratoEntrada => ({
+      nombre,
+      activa: false,
+      estado,
+      espera_horas: espera,
+      titulo: "",
+      descripcion: null,
+      vence_horas: vigencia,
+      accion: "whatsapp",
+      plantilla_id: null,
+      telefonos_prueba: [],
+    }),
+  ),
 ];
 
-const COLUMNAS = `id, orden, nombre, activa, estado, espera_horas, titulo, descripcion, vence_horas`;
+const COLUMNAS = `id, orden, nombre, activa, estado, espera_horas, titulo, descripcion, vence_horas, accion, plantilla_id, telefonos_prueba`;
 
 export type ReglaContrato = ReglaContratoEntrada & { id: string; orden: number };
 
@@ -80,6 +119,9 @@ const aRegla = (r: any): ReglaContrato => ({
   titulo: r.titulo,
   descripcion: r.descripcion,
   vence_horas: r.vence_horas,
+  accion: r.accion as AccionRegla,
+  plantilla_id: r.plantilla_id ?? null,
+  telefonos_prueba: r.telefonos_prueba ?? [],
 });
 
 async function sembrarSiVacio(sucursalId: string): Promise<void> {
@@ -87,18 +129,24 @@ async function sembrarSiVacio(sucursalId: string): Promise<void> {
   const { rows } = await pool.query(`SELECT count(*)::int AS n FROM crm_reglas_contrato WHERE sucursal_id = $1`, [sucursalId]);
   if ((rows[0]?.n as number) > 0) return;
   await pool.query(
-    `INSERT INTO crm_reglas_contrato (sucursal_id, orden, nombre, activa, estado, espera_horas, titulo, descripcion, vence_horas)
-     SELECT $1, r.orden, r.nombre, r.activa, r.estado, r.espera_horas, r.titulo, r.descripcion, r.vence_horas
-       FROM jsonb_to_recordset($2::jsonb) AS r(orden int, nombre text, activa boolean, estado text, espera_horas int, titulo text, descripcion text, vence_horas int)
+    `INSERT INTO crm_reglas_contrato (sucursal_id, orden, nombre, activa, estado, espera_horas, titulo, descripcion, vence_horas, accion)
+     SELECT $1, r.orden, r.nombre, r.activa, r.estado, r.espera_horas, r.titulo, r.descripcion, r.vence_horas, r.accion
+       FROM jsonb_to_recordset($2::jsonb) AS r(orden int, nombre text, activa boolean, estado text, espera_horas int, titulo text, descripcion text, vence_horas int, accion text)
      ON CONFLICT (sucursal_id, orden) DO NOTHING`,
     [sucursalId, JSON.stringify(SEMILLAS.map((s, i) => ({ ...s, orden: i + 1 })))],
   );
 }
 
+const plantillasDeServicio = (filas: Record<string, any>[]) =>
+  filas
+    .filter((p) => usoDePlantilla(p.uso as string | null, p.categoria as string | null) === "servicio")
+    .filter((p) => !plantillaNoUsable({ estado: p.estado, componentes: p.componentes as Componentes }, (p.indices as number[]).map(Number)))
+    .map((p) => ({ id: p.id as string, nombre: p.nombre as string }));
+
 export async function leerReglasContrato(sucursalId: string) {
   await sembrarSiVacio(sucursalId);
   const pool = getPool();
-  const [reglas, resumen, recientes, cfg, enCertificado] = await Promise.all([
+  const [reglas, resumen, recientes, cfg, enCertificado, plantillas] = await Promise.all([
     pool.query(`SELECT ${COLUMNAS} FROM crm_reglas_contrato WHERE sucursal_id = $1 ORDER BY orden`, [sucursalId]),
     pool.query(`SELECT regla_id, estado, count(*)::int AS n FROM crm_regla_contrato_ejecuciones WHERE sucursal_id = $1 GROUP BY 1, 2`, [sucursalId]),
     pool.query(
@@ -117,6 +165,14 @@ export async function leerReglasContrato(sucursalId: string) {
         WHERE c.sucursal_id = $1 AND c.estado = 'certificado_entregado'`,
       [sucursalId],
     ),
+    pool.query(
+      `SELECT p.id, coalesce(p.nombre, p.nombre_tecnico) AS nombre, p.estado, p.componentes, r.uso, p.categoria,
+              coalesce((SELECT array_agg(v.indice) FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id), '{}') AS indices
+         FROM whatsapp_plantillas p LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id
+        WHERE p.sucursal_id = $1 AND p.estado = 'aprobada'
+        ORDER BY 2`,
+      [sucursalId],
+    ),
   ]);
   const n = (id: string, estado: string) => (resumen.rows.find((r) => r.regla_id === id && r.estado === estado)?.n as number | undefined) ?? 0;
   return {
@@ -125,6 +181,8 @@ export async function leerReglasContrato(sucursalId: string) {
     cobertura_automatica: cfg.rows[0]?.cobertura_automatica !== false,
     contratos_en_certificado: (enCertificado.rows[0]?.total as number | undefined) ?? 0,
     recientes: recientes.rows,
+    // Las que puede mandar una regla: de servicio, aprobadas y con sus datos ligados.
+    plantillas: plantillasDeServicio(plantillas.rows),
   };
 }
 
@@ -139,8 +197,27 @@ export async function guardarReglasContrato(
   lista: (ReglaContratoEntrada & { id?: string })[],
   coberturaAutomatica: boolean,
 ): Promise<ResultadoGuardarReglas> {
+  lista = lista.map((r) => ({
+    ...r,
+    telefonos_prueba: [...new Set((r.telefonos_prueba ?? []).map((t) => t.replace(/\D/g, "").slice(-10)).filter(Boolean))],
+    titulo: r.accion === "whatsapp" ? "" : r.titulo,
+  }));
   const error = validarReglasContrato(lista);
   if (error) return { ok: false, error };
+  // Una regla encendida de WhatsApp solo puede mandar una plantilla de servicio aprobada y con sus datos ligados.
+  const conPlantilla = lista.filter((r) => r.accion === "whatsapp" && r.activa && r.plantilla_id);
+  if (conPlantilla.length > 0) {
+    const { rows } = await getPool().query(
+      `SELECT p.id, coalesce(p.nombre, p.nombre_tecnico) AS nombre, p.estado, p.componentes, r.uso, p.categoria,
+              coalesce((SELECT array_agg(v.indice) FROM whatsapp_plantilla_variables v WHERE v.plantilla_id = p.id), '{}') AS indices
+         FROM whatsapp_plantillas p LEFT JOIN crm_plantilla_reglas r ON r.plantilla_id = p.id
+        WHERE p.sucursal_id = $1 AND p.id = ANY($2::uuid[])`,
+      [sucursalId, conPlantilla.map((r) => r.plantilla_id)],
+    );
+    const validas = new Set(plantillasDeServicio(rows).map((p) => p.id));
+    const mala = conPlantilla.find((r) => !validas.has(r.plantilla_id!));
+    if (mala) return { ok: false, error: `«${mala.nombre.trim()}»: esa plantilla no se puede usar; tiene que ser de servicio, estar aprobada y con sus datos ligados.` };
+  }
 
   const cliente = await getPool().connect();
   try {
@@ -152,20 +229,34 @@ export async function guardarReglasContrato(
     // Se libera el orden para no chocar con la unicidad al reordenar.
     await cliente.query(`UPDATE crm_reglas_contrato SET orden = orden + 1000 WHERE sucursal_id = $1`, [sucursalId]);
     for (const [i, r] of lista.entries()) {
-      const valores = [i + 1, r.nombre.trim(), r.activa, r.estado, r.espera_horas, r.titulo.trim(), (r.descripcion ?? "").trim() || null, r.vence_horas];
+      const valores = [
+        i + 1,
+        r.nombre.trim(),
+        r.activa,
+        r.estado,
+        r.espera_horas,
+        r.titulo.trim(),
+        (r.descripcion ?? "").trim() || null,
+        r.vence_horas,
+        r.accion,
+        r.accion === "whatsapp" ? r.plantilla_id : null,
+        r.accion === "whatsapp" ? r.telefonos_prueba : [],
+      ];
       const previa = r.id ? porId.get(r.id) : undefined;
       if (previa) {
         conservadas.add(previa.id);
         await cliente.query(
-          `UPDATE crm_reglas_contrato SET orden = $2, nombre = $3, activa = $4, estado = $5, espera_horas = $6, titulo = $7, descripcion = $8, vence_horas = $9 WHERE id = $1`,
+          `UPDATE crm_reglas_contrato SET orden = $2, nombre = $3, activa = $4, estado = $5, espera_horas = $6, titulo = $7, descripcion = $8,
+                  vence_horas = $9, accion = $10, plantilla_id = $11, telefonos_prueba = $12::text[] WHERE id = $1`,
           [previa.id, ...valores],
         );
-        if (previa.estado !== r.estado || previa.espera_horas !== r.espera_horas) {
+        if (previa.estado !== r.estado || previa.espera_horas !== r.espera_horas || previa.accion !== r.accion) {
           await cliente.query(`DELETE FROM crm_regla_contrato_ejecuciones WHERE regla_id = $1 AND estado = 'pendiente'`, [previa.id]);
         }
       } else {
         await cliente.query(
-          `INSERT INTO crm_reglas_contrato (sucursal_id, orden, nombre, activa, estado, espera_horas, titulo, descripcion, vence_horas) VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8)`,
+          `INSERT INTO crm_reglas_contrato (sucursal_id, orden, nombre, activa, estado, espera_horas, titulo, descripcion, vence_horas, accion, plantilla_id, telefonos_prueba)
+           VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::text[])`,
           [...valores, sucursalId],
         );
       }
@@ -236,13 +327,60 @@ export async function planificarReglasContrato(): Promise<number> {
 const cerrar = (cl: Consulta, id: string, estado: "hecho" | "omitido", motivo: string | null, tareaId: string | null = null) =>
   cl.query(`UPDATE crm_regla_contrato_ejecuciones SET estado = $2, motivo = $3, tarea_id = $4 WHERE id = $1`, [id, estado, motivo, tareaId]);
 
+/**
+ * La acción de una regla de WhatsApp, dentro de la transacción del ejecutor: deja el mensaje en cola (el despachador de
+ * masivos lo manda) o devuelve por qué no sale. En modo prueba solo a los teléfonos de prueba; fuera del horario de envíos
+ * sale en la siguiente apertura, pero solo si para entonces sigue vigente.
+ */
+async function mandarWhatsappDeRegla(cl: Consulta, x: Record<string, any>): Promise<string | null> {
+  if (!x.plantilla_id) return "sin_plantilla";
+  const pruebas = (x.telefonos_prueba as string[] | null) ?? [];
+  if (pruebas.length > 0) {
+    const { rows } = await cl.query(
+      `SELECT crm_tel10(k.telefono) AS tel FROM crm_oportunidades o JOIN crm_contactos k ON k.id = o.contacto_id WHERE o.id = $1`,
+      [x.oportunidad_id],
+    );
+    if (!pruebas.includes((rows[0]?.tel as string | null) ?? "")) return "modo_prueba";
+  }
+  const ahora = ahoraLocal();
+  let salida = new Date();
+  if (!dentroDeVentana(ahora, VENTANA_MASIVOS)) {
+    const abre = siguienteApertura(ahora, VENTANA_MASIVOS);
+    const { rows } = await cl.query(`SELECT ($1::timestamp AT TIME ZONE '${ZONA_ENVIOS}') AS t`, [`${abre.fecha} ${abre.hora}:00`]);
+    salida = new Date(rows[0].t as string);
+  }
+  if (!dentroDeVigencia(salida, new Date(x.programado_para as string), (x.vence_horas as number | null) ?? null)) return "vencido";
+
+  const r = await armarEnvioUnico(cl, {
+    origen: "contrato",
+    sucursalId: x.sucursal_id as string,
+    oportunidadId: x.oportunidad_id as string,
+    pasoId: null,
+    campana: null,
+    plantillaId: x.plantilla_id as string,
+    telefonosPrueba: pruebas,
+    sinLimiteDiario: true,
+    registrarOmitido: false,
+  });
+  if (!r.creado) return r.general ? "plantilla_no_disponible" : (r.motivo ?? "no_enviado");
+  await cl.query(`INSERT INTO crm_actividades (sucursal_id, oportunidad_id, tipo, titulo, detalle) VALUES ($1, $2, 'regla_contrato', $3, $4)`, [
+    x.sucursal_id,
+    x.oportunidad_id,
+    `Contrato: WhatsApp «${x.nombre}» en cola`,
+    { regla: x.nombre, estado: x.estado_regla, envio_id: r.envioId },
+  ]);
+  await cl.query(`UPDATE crm_regla_contrato_ejecuciones SET estado = 'hecho', motivo = NULL, envio_id = $2 WHERE id = $1`, [x.id, r.envioId]);
+  return null;
+}
+
 /** Resuelve la ejecución más antigua que ya le toca. Devuelve false si no hay nada. */
 async function ejecutarUna(): Promise<{ hubo: boolean; sucursal: string | null }> {
   const cliente = await getPool().connect();
   try {
     await cliente.query("BEGIN");
     const { rows } = await cliente.query(
-      `SELECT x.id, x.sucursal_id, x.oportunidad_id, x.estado_desde, r.nombre, r.estado AS estado_regla, r.titulo, r.descripcion, r.vence_horas
+      `SELECT x.id, x.sucursal_id, x.oportunidad_id, x.estado_desde, x.programado_para, r.nombre, r.estado AS estado_regla, r.titulo, r.descripcion,
+              r.vence_horas, r.accion, r.plantilla_id, r.telefonos_prueba
          FROM crm_regla_contrato_ejecuciones x JOIN crm_reglas_contrato r ON r.id = x.regla_id
         WHERE x.estado = 'pendiente' AND x.programado_para <= now() AND r.activa
         ORDER BY x.programado_para LIMIT 1 FOR UPDATE OF x SKIP LOCKED`,
@@ -287,6 +425,13 @@ async function ejecutarUna(): Promise<{ hubo: boolean; sucursal: string | null }
       : "ya_no_aplica";
     if (sinTarea) {
       await cerrar(cliente, x.id, "omitido", sinTarea);
+      await cliente.query("COMMIT");
+      return { hubo: true, sucursal: null };
+    }
+
+    if (x.accion === "whatsapp") {
+      const motivo = await mandarWhatsappDeRegla(cliente, x);
+      if (motivo) await cerrar(cliente, x.id, "omitido", motivo);
       await cliente.query("COMMIT");
       return { hubo: true, sucursal: null };
     }

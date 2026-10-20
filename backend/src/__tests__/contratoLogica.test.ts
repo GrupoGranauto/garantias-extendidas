@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  coberturaYaInicio,
-  entradaAlEstado,
-  inicioDeCobertura,
-  sumarMesesFecha,
-  validarReglaContrato,
-  validarReglasContrato,
-  type ReglaContratoEntrada,
-} from "../lib/contratoLogica.js";
+import { dentroDeVigencia, coberturaYaInicio, entradaAlEstado, inicioDeCobertura, sumarMesesFecha, validarReglaContrato, validarReglasContrato, type ReglaContratoEntrada } from "../lib/contratoLogica.js";
 
 describe("entradaAlEstado", () => {
   const ev = (estado: string, en: string) => ({ estado, en });
@@ -61,7 +53,46 @@ describe("inicio de la cobertura (36 meses después de la factura)", () => {
   });
 });
 
-const regla: ReglaContratoEntrada = { nombre: "Liga por vencer", activa: false, estado: "orden_pago", espera_horas: 20, titulo: "Recontactar a {cliente}", descripcion: null, vence_horas: 2 };
+const regla: ReglaContratoEntrada = {
+  nombre: "Liga por vencer",
+  activa: false,
+  estado: "orden_pago",
+  espera_horas: 20,
+  titulo: "Recontactar a {cliente}",
+  descripcion: null,
+  vence_horas: 2,
+  accion: "tarea",
+  plantilla_id: null,
+  telefonos_prueba: [],
+};
+const whatsapp: ReglaContratoEntrada = {
+  ...regla,
+  nombre: "Recordatorio de pago",
+  titulo: "",
+  vence_horas: 3,
+  accion: "whatsapp",
+  plantilla_id: "p1",
+  activa: true,
+};
+
+describe("reglas del contrato que mandan WhatsApp", () => {
+  it("no piden título; encendidas piden plantilla; siempre piden vigencia", () => {
+    expect(validarReglaContrato(whatsapp)).toBeNull();
+    expect(validarReglaContrato({ ...whatsapp, plantilla_id: null })).toMatch(/plantilla/);
+    expect(validarReglaContrato({ ...whatsapp, plantilla_id: null, activa: false })).toBeNull();
+    expect(validarReglaContrato({ ...whatsapp, vence_horas: null })).toMatch(/deja de tener sentido/);
+    expect(validarReglaContrato({ ...whatsapp, vence_horas: 0 })).toMatch(/deja de tener sentido/);
+    expect(validarReglaContrato({ ...whatsapp, telefonos_prueba: ["66235"] })).toMatch(/10 dígitos/);
+    expect(validarReglaContrato({ ...whatsapp, accion: "otra" as never })).toMatch(/acción/);
+  });
+  it("un mensaje que ya no puede salir dentro de su vigencia no sale", () => {
+    const programado = new Date("2026-10-21T03:00:00Z");
+    expect(dentroDeVigencia(new Date("2026-10-21T05:59:00Z"), programado, 3)).toBe(true);
+    expect(dentroDeVigencia(new Date("2026-10-21T06:00:00Z"), programado, 3)).toBe(true);
+    expect(dentroDeVigencia(new Date("2026-10-21T15:00:00Z"), programado, 3)).toBe(false);
+    expect(dentroDeVigencia(new Date("2027-01-01T00:00:00Z"), programado, null)).toBe(true);
+  });
+});
 
 describe("validación de reglas del contrato", () => {
   it("acepta una regla correcta", () => {
