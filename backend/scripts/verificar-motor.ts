@@ -2,6 +2,8 @@
   Verificación del motor de envíos con un Meta SIMULADO (nada sale a WhatsApp de verdad).
   Uso:  npm run verificar:motor --workspace backend
   Se niega a correr si la base ya tiene envíos, pasos, seguimientos o campañas encendidas, y deja todo como lo encontró.
+  La base es la misma de producción: la limpieza final solo corre si esa revisión pasó, y solo borra o regresa lo que creó
+  esta prueba (sus leads, su paso, sus seguimientos y los mensajes del Meta simulado), nunca lo de clientes reales.
 */
 export {};
 
@@ -47,11 +49,22 @@ let tieneConfigFila = false;
 const idsConversacionesAntes = new Set<string>();
 let pasoId: string | null = null;
 const segIds: string[] = [];
+/** Todos los seguimientos que creó la prueba (segIds se vacía a medio camino; este no). */
+const segIdsTodos: string[] = [];
+/** Solo cuando la revisión de seguridad pasó y se tomó la foto de lo que había, la limpieza final puede tocar la base. */
+let puedeLimpiar = false;
+let idsLeads: string[] = [];
 let leads: { id: string; contacto_id: string; vehiculo_id: string; agencia: string | null; motivo: string | null; baja: boolean }[] = [];
 const t0 = new Date();
 
+/** Borra solo los envíos que creó esta prueba: los de su paso, sus seguimientos o sus 4 leads, desde que empezó. */
 async function limpiarEnvios() {
-  await pool.query(`DELETE FROM crm_envios WHERE sucursal_id = $1`, [SUC]);
+  await pool.query(
+    `DELETE FROM crm_envios
+      WHERE sucursal_id = $1 AND creado_en >= $2
+        AND (paso_id = $3 OR seguimiento_id = ANY($4::uuid[]) OR oportunidad_id = ANY($5::uuid[]))`,
+    [SUC, t0, pasoId, segIdsTodos, idsLeads],
+  );
 }
 async function encolar(ids: string[], estado = "pendiente", motivo: string | null = null) {
   for (const id of ids) {
@@ -87,6 +100,7 @@ try {
   tieneConfigFila = cfgFila.length > 0;
   fuenteOriginal = (cfgFila[0]?.campanas_fuente as string | undefined) ?? "bigquery";
   for (const r of await q(`SELECT id FROM whatsapp_conversaciones WHERE sucursal_id = $1`, [SUC])) idsConversacionesAntes.add(r.id as string);
+  puedeLimpiar = true;
 
   const plantilla = (await q(`SELECT id FROM whatsapp_plantillas WHERE sucursal_id = $1 AND estado = 'aprobada' LIMIT 1`, [SUC]))[0].id as string;
   leads = (
@@ -101,6 +115,7 @@ try {
   ).map((r) => ({ ...r, baja: false }));
   if (leads.length < 4) throw new Error("no hay 4 leads de prueba");
   const ids = leads.map((l) => l.id);
+  idsLeads = ids;
   const [A, B, C, D] = ids;
 
   const cfg = (await q(`SELECT id FROM crm_campanas_envio WHERE sucursal_id = $1 AND campana = '5M'`, [SUC]))[0].id;
@@ -163,6 +178,7 @@ try {
       [SUC, orden, nombre, accion, JSON.stringify(condiciones), accion === "whatsapp" ? null : "Llamar a {cliente}", accion === "whatsapp" ? null : "10:00", accion === "whatsapp" ? plantilla : null],
     );
     segIds.push(r[0].id as string);
+    segIdsTodos.push(r[0].id as string);
     return r[0].id as string;
   };
   const sLlamada = await nuevoSeg("T-llamada", "llamada", [{ campo: "respondio_whatsapp", operador: "igual", valor: "false" }], 90);
@@ -245,7 +261,7 @@ try {
   f = await estados(ids);
   chk("S10 piloto: los de otras agencias esperan, no se envían", cuenta(f, "pendiente", "fuera_del_piloto") === 4 && stub.llamadas.length === 0, JSON.stringify(f.map((x) => x.estado + ":" + x.motivo)));
   await configurar("real", { piloto: [leads[0].agencia as string] });
-  await pool.query(`UPDATE crm_envios SET programado_para = now() - interval '1 minute' WHERE estado = 'pendiente'`);
+  await pool.query(`UPDATE crm_envios SET programado_para = now() - interval '1 minute' WHERE estado = 'pendiente' AND oportunidad_id = ANY($1::uuid[])`, [ids]);
   stub.llamadas.length = 0;
   await despacharEnvios(10_000, 20);
   f = await estados(ids);
@@ -296,9 +312,11 @@ try {
   chk("ERROR INESPERADO en la prueba", false, err instanceof Error ? err.stack ?? err.message : String(err));
 } finally {
   // ---------- Limpieza y restauración total ----------
-  try {
-    await pool.query(`DELETE FROM crm_tareas WHERE seguimiento_id IS NOT NULL`);
-    await pool.query(`DELETE FROM crm_seguimientos WHERE sucursal_id = $1`, [SUC]);
+  // Sin la revisión de seguridad completa no hay foto de lo que había: no se toca nada.
+  if (!puedeLimpiar) chk("LIMPIEZA omitida: la prueba no pasó la revisión inicial, la base no se tocó", true);
+  else try {
+    await pool.query(`DELETE FROM crm_tareas WHERE seguimiento_id = ANY($1::uuid[])`, [segIdsTodos]);
+    await pool.query(`DELETE FROM crm_seguimientos WHERE id = ANY($1::uuid[])`, [segIdsTodos]);
     await limpiarEnvios();
     if (pasoId) await pool.query(`DELETE FROM crm_campana_pasos WHERE id = $1`, [pasoId]);
     if (original) {
@@ -318,12 +336,19 @@ try {
     await pool.query(`DELETE FROM whatsapp_mensajes WHERE wa_message_id LIKE 'wamid.STUB%'`);
     const conv = await q(`SELECT id FROM whatsapp_conversaciones WHERE sucursal_id = $1`, [SUC]);
     const nuevas = conv.map((c) => c.id as string).filter((id) => !idsConversacionesAntes.has(id));
+    // Solo las conversaciones nuevas que no tienen ningún mensaje real (un cliente pudo escribir mientras corría la prueba).
     if (nuevas.length) {
-      await pool.query(`DELETE FROM whatsapp_mensajes WHERE conversacion_id = ANY($1::uuid[])`, [nuevas]);
-      await pool.query(`DELETE FROM whatsapp_conversaciones WHERE id = ANY($1::uuid[])`, [nuevas]);
+      await pool.query(
+        `DELETE FROM whatsapp_conversaciones c WHERE c.id = ANY($1::uuid[])
+            AND NOT EXISTS (SELECT 1 FROM whatsapp_mensajes m WHERE m.conversacion_id = c.id)`,
+        [nuevas],
+      );
     }
     // Las conversaciones que ya existían quedaron con «último mensaje» de la prueba: se avisa si pasó.
-    await pool.query(`DELETE FROM crm_actividades WHERE tipo IN ('envio_campana', 'seguimiento') AND creado_en >= $1`, [t0]);
+    await pool.query(
+      `DELETE FROM crm_actividades WHERE tipo IN ('envio_campana', 'seguimiento') AND creado_en >= $1 AND oportunidad_id = ANY($2::uuid[])`,
+      [t0, idsLeads],
+    );
     const rest = (
       await q(`SELECT (SELECT count(*)::int FROM crm_envios) envios, (SELECT count(*)::int FROM crm_campana_pasos) pasos, (SELECT count(*)::int FROM crm_seguimientos) seguimientos,
                       (SELECT count(*)::int FROM crm_seguimiento_ejecuciones) ejecuciones, (SELECT count(*)::int FROM crm_tareas WHERE seguimiento_id IS NOT NULL) tareas_seg,
