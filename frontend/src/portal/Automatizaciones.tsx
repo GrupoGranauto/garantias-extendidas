@@ -8,6 +8,7 @@ import EtapasVehiculo from "./EtapasVehiculo";
 import DefinirCampanas from "./DefinirCampanas";
 import PrimerMensajeAutomatico from "./PrimerMensajeAutomatico";
 import SinRespuestaLlamada from "./SinRespuestaLlamada";
+import SeguimientoContactado from "./SeguimientoContactado";
 import { usePortal } from "./PortalProvider";
 
 type TipoAuto = "tarea" | "pregunta" | "whatsapp";
@@ -86,13 +87,15 @@ export default function Automatizaciones() {
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [sla, setSla] = useState<Record<string, string>>({});
-  // Apartados: el primer mensaje automático, el mensaje por llamadas sin respuesta, las automatizaciones por estado, las
-  // etapas del vehículo y, si la web define las campañas, «Definir campañas».
-  type Apartado = "primer" | "sin_respuesta" | "etapas" | "vehiculo" | "definir";
+  // Apartados: el primer mensaje automático, el mensaje por llamadas sin respuesta, el seguimiento de los «Contactado», las
+  // automatizaciones por estado, las etapas del vehículo y, si la web define las campañas, «Definir campañas».
+  type Apartado = "primer" | "sin_respuesta" | "seguimiento" | "etapas" | "vehiculo" | "definir";
   const [apartadoElegido, setApartado] = useState<Apartado>(() => {
     try {
       const guardado = sessionStorage.getItem("portal.automatizaciones.apartado");
-      return guardado === "primer" || guardado === "sin_respuesta" || guardado === "vehiculo" || guardado === "definir" ? guardado : "etapas";
+      return guardado === "primer" || guardado === "sin_respuesta" || guardado === "seguimiento" || guardado === "vehiculo" || guardado === "definir"
+        ? guardado
+        : "etapas";
     } catch {
       return "etapas";
     }
@@ -115,6 +118,9 @@ export default function Automatizaciones() {
       </button>
       <button type="button" role="tab" aria-selected={apartado === "sin_respuesta"} className={`vista-opcion${apartado === "sin_respuesta" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("sin_respuesta")}>
         Sin respuesta a la llamada
+      </button>
+      <button type="button" role="tab" aria-selected={apartado === "seguimiento"} className={`vista-opcion${apartado === "seguimiento" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("seguimiento")}>
+        Seguimiento
       </button>
       <button type="button" role="tab" aria-selected={apartado === "etapas"} className={`vista-opcion${apartado === "etapas" ? " vista-opcion-activa" : ""}`} onClick={() => elegirApartado("etapas")}>
         Por estado
@@ -227,6 +233,15 @@ export default function Automatizaciones() {
       <div className="pagina-formulario">
         {apartados}
         <SinRespuestaLlamada />
+      </div>
+    );
+  }
+
+  if (apartado === "seguimiento") {
+    return (
+      <div className="pagina-formulario">
+        {apartados}
+        <SeguimientoContactado />
       </div>
     );
   }

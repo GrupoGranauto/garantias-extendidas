@@ -16,6 +16,8 @@ import { MAX_DESTINATARIOS } from "../lib/masivosLogica.js";
 import { guardarPrimerMensaje, leerPrimerMensaje } from "../lib/primerMensaje.js";
 import { guardarSinRespuesta, leerSinRespuesta } from "../lib/sinRespuesta.js";
 import { INTENTOS_MAXIMOS } from "../lib/sinRespuestaLogica.js";
+import { guardarSeguimiento, leerSeguimiento } from "../lib/seguimiento.js";
+import { ESPERA_MAXIMA_HORAS } from "../lib/seguimientoLogica.js";
 
 /** Masivos manuales de WhatsApp: solo el admin del grupo los ve y los manda. */
 export const crmMasivosRouter = Router();
@@ -192,6 +194,44 @@ crmMasivosRouter.put("/sucursales/:id/crm/masivos/sin-respuesta/:campana", async
       return;
     }
     res.json(await leerSinRespuesta(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Seguimiento de leads «Contactado», por campaña: su configuración y cuántos esperan o ya les toca. */
+crmMasivosRouter.get("/sucursales/:id/crm/masivos/seguimiento", async (req, res, next) => {
+  try {
+    res.json(await leerSeguimiento(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const seguimientoSchema = z.object({
+  activa: z.boolean(),
+  plantilla_id: z.string().uuid().nullable(),
+  espera_horas: z
+    .number()
+    .int("El tiempo de espera va en horas completas.")
+    .min(1, `El tiempo de espera va de 1 hora a ${ESPERA_MAXIMA_HORAS / 24} días.`)
+    .max(ESPERA_MAXIMA_HORAS, `El tiempo de espera va de 1 hora a ${ESPERA_MAXIMA_HORAS / 24} días.`),
+  telefonos_prueba: z.array(z.string().trim().max(20)).max(10).default([]),
+});
+
+crmMasivosRouter.put("/sucursales/:id/crm/masivos/seguimiento/:campana", async (req, res, next) => {
+  const parsed = seguimientoSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." });
+    return;
+  }
+  try {
+    const r = await guardarSeguimiento(req.params.id, req.params.campana, parsed.data, req.usuario?.id ?? null);
+    if (!r.ok) {
+      res.status(400).json({ error: r.error });
+      return;
+    }
+    res.json(await leerSeguimiento(req.params.id));
   } catch (err) {
     next(err);
   }

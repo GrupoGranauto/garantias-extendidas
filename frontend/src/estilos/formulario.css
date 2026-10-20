@@ -2406,4 +2406,7 @@ textarea.auto-input { resize: vertical; }
 .pm-ultima ul { margin: 4px 0 0; padding-left: 18px; }
 .pm-acciones { display: flex; justify-content: flex-end; }
 .masivos-resumen { margin: 0 0 8px; font-size: 12.5px; color: var(--gris-600); }
+.sg-espera { display: flex; gap: 8px; }
+.sg-espera input { width: 96px; }
+.sg-espera select { width: auto; }
 .pm-prueba { margin-left: 6px; padding: 2px 8px; font-size: 11px; font-weight: 600; color: #93370d; background: #fef0c7; border-radius: 999px; vertical-align: middle; }

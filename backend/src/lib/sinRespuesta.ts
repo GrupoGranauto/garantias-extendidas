@@ -1,7 +1,7 @@
 import { getPool } from "./db.js";
 import { CAMPANAS_CONOCIDAS, ZONA_ENVIOS, ahoraLocal, dentroDeVentana } from "./campanasLogica.js";
 import { ETIQUETA_LLAMADA } from "./gestionLogica.js";
-import { crearMasivoSinRespuesta, type Resultado } from "./masivos.js";
+import { crearMasivoDePaso, type Resultado } from "./masivos.js";
 import {
   TEXTO_MOTIVO,
   etiquetaCampana,
@@ -231,7 +231,8 @@ async function listos(oportunidadId: string | null) {
   for (const r of rows) {
     const clave = `${r.sucursal_id}|${r.campana}`;
     if (caidas.has(clave)) continue;
-    const res = await crearMasivoSinRespuesta({
+    const res = await crearMasivoDePaso({
+      origen: "sin_respuesta",
       sucursalId: r.sucursal_id as string,
       oportunidadId: r.oportunidad_id as string,
       pasoId: r.paso_id as string,
@@ -262,7 +263,7 @@ export async function revisarSinRespuestaDelLead(oportunidadId: string): Promise
 
 /**
  * Repaso del motor cada 15 minutos, dentro del horario de envíos: los que llegaron al número de llamadas pero no pudieron
- * recibir el mensaje en ese momento (por ejemplo, ya habían recibido otro mensaje ese día). crearMasivoSinRespuesta lo
+ * recibir el mensaje en ese momento (por ejemplo, ya habían recibido otro mensaje ese día). crearMasivoDePaso lo
  * despacha con el freno de siempre.
  */
 export async function programarSinRespuesta(): Promise<number> {

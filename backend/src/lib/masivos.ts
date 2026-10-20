@@ -344,16 +344,20 @@ export async function revisarMasivo(sucursalId: string, ids: string[], plantilla
   return { ok: true as const, valor: resumen(p.valor) };
 }
 
+/** Mensajes automáticos de un paso de campaña: por llamadas sin respuesta y de seguimiento a leads «Contactado». */
+export type OrigenDePaso = "sin_respuesta" | "seguimiento";
+
 /**
- * Mensaje por llamadas sin respuesta para UN lead (lo llama el motor): un masivo de origen «sin_respuesta» con un solo envío,
- * con el mismo freno que un masivo manual (baja, supresiones, GE, pago, «Ahora no», un mensaje al día). Una sola vez por paso
- * de campaña: si ese paso ya tiene un envío de este origen, no hace nada.
+ * Mensaje automático de un paso para UN lead (lo llama el motor): un masivo de ese origen con un solo envío, con el mismo
+ * freno que un masivo manual (baja, supresiones, GE, pago, «Ahora no», un mensaje al día). Una sola vez por paso de campaña
+ * y origen: si ese paso ya tiene un envío de ese origen, no hace nada.
  * - Si hoy no puede recibirlo porque ya recibió otro mensaje, no deja nada: el repaso del motor lo vuelve a intentar.
  * - Si no puede recibirlo por otra razón (no es para él según las reglas de la plantilla, no es celular, le falta un dato…),
  *   queda omitido con su motivo: así no se repasa para siempre y la ficha dice por qué no salió.
  * - `general` = la plantilla o WhatsApp no están disponibles (no es cosa del lead).
  */
-export async function crearMasivoSinRespuesta(p: {
+export async function crearMasivoDePaso(p: {
+  origen: OrigenDePaso;
   sucursalId: string;
   oportunidadId: string;
   pasoId: string;
@@ -366,8 +370,8 @@ export async function crearMasivoSinRespuesta(p: {
     await cliente.query("BEGIN");
     await cliente.query(`SELECT pg_advisory_xact_lock(hashtext('masivo:' || $1))`, [p.sucursalId]);
     const { rows: ya } = await cliente.query(
-      `SELECT 1 FROM crm_envios e JOIN crm_masivos m ON m.id = e.masivo_id WHERE e.campana_id = $1 AND m.origen = 'sin_respuesta' LIMIT 1`,
-      [p.pasoId],
+      `SELECT 1 FROM crm_envios e JOIN crm_masivos m ON m.id = e.masivo_id WHERE e.campana_id = $1 AND m.origen = $2 LIMIT 1`,
+      [p.pasoId, p.origen],
     );
     if (ya[0]) {
       await cliente.query("ROLLBACK");
@@ -388,9 +392,9 @@ export async function crearMasivoSinRespuesta(p: {
     const r = resumen(prep.valor);
     const { rows } = await cliente.query(
       `INSERT INTO crm_masivos (sucursal_id, plantilla_id, plantilla_nombre, origen, campana, fecha_local, estado, terminado_en)
-       VALUES ($1, $2, $3, 'sin_respuesta', $4, (now() AT TIME ZONE '${ZONA_ENVIOS}')::date,
+       VALUES ($1, $2, $3, $6, $4, (now() AT TIME ZONE '${ZONA_ENVIOS}')::date,
                CASE WHEN $5::boolean THEN 'terminado' ELSE 'enviando' END, CASE WHEN $5::boolean THEN now() END) RETURNING id`,
-      [p.sucursalId, prep.valor.plantilla.id, prep.valor.plantilla.nombre, p.campana, motivo !== null],
+      [p.sucursalId, prep.valor.plantilla.id, prep.valor.plantilla.nombre, p.campana, motivo !== null, p.origen],
     );
     if (motivo) {
       await cliente.query(
@@ -689,8 +693,8 @@ export async function listarMasivos(sucursalId: string, limite = 30) {
        FROM crm_masivos m
        LEFT JOIN usuarios u ON u.id = m.creado_por
        LEFT JOIN crm_envios e ON e.masivo_id = m.id
-      -- Los mensajes por llamadas sin respuesta (uno por lead) se ven en su pantalla, no en el historial de masivos.
-      WHERE m.sucursal_id = $1 AND m.origen <> 'sin_respuesta'
+      -- Los mensajes automáticos de un paso (uno por lead) se ven en su pantalla, no en el historial de masivos.
+      WHERE m.sucursal_id = $1 AND m.origen NOT IN ('sin_respuesta', 'seguimiento')
       GROUP BY m.id, u.nombre
       ORDER BY m.creado_en DESC
       LIMIT $2`,
